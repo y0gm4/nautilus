@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: Check, lint, test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Format check
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Test (unit + no-DB)
+        run: cargo test --workspace --exclude nautilus-orm-connector --exclude nautilus-orm-codegen
+
+  integration:
+    name: Integration tests (Postgres + MySQL + SQLite)
+    runs-on: ubuntu-latest
+    needs: ci
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: nautilus
+          POSTGRES_PASSWORD: nautilus
+          POSTGRES_DB: nautilus_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nautilus -d nautilus_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: nautilus_root
+          MYSQL_DATABASE: nautilus_test
+          MYSQL_USER: nautilus
+          MYSQL_PASSWORD: nautilus
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -uroot -pnautilus_root"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-integration-
+
+      - name: Run connector unit and SQLite integration tests
+        env:
+          DATABASE_URL: postgres://nautilus:nautilus@localhost:5432/nautilus_test
+          MYSQL_URL: mysql://nautilus:nautilus@localhost:3306/nautilus_test
+        run: cargo test -p nautilus-orm-connector
+
+      - name: Run PostgreSQL integration tests
+        env:
+          DATABASE_URL: postgres://nautilus:nautilus@localhost:5432/nautilus_test
+        run: cargo test -p nautilus-orm-connector --test integration_pg -- --ignored --test-threads=1
+
+      - name: Run MySQL integration tests
+        env:
+          MYSQL_URL: mysql://nautilus:nautilus@localhost:3306/nautilus_test
+        run: cargo test -p nautilus-orm-connector --test integration_mysql -- --ignored --test-threads=1
