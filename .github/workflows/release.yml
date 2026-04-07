@@ -262,6 +262,54 @@ jobs:
           pattern: artifacts-*
           path: artifacts
           merge-multiple: true
+      - name: Add raw nautilus-lsp aliases
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for target in \
+            aarch64-apple-darwin \
+            aarch64-unknown-linux-gnu \
+            x86_64-apple-darwin \
+            x86_64-unknown-linux-gnu \
+            x86_64-pc-windows-msvc
+          do
+            output_name="nautilus-lsp-${target}"
+            binary_name="nautilus-lsp"
+
+            if [[ "$target" == "x86_64-pc-windows-msvc" ]]; then
+              archive="artifacts/nautilus-orm-lsp-${target}.zip"
+              binary_name="${binary_name}.exe"
+              output_name="${output_name}.exe"
+              if [[ ! -f "$archive" ]]; then
+                echo "Skipping missing archive: $archive"
+                continue
+              fi
+              tmpdir=$(mktemp -d)
+              unzip -q "$archive" -d "$tmpdir"
+              binary_path=$(find "$tmpdir" -type f -name "$binary_name" | head -1)
+            else
+              archive="artifacts/nautilus-orm-lsp-${target}.tar.xz"
+              if [[ ! -f "$archive" ]]; then
+                echo "Skipping missing archive: $archive"
+                continue
+              fi
+              tmpdir=$(mktemp -d)
+              tar xf "$archive" -C "$tmpdir"
+              binary_path=$(find "$tmpdir" -type f -name "$binary_name" | head -1)
+            fi
+
+            if [[ -z "$binary_path" ]]; then
+              echo "Could not find ${binary_name} inside ${archive}" >&2
+              exit 1
+            fi
+
+            cp "$binary_path" "artifacts/${output_name}"
+            if [[ "$target" != "x86_64-pc-windows-msvc" ]]; then
+              chmod +x "artifacts/${output_name}"
+            fi
+            rm -rf "$tmpdir"
+          done
       - name: Cleanup
         run: |
           # Remove the granular manifests
