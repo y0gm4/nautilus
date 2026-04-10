@@ -911,6 +911,11 @@ fn datasource_field_completions() -> Vec<CompletionItem> {
             CompletionKind::FieldName,
             Some("Connection URL".to_string()),
         ),
+        CompletionItem::new(
+            "direct_url",
+            CompletionKind::FieldName,
+            Some("Direct admin/introspection URL".to_string()),
+        ),
     ]
 }
 

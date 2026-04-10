@@ -775,7 +775,10 @@ mod tests {
 
     #[test]
     fn pg_float8() {
-        assert_eq!(normalize_pg_type("float8", None, None, None), "double precision");
+        assert_eq!(
+            normalize_pg_type("float8", None, None, None),
+            "double precision"
+        );
     }
 
     #[test]
@@ -812,12 +815,18 @@ mod tests {
 
     #[test]
     fn pg_varchar_with_length() {
-        assert_eq!(normalize_pg_type("varchar", None, None, Some(30)), "varchar(30)");
+        assert_eq!(
+            normalize_pg_type("varchar", None, None, Some(30)),
+            "varchar(30)"
+        );
     }
 
     #[test]
     fn pg_char_with_length() {
-        assert_eq!(normalize_pg_type("bpchar", None, None, Some(12)), "char(12)");
+        assert_eq!(
+            normalize_pg_type("bpchar", None, None, Some(12)),
+            "char(12)"
+        );
     }
 
     #[test]

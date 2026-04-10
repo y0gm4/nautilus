@@ -35,11 +35,13 @@ impl SchemaValidator {
     pub(super) fn build_datasource_ir(&self, datasource: &DatasourceDecl) -> Result<DatasourceIr> {
         let provider = Self::datasource_provider_value(datasource)?;
         let url = Self::datasource_url_value(datasource)?;
+        let direct_url = Self::datasource_direct_url_value(datasource)?;
 
         Ok(DatasourceIr {
             name: datasource.name.value.clone(),
             provider,
             url,
+            direct_url,
             span: datasource.span,
         })
     }

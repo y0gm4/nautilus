@@ -652,6 +652,29 @@ datasource db {
 }
 
 #[test]
+fn test_datasource_accepts_direct_url() {
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  direct_url = env("DIRECT_DATABASE_URL")
+}
+
+model User {
+  id Int @id
+}
+"#;
+    let ast = parse(source).unwrap();
+    let ir = validate_schema(ast).expect("direct_url should validate");
+    assert_eq!(
+        ir.datasource
+            .as_ref()
+            .and_then(|ds| ds.direct_url.as_deref()),
+        Some("env(DIRECT_DATABASE_URL)")
+    );
+}
+
+#[test]
 fn test_generator_missing_provider() {
     let source = r#"
 generator client {

@@ -203,6 +203,12 @@ pub fn config_field_hover(key: &str) -> String {
             "Database connection URL.  \n\n",
             "Supports the `env(\"VAR\")` helper to read from environment variables.",
         ).to_string(),
+        "direct_url" => concat!(
+            "**direct_url**  \n",
+            "Optional direct database connection URL for admin tooling.  \n\n",
+            "Use this for migrations, introspection, and schema management when `url` points at a pooled or proxied connection.  \n\n",
+            "Supports the `env(\"VAR\")` helper to read from environment variables.",
+        ).to_string(),
         "output" => concat!(
             "**output**  \n",
             "Output directory path for generated client files.  \n\n",

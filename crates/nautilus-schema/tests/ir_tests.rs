@@ -333,8 +333,9 @@ model User {
 fn test_ir_datasource() {
     let source = r#"
 datasource db {
-  provider = "postgresql"
-  url = "postgres://localhost"
+  provider   = "postgresql"
+  url        = "postgres://localhost"
+  direct_url = "postgres://localhost/direct"
 }
 
 model User {
@@ -347,6 +348,11 @@ model User {
     let datasource = ir.datasource.as_ref().unwrap();
     assert_eq!(datasource.name, "db");
     assert_eq!(datasource.provider, "postgresql");
+    assert_eq!(datasource.url, "postgres://localhost");
+    assert_eq!(
+        datasource.direct_url.as_deref(),
+        Some("postgres://localhost/direct")
+    );
 }
 
 #[test]

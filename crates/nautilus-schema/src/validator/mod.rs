@@ -17,7 +17,7 @@ use crate::ir::*;
 use crate::span::Span;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-const KNOWN_DATASOURCE_FIELDS: &[&str] = &["provider", "url"];
+const KNOWN_DATASOURCE_FIELDS: &[&str] = &["provider", "url", "direct_url"];
 const KNOWN_GENERATOR_FIELDS: &[&str] = &["provider", "output", "interface"];
 const PYTHON_ONLY_GENERATOR_FIELDS: &[&str] = &["recursive_type_depth"];
 

@@ -96,7 +96,7 @@ async fn main() {
     };
 
     if let Err(e) = result {
-        tui::print_fatal_error(&e.to_string());
+        tui::print_fatal_error(&tui::format_error_chain(&e));
         std::process::exit(1);
     }
 }

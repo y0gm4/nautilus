@@ -78,9 +78,9 @@ pub async fn run(
 
 /// Best-effort extraction of the database URL from a `.nautilus` schema file.
 ///
-/// Tokenises and parses the schema just enough to locate the `datasource` block's
-/// `url` field.  Returns `None` if the file cannot be read, parsed, or does not
-/// contain a resolvable URL.
+/// Tokenises and parses the schema just enough to locate the `datasource`
+/// block's `direct_url` / `url` fields. Returns `None` if the file cannot be
+/// read, parsed, or does not contain a resolvable URL.
 fn resolve_database_url_for_pull(
     schema_arg: Option<&str>,
     db_url_arg: Option<String>,
@@ -92,15 +92,20 @@ fn resolve_database_url_for_pull(
     };
 
     let raw_url = db_url_arg
+        .or_else(|| {
+            schema_path
+                .as_deref()
+                .and_then(|path| resolve_url_from_schema_path(path, "direct_url"))
+        })
         .or_else(|| std::env::var("DATABASE_URL").ok())
         .or_else(|| {
             schema_path
                 .as_deref()
-                .and_then(resolve_url_from_schema_path)
+                .and_then(|path| resolve_url_from_schema_path(path, "url"))
         })
         .context(
             "No database URL found. \
-            Use --database-url, set DATABASE_URL, or add a datasource url to your schema file.",
+            Use --database-url, set DATABASE_URL, or add a datasource direct_url/url to your schema file.",
         )?;
 
     resolve_url(&raw_url)
@@ -122,11 +127,11 @@ fn resolve_schema_path_for_pull(schema_arg: Option<&str>) -> Option<PathBuf> {
     })
 }
 
-fn resolve_url_from_schema_path(path: &Path) -> Option<String> {
+fn resolve_url_from_schema_path(path: &Path, field_name: &str) -> Option<String> {
     let source = std::fs::read_to_string(path).ok()?;
     let ast = parse_schema_source(&source).ok()?;
     ast.datasource()
-        .and_then(|ds| ds.find_field("url"))
+        .and_then(|ds| ds.find_field(field_name))
         .and_then(|f| match &f.value {
             nautilus_schema::ast::Expr::Literal(nautilus_schema::ast::Literal::String(s, _)) => {
                 Some(s.clone())
@@ -193,6 +198,7 @@ model User {{
 
     #[test]
     fn resolve_database_url_for_pull_loads_dotenv_next_to_schema() {
+        let _db_url_guard = EnvVarGuard::unset("DATABASE_URL");
         let env_key = "NAUTILUS_PULL_SCHEMA_DIR_URL";
         let _env_guard = EnvVarGuard::unset(env_key);
 
@@ -213,6 +219,7 @@ model User {{
     #[test]
     fn resolve_database_url_for_pull_falls_back_to_cwd_dotenv() {
         let _cwd_lock = lock_working_dir();
+        let _db_url_guard = EnvVarGuard::unset("DATABASE_URL");
         let env_key = "NAUTILUS_PULL_CWD_URL";
         let _env_guard = EnvVarGuard::unset(env_key);
 
@@ -232,5 +239,40 @@ model User {{
             .expect("expected db pull URL from cwd dotenv");
 
         assert_eq!(url, "sqlite:./from-cwd.db");
+    }
+
+    #[test]
+    fn resolve_database_url_for_pull_prefers_direct_url_from_schema() {
+        let env_key = "NAUTILUS_PULL_DIRECT_URL";
+        let _db_url_guard = EnvVarGuard::unset("DATABASE_URL");
+        let _env_guard = EnvVarGuard::unset(env_key);
+        let project = TempDir::new().expect("temp dir");
+        let schema_path = project.path().join("schema.nautilus");
+        std::fs::write(
+            &schema_path,
+            format!(
+                r#"datasource db {{
+  provider   = "postgresql"
+  url        = "postgres://pooled/runtime"
+  direct_url = env("{env_key}")
+}}
+
+model User {{
+  id Int @id
+}}
+"#
+            ),
+        )
+        .expect("failed to write schema");
+        std::fs::write(
+            project.path().join(".env"),
+            format!("{env_key}=postgres://direct/admin\n"),
+        )
+        .expect("failed to write dotenv");
+
+        let url = resolve_database_url_for_pull(schema_path.to_str(), None)
+            .expect("expected db pull URL from direct_url");
+
+        assert_eq!(url, "postgres://direct/admin");
     }
 }

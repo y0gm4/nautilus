@@ -4,8 +4,9 @@ use std::env;
 #[derive(Debug)]
 pub struct CliArgs {
     pub schema_path: String,
-    /// Database URL from --database-url flag or DATABASE_URL env var.
-    /// If None, the engine will fall back to the `url` field in the schema datasource.
+    /// Database URL from the `--database-url` flag.
+    /// If `None`, the engine resolves runtime/admin URLs from `DATABASE_URL`
+    /// and the schema datasource (`url` / `direct_url`).
     pub database_url: Option<String>,
     /// If true, run CREATE TABLE migrations before entering the request loop.
     pub migrate: bool,
@@ -14,13 +15,7 @@ pub struct CliArgs {
 impl CliArgs {
     pub fn parse() -> Result<Self, String> {
         let args: Vec<String> = env::args().collect();
-        let mut cli = Self::parse_from(&args[1..])?;
-
-        if cli.database_url.is_none() {
-            cli.database_url = env::var("DATABASE_URL").ok();
-        }
-
-        Ok(cli)
+        Self::parse_from(&args[1..])
     }
 
     /// Parse from an explicit slice of argument strings (without the program name).

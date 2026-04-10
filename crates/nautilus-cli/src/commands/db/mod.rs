@@ -16,7 +16,7 @@ pub enum DbCommand {
         #[arg(short, long)]
         schema: Option<String>,
 
-        /// Database URL (overrides schema datasource url and DATABASE_URL)
+        /// Database URL (overrides schema datasource direct_url/url and DATABASE_URL)
         #[arg(long)]
         database_url: Option<String>,
 
@@ -34,7 +34,7 @@ pub enum DbCommand {
         #[arg(short, long)]
         schema: Option<String>,
 
-        /// Database URL (overrides schema datasource url and DATABASE_URL)
+        /// Database URL (overrides schema datasource direct_url/url and DATABASE_URL)
         #[arg(long)]
         database_url: Option<String>,
     },
@@ -44,7 +44,7 @@ pub enum DbCommand {
         #[arg(short, long)]
         schema: Option<String>,
 
-        /// Database URL (overrides schema datasource url and DATABASE_URL)
+        /// Database URL (overrides schema datasource direct_url/url and DATABASE_URL)
         #[arg(long)]
         database_url: Option<String>,
 
@@ -58,7 +58,7 @@ pub enum DbCommand {
         #[arg(short, long)]
         schema: Option<String>,
 
-        /// Database URL (overrides schema datasource url and DATABASE_URL)
+        /// Database URL (overrides schema datasource direct_url/url and DATABASE_URL)
         #[arg(long)]
         database_url: Option<String>,
 
@@ -72,7 +72,7 @@ pub enum DbCommand {
         #[arg(short, long)]
         schema: Option<String>,
 
-        /// Database URL (overrides schema datasource url and DATABASE_URL)
+        /// Database URL (overrides schema datasource direct_url/url and DATABASE_URL)
         #[arg(long)]
         database_url: Option<String>,
 

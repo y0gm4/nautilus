@@ -69,8 +69,36 @@ pub struct DatasourceIr {
     pub provider: String,
     /// The connection URL (may contain env() references).
     pub url: String,
+    /// Optional direct connection URL for admin/introspection paths.
+    ///
+    /// When present, tooling such as `db pull`, `db push`, and migrations can
+    /// prefer this over `url` so runtime traffic can continue to use a pooled
+    /// connection string.
+    pub direct_url: Option<String>,
     /// Span of the datasource block.
     pub span: Span,
+}
+
+impl DatasourceIr {
+    /// Returns the preferred runtime URL expression.
+    ///
+    /// Runtime clients should prefer `url` and only fall back to `direct_url`
+    /// when `url` is unavailable.
+    pub fn runtime_url(&self) -> &str {
+        if !self.url.is_empty() {
+            &self.url
+        } else {
+            self.direct_url.as_deref().unwrap_or(&self.url)
+        }
+    }
+
+    /// Returns the preferred admin/introspection URL expression.
+    ///
+    /// Admin tooling should prefer `direct_url` when present, then fall back to
+    /// the normal runtime `url`.
+    pub fn admin_url(&self) -> &str {
+        self.direct_url.as_deref().unwrap_or(&self.url)
+    }
 }
 
 /// Whether the generated client API uses async or sync methods.

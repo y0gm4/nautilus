@@ -4,6 +4,7 @@
 //! menus, confirmation prompts) goes through this module so the output style
 //! stays consistent.
 
+use anyhow::Error;
 use console::{style, Emoji, Term};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
@@ -100,12 +101,44 @@ pub fn print_summary_err(label: &str, detail: &str) {
 
 pub fn print_fatal_error(msg: &str) {
     eprintln!();
-    eprintln!("  {}  {}", style(CROSS).red().bold(), style(msg).red());
+    let mut lines = msg.lines();
+    if let Some(first_line) = lines.next() {
+        eprintln!(
+            "  {}  {}",
+            style(CROSS).red().bold(),
+            style(first_line).red()
+        );
+        for line in lines {
+            eprintln!("     {}", style(line).red());
+        }
+    } else {
+        eprintln!("  {}", style(CROSS).red().bold());
+    }
     eprintln!();
 }
 
 pub fn print_warning(msg: &str) {
     println!("  {}  {}", style(WARN).yellow(), style(msg).yellow());
+}
+
+/// Render an [`anyhow::Error`] and its causes in a multi-line, user-friendly form.
+pub fn format_error_chain(err: &Error) -> String {
+    let mut chain = err.chain();
+    let mut lines = Vec::new();
+
+    if let Some(top) = chain.next() {
+        lines.push(top.to_string());
+    }
+
+    let causes: Vec<String> = chain.map(|cause| cause.to_string()).collect();
+    if !causes.is_empty() {
+        lines.push("Caused by:".to_string());
+        for cause in causes {
+            lines.push(format!("  - {}", cause));
+        }
+    }
+
+    lines.join("\n")
 }
 
 /// Describe a single [`Change`] as `(sigil, subject, annotation)`.
@@ -403,5 +436,21 @@ pub fn confirm_destructive() -> bool {
             matches!(ch, 'y' | 'Y')
         }
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_error_chain;
+    use anyhow::anyhow;
+
+    #[test]
+    fn format_error_chain_includes_nested_causes() {
+        let err = anyhow!("inner failure").context("outer failure");
+        let rendered = format_error_chain(&err);
+
+        assert!(rendered.contains("outer failure"));
+        assert!(rendered.contains("Caused by:"));
+        assert!(rendered.contains("inner failure"));
     }
 }

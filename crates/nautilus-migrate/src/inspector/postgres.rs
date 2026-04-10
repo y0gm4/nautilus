@@ -11,16 +11,24 @@ impl SchemaInspector {
     pub(super) async fn inspect_postgres(&self) -> Result<LiveSchema> {
         use sqlx::Row as _;
 
-        let pool = sqlx::PgPool::connect(&self.url)
+        let pool = sqlx::PgPool::connect_with(postgres_connect_options(&self.url)?)
             .await
             .map_err(|e| MigrationError::Database(format!("PostgreSQL connection failed: {e}")))?;
 
         let schema_name: Option<String> = sqlx::query("SELECT current_schema() AS schema_name")
             .fetch_one(&pool)
             .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?
+            .map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to resolve current PostgreSQL schema: {e}"
+                ))
+            })?
             .try_get("schema_name")
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
+            .map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to read current PostgreSQL schema name: {e}"
+                ))
+            })?;
         let schema_name = schema_name.unwrap_or_else(|| "public".to_string());
 
         let table_rows = sqlx::query(
@@ -35,13 +43,21 @@ impl SchemaInspector {
         .bind(&schema_name)
         .fetch_all(&pool)
         .await
-        .map_err(|e| MigrationError::Database(e.to_string()))?;
+        .map_err(|e| {
+            MigrationError::Database(format!(
+                "failed to list tables in PostgreSQL schema \"{schema_name}\": {e}"
+            ))
+        })?;
 
         let table_names: Vec<String> = table_rows
             .into_iter()
             .map(|r| r.try_get::<String, _>("table_name"))
             .collect::<std::result::Result<_, _>>()
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
+            .map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to read table metadata in PostgreSQL schema \"{schema_name}\": {e}"
+                ))
+            })?;
 
         let mut live = LiveSchema::default();
 
@@ -64,34 +80,68 @@ impl SchemaInspector {
             .bind(&table_name)
             .fetch_all(&pool)
             .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
+            .map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to fetch columns for table \"{table_name}\" in schema \"{schema_name}\": {e}"
+                ))
+            })?;
 
             let mut columns = Vec::new();
             for row in &col_rows {
-                let col_name: String = row
-                    .try_get("column_name")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                let col_name: String = row.try_get("column_name").map_err(|e| {
+                    MigrationError::Database(format!(
+                        "failed to read column_name while inspecting table \"{table_name}\": {e}"
+                    ))
+                })?;
                 let udt_name: String = row
                     .try_get("udt_name")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                    .map_err(|e| {
+                        MigrationError::Database(format!(
+                            "failed to read udt_name for column \"{col_name}\" in table \"{table_name}\": {e}"
+                        ))
+                    })?;
                 let is_nullable: String = row
                     .try_get("is_nullable")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                    .map_err(|e| {
+                        MigrationError::Database(format!(
+                            "failed to read nullability for column \"{col_name}\" in table \"{table_name}\": {e}"
+                        ))
+                    })?;
                 let column_default: Option<String> = row
                     .try_get("column_default")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                    .map_err(|e| {
+                        MigrationError::Database(format!(
+                            "failed to read default value for column \"{col_name}\" in table \"{table_name}\": {e}"
+                        ))
+                    })?;
                 let character_maximum_length: Option<i32> = row
                     .try_get("character_maximum_length")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                    .map_err(|e| {
+                        MigrationError::Database(format!(
+                            "failed to read character_maximum_length for column \"{col_name}\" in table \"{table_name}\": {e}"
+                        ))
+                    })?;
                 let numeric_precision: Option<i32> = row
                     .try_get("numeric_precision")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                    .map_err(|e| {
+                        MigrationError::Database(format!(
+                            "failed to read numeric_precision for column \"{col_name}\" in table \"{table_name}\": {e}"
+                        ))
+                    })?;
                 let numeric_scale: Option<i32> = row
                     .try_get("numeric_scale")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                    .map_err(|e| {
+                        MigrationError::Database(format!(
+                            "failed to read numeric_scale for column \"{col_name}\" in table \"{table_name}\": {e}"
+                        ))
+                    })?;
                 let generation_expression: Option<String> = row
                     .try_get("generation_expression")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                    .map_err(|e| {
+                        MigrationError::Database(format!(
+                            "failed to read generation_expression for column \"{col_name}\" in table \"{table_name}\": {e}"
+                        ))
+                    })?;
 
                 let col_type = normalize_pg_type(
                     &udt_name,
@@ -132,13 +182,21 @@ impl SchemaInspector {
             .bind(&table_name)
             .fetch_all(&pool)
             .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
+            .map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to fetch primary key metadata for table \"{table_name}\" in schema \"{schema_name}\": {e}"
+                ))
+            })?;
 
             let primary_key: Vec<String> = pk_rows
                 .into_iter()
                 .map(|r| r.try_get::<String, _>("column_name"))
                 .collect::<std::result::Result<_, _>>()
-                .map_err(|e| MigrationError::Database(e.to_string()))?;
+                .map_err(|e| {
+                    MigrationError::Database(format!(
+                        "failed to read primary key metadata for table \"{table_name}\": {e}"
+                    ))
+                })?;
 
             let idx_rows = sqlx::query(
                 "SELECT \
@@ -164,7 +222,11 @@ impl SchemaInspector {
             .bind(&table_name)
             .fetch_all(&pool)
             .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
+            .map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to fetch index metadata for table \"{table_name}\" in schema \"{schema_name}\": {e}"
+                ))
+            })?;
 
             let indexes = group_pg_indexes(idx_rows);
 
@@ -182,19 +244,29 @@ impl SchemaInspector {
             .bind(&table_name)
             .fetch_all(&pool)
             .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
+            .map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to fetch CHECK constraints for table \"{table_name}\" in schema \"{schema_name}\": {e}"
+                ))
+            })?;
 
             let mut table_check_constraints = Vec::new();
             let mut column_check_map = std::collections::HashMap::new();
             let col_prefix = format!("chk_{}_", table_name);
 
             for row in &check_rows {
-                let con_name: String = row
-                    .try_get("constraint_name")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                let con_name: String = row.try_get("constraint_name").map_err(|e| {
+                    MigrationError::Database(format!(
+                        "failed to read CHECK constraint name for table \"{table_name}\": {e}"
+                    ))
+                })?;
                 let constraint_def: String = row
                     .try_get("constraint_def")
-                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                    .map_err(|e| {
+                        MigrationError::Database(format!(
+                            "failed to read CHECK constraint definition \"{con_name}\" on table \"{table_name}\": {e}"
+                        ))
+                    })?;
 
                 let expr = normalize_pg_check_expr(&constraint_def);
                 let col_name = con_name
@@ -242,7 +314,11 @@ impl SchemaInspector {
             .bind(&table_name)
             .fetch_all(&pool)
             .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
+            .map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to fetch foreign keys for table \"{table_name}\" in schema \"{schema_name}\": {e}"
+                ))
+            })?;
 
             let foreign_keys = group_pg_foreign_keys(fk_rows);
 
@@ -270,15 +346,25 @@ impl SchemaInspector {
         .bind(&schema_name)
         .fetch_all(&pool)
         .await
-        .map_err(|e| MigrationError::Database(e.to_string()))?;
+        .map_err(|e| {
+            MigrationError::Database(format!(
+                "failed to fetch enum types in PostgreSQL schema \"{schema_name}\": {e}"
+            ))
+        })?;
 
         for row in &enum_rows {
-            let enum_name: String = row
-                .try_get("enum_name")
-                .map_err(|e| MigrationError::Database(e.to_string()))?;
+            let enum_name: String = row.try_get("enum_name").map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to read enum type name in schema \"{schema_name}\": {e}"
+                ))
+            })?;
             let variant: String = row
                 .try_get("variant")
-                .map_err(|e| MigrationError::Database(e.to_string()))?;
+                .map_err(|e| {
+                    MigrationError::Database(format!(
+                        "failed to read enum variant for type \"{enum_name}\" in schema \"{schema_name}\": {e}"
+                    ))
+                })?;
             live.enums.entry(enum_name).or_default().push(variant);
         }
 
@@ -303,18 +389,32 @@ impl SchemaInspector {
         .bind(&schema_name)
         .fetch_all(&pool)
         .await
-        .map_err(|e| MigrationError::Database(e.to_string()))?;
+        .map_err(|e| {
+            MigrationError::Database(format!(
+                "failed to fetch composite types in PostgreSQL schema \"{schema_name}\": {e}"
+            ))
+        })?;
 
         for row in &composite_rows {
-            let composite_name: String = row
-                .try_get("composite_name")
-                .map_err(|e| MigrationError::Database(e.to_string()))?;
+            let composite_name: String = row.try_get("composite_name").map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to read composite type name in schema \"{schema_name}\": {e}"
+                ))
+            })?;
             let field_name: String = row
                 .try_get("field_name")
-                .map_err(|e| MigrationError::Database(e.to_string()))?;
+                .map_err(|e| {
+                    MigrationError::Database(format!(
+                        "failed to read field name for composite type \"{composite_name}\" in schema \"{schema_name}\": {e}"
+                    ))
+                })?;
             let field_type: String = row
                 .try_get("field_type")
-                .map_err(|e| MigrationError::Database(e.to_string()))?;
+                .map_err(|e| {
+                    MigrationError::Database(format!(
+                        "failed to read field type for \"{composite_name}.{field_name}\" in schema \"{schema_name}\": {e}"
+                    ))
+                })?;
             let entry = live
                 .composite_types
                 .entry(composite_name.clone())
@@ -330,4 +430,15 @@ impl SchemaInspector {
 
         Ok(live)
     }
+}
+
+fn postgres_connect_options(url: &str) -> Result<sqlx::postgres::PgConnectOptions> {
+    use std::str::FromStr;
+
+    // `db pull`/`db push` introspection is often run through PgBouncer or other
+    // transaction-pooling proxies where persistent named prepared statements are
+    // not safe. Disabling the statement cache keeps introspection portable.
+    sqlx::postgres::PgConnectOptions::from_str(url)
+        .map(|options| options.statement_cache_capacity(0))
+        .map_err(|e| MigrationError::Database(format!("Invalid PostgreSQL URL: {e}")))
 }

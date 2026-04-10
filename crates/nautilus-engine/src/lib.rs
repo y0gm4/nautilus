@@ -12,7 +12,7 @@ pub mod state;
 pub mod transport;
 
 use nautilus_migrate::{DatabaseProvider, DdlGenerator};
-use nautilus_schema::validate_schema_source;
+use nautilus_schema::{ir::SchemaIr, validate_schema_source};
 
 pub use args::CliArgs;
 pub use state::EngineState;
@@ -28,18 +28,6 @@ pub async fn run_engine(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let schema_source = std::fs::read_to_string(&schema_path)?;
     let schema_ir = validate_schema_source(&schema_source)?.ir;
-
-    let resolved_url = database_url
-        .or_else(|| {
-            schema_ir
-                .datasource
-                .as_ref()
-                .filter(|ds| !ds.url.is_empty())
-                .map(|ds| ds.url.clone())
-        })
-        .ok_or("No database URL provided. Use --database-url, DATABASE_URL env var, or set 'url' in the schema datasource block.")?;
-
-    let state = EngineState::new(schema_ir.clone(), resolved_url).await?;
 
     if migrate {
         eprintln!("[engine] Running schema migrations (--migrate)...");
@@ -57,12 +45,17 @@ pub async fn run_engine(
                 )
             })?;
 
+        let migration_url = resolve_engine_migration_url(database_url.as_deref(), &schema_ir)?;
         let generator = DdlGenerator::new(db_provider);
         let statements = generator.generate_create_tables(&schema_ir)?;
-        state.execute_ddl_sql(statements).await?;
+        let migration_state = EngineState::new(schema_ir.clone(), migration_url).await?;
+        migration_state.execute_ddl_sql(statements).await?;
 
         eprintln!("[engine] Migrations applied successfully");
     }
+
+    let runtime_url = resolve_engine_runtime_url(database_url.as_deref(), &schema_ir)?;
+    let state = EngineState::new(schema_ir.clone(), runtime_url).await?;
 
     eprintln!("[engine] Engine initialized, entering request loop");
 
@@ -76,4 +69,128 @@ pub async fn run_engine(
 pub async fn run_engine_from_cli() -> Result<(), Box<dyn std::error::Error>> {
     let args = CliArgs::parse()?;
     run_engine(args.schema_path, args.database_url, args.migrate).await
+}
+
+fn resolve_engine_runtime_url(
+    database_url_arg: Option<&str>,
+    schema_ir: &SchemaIr,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let raw_url = database_url_arg
+        .map(str::to_string)
+        .or_else(|| std::env::var("DATABASE_URL").ok())
+        .or_else(|| {
+            schema_ir
+                .datasource
+                .as_ref()
+                .map(|ds| ds.runtime_url().to_string())
+        })
+        .ok_or(
+            "No runtime database URL provided. Use --database-url, set DATABASE_URL, or set datasource url/direct_url.",
+        )?;
+
+    resolve_datasource_url(&raw_url)
+}
+
+fn resolve_engine_migration_url(
+    database_url_arg: Option<&str>,
+    schema_ir: &SchemaIr,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let raw_url = database_url_arg
+        .map(str::to_string)
+        .or_else(|| {
+            schema_ir
+                .datasource
+                .as_ref()
+                .map(|ds| ds.admin_url().to_string())
+        })
+        .or_else(|| std::env::var("DATABASE_URL").ok())
+        .ok_or(
+            "No migration database URL provided. Use --database-url, set datasource direct_url/url, or set DATABASE_URL.",
+        )?;
+
+    resolve_datasource_url(&raw_url)
+}
+
+fn resolve_datasource_url(raw: &str) -> Result<String, Box<dyn std::error::Error>> {
+    nautilus_schema::resolve_env_url(raw).map_err(|msg| msg.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_engine_migration_url, resolve_engine_runtime_url};
+    use nautilus_schema::validate_schema_source;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        old: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn unset(key: &'static str) -> Self {
+            let old = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.old {
+                Some(value) => {
+                    std::env::set_var(self.key, value);
+                }
+                None => {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    fn parse_schema_ir(source: &str) -> nautilus_schema::ir::SchemaIr {
+        validate_schema_source(source)
+            .expect("schema should validate")
+            .ir
+    }
+
+    #[test]
+    fn runtime_url_prefers_datasource_url() {
+        let _env_guard = EnvVarGuard::unset("DATABASE_URL");
+        let schema_ir = parse_schema_ir(
+            r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://pooled/runtime"
+  direct_url = "postgres://direct/admin"
+}
+
+model User {
+  id Int @id
+}
+"#,
+        );
+
+        let url = resolve_engine_runtime_url(None, &schema_ir).expect("expected runtime url");
+        assert_eq!(url, "postgres://pooled/runtime");
+    }
+
+    #[test]
+    fn migration_url_prefers_direct_url() {
+        let _env_guard = EnvVarGuard::unset("DATABASE_URL");
+        let schema_ir = parse_schema_ir(
+            r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://pooled/runtime"
+  direct_url = "postgres://direct/admin"
+}
+
+model User {
+  id Int @id
+}
+"#,
+        );
+
+        let url = resolve_engine_migration_url(None, &schema_ir).expect("expected migration url");
+        assert_eq!(url, "postgres://direct/admin");
+    }
 }

@@ -9,7 +9,7 @@ pub enum EngineCommand {
         #[arg(short, long)]
         schema: String,
 
-        /// Database URL (overrides schema datasource url and DATABASE_URL)
+        /// Database URL (overrides schema datasource direct_url/url and DATABASE_URL)
         #[arg(long)]
         database_url: Option<String>,
 

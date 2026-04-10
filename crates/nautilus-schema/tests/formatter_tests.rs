@@ -132,15 +132,18 @@ model Post {
 #[test]
 fn test_format_aligns_datasource_keys() {
     let source = r#"datasource db {
-  provider = "postgresql"
-  url      = "postgres://localhost"
+  provider   = "postgresql"
+  url        = "postgres://localhost"
+  direct_url = "postgres://localhost/direct"
 }"#;
     let out = round_trip(source);
     let lines: Vec<&str> = out.lines().filter(|l| l.contains('=')).collect();
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 3);
     let col0 = lines[0].find('=').unwrap();
     let col1 = lines[1].find('=').unwrap();
+    let col2 = lines[2].find('=').unwrap();
     assert_eq!(col0, col1, "= signs should be aligned: {out:?}");
+    assert_eq!(col1, col2, "= signs should be aligned: {out:?}");
 }
 
 #[test]

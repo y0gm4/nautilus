@@ -232,6 +232,11 @@ fn completion_inside_datasource_only_contains_datasource_fields() {
     );
     assert!(labels.contains(&"url"), "missing url: {:?}", labels);
     assert!(
+        labels.contains(&"direct_url"),
+        "missing direct_url: {:?}",
+        labels
+    );
+    assert!(
         !labels.contains(&"output"),
         "unexpected output: {:?}",
         labels

@@ -38,6 +38,10 @@ impl SchemaValidator {
         if let Err(err) = Self::datasource_url_value(datasource) {
             self.errors.push_back(err);
         }
+
+        if let Err(err) = Self::datasource_direct_url_value(datasource) {
+            self.errors.push_back(err);
+        }
     }
 
     pub(super) fn validate_generators(&mut self) {
@@ -138,24 +142,47 @@ impl SchemaValidator {
     }
 
     pub(super) fn datasource_url_value(datasource: &DatasourceDecl) -> Result<String> {
-        let url_field = datasource.find_field("url").ok_or_else(|| {
+        Self::datasource_optional_url_value(datasource, "url")?.ok_or_else(|| {
             SchemaError::Validation(
                 "Datasource missing required 'url' field".to_string(),
                 datasource.span,
             )
-        })?;
+        })
+    }
+
+    pub(super) fn datasource_direct_url_value(
+        datasource: &DatasourceDecl,
+    ) -> Result<Option<String>> {
+        Self::datasource_optional_url_value(datasource, "direct_url")
+    }
+
+    fn datasource_optional_url_value(
+        datasource: &DatasourceDecl,
+        field_name: &str,
+    ) -> Result<Option<String>> {
+        let Some(url_field) = datasource.find_field(field_name) else {
+            return Ok(None);
+        };
 
         match &url_field.value {
-            Expr::Literal(Literal::String(s, _)) => Ok(s.clone()),
+            Expr::Literal(Literal::String(s, _)) => Ok(Some(s.clone())),
             Expr::FunctionCall { name, args, .. } if name.value == "env" => match args.as_slice() {
-                [Expr::Literal(Literal::String(var_name, _))] => Ok(format!("env({})", var_name)),
+                [Expr::Literal(Literal::String(var_name, _))] => {
+                    Ok(Some(format!("env({})", var_name)))
+                }
                 _ => Err(SchemaError::Validation(
-                    "Datasource 'url' env() call requires a single string argument".to_string(),
+                    format!(
+                        "Datasource '{}' env() call requires a single string argument",
+                        field_name
+                    ),
                     url_field.span,
                 )),
             },
             _ => Err(SchemaError::Validation(
-                "Datasource 'url' must be a string literal or env() call".to_string(),
+                format!(
+                    "Datasource '{}' must be a string literal or env() call",
+                    field_name
+                ),
                 url_field.span,
             )),
         }
