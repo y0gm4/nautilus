@@ -696,7 +696,8 @@ fn build_back_relations(
     directional_relation_counts: &HashMap<(String, String), usize>,
     options: PullNamingOptions,
 ) -> HashMap<String, Vec<BackRelation>> {
-    let mut incoming: HashMap<String, Vec<(String, String, Option<String>, bool)>> = HashMap::new();
+    type IncomingEntry = (String, String, Option<String>, bool);
+    let mut incoming: HashMap<String, Vec<IncomingEntry>> = HashMap::new();
 
     for &table_name in table_names {
         let table = &live.tables[table_name];
