@@ -7,6 +7,13 @@ import { Writable, Readable } from 'stream';
 
 const BINARY_NAME        = process.platform === 'win32' ? 'nautilus.exe'        : 'nautilus';
 const LEGACY_BINARY_NAME = process.platform === 'win32' ? 'nautilus-engine.exe' : 'nautilus-engine';
+const NPM_PACKAGE        = 'nautilus-orm';
+const NPX_BIN            = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const NPM_BIN            = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+type ResolvedEngine =
+  | { kind: 'binary'; path: string }
+  | { kind: 'npx' };
 
 /**
  * Manages the `nautilus engine serve` subprocess.
@@ -42,14 +49,36 @@ export class EngineProcess {
     this.stderrChunks = [];
     this._loadDotenv(schemaPath);
 
-    const resolved = this.enginePath ?? this._findEngine();
-    const isLegacy = path.basename(resolved).startsWith('nautilus-engine');
+    const serveArgs = [
+      'engine', 'serve',
+      '--schema', schemaPath,
+      ...(this.migrate ? ['--migrate'] : []),
+    ];
 
-    const args: string[] = isLegacy
-      ? ['--schema', schemaPath, ...(this.migrate ? ['--migrate'] : [])]
-      : ['engine', 'serve', '--schema', schemaPath, ...(this.migrate ? ['--migrate'] : [])];
+    let command: string;
+    let args: string[];
 
-    this.proc = cp.spawn(resolved, args, {
+    if (this.enginePath) {
+      const isLegacy = path.basename(this.enginePath).startsWith('nautilus-engine');
+      command = this.enginePath;
+      args = isLegacy
+        ? ['--schema', schemaPath, ...(this.migrate ? ['--migrate'] : [])]
+        : serveArgs;
+    } else {
+      const resolved = this._findEngine();
+      if (resolved.kind === 'npx') {
+        command = NPX_BIN;
+        args    = [NPM_PACKAGE, ...serveArgs];
+      } else {
+        const isLegacy = path.basename(resolved.path).startsWith('nautilus-engine');
+        command = resolved.path;
+        args = isLegacy
+          ? ['--schema', schemaPath, ...(this.migrate ? ['--migrate'] : [])]
+          : serveArgs;
+      }
+    }
+
+    this.proc = cp.spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -174,19 +203,70 @@ export class EngineProcess {
   }
 
   /**
-   * Locate the `nautilus` (or `nautilus-engine`) binary in the system PATH.
-   * Throws if neither is found.
+   * Locate the `nautilus` (or `nautilus-engine`) binary.
+   *
+   * Search order:
+   * 1. System PATH (`nautilus` then `nautilus-engine`).
+   * 2. `node_modules/.bin/nautilus` — walks up from CWD (local npm install).
+   * 3. `npx nautilus-orm` — if the package is installed globally or locally.
    */
-  private _findEngine(): string {
+  private _findEngine(): ResolvedEngine {
     for (const name of [BINARY_NAME, LEGACY_BINARY_NAME]) {
       const found = this._which(name);
-      if (found) return found;
+      if (found) return { kind: 'binary', path: found };
     }
+
+    const localBin = this._findInNodeModules();
+    if (localBin) return { kind: 'binary', path: localBin };
+
+    if (this._isInstalledViaNpm()) return { kind: 'npx' };
+
     throw new Error(
-      `nautilus binary not found in PATH.\n` +
-      `Install it with: cargo install nautilus-cli\n` +
-      `Or add the compiled binary to your PATH before running nautilus generate.`,
+      `nautilus binary not found.\n` +
+      `Install it with: npm install nautilus-orm  (or -g for global)\n` +
+      `Or: cargo install nautilus-cli`,
     );
+  }
+
+  /**
+   * Walk up from CWD looking for `node_modules/.bin/nautilus[.exe]`
+   * (covers local npm installs).
+   */
+  private _findInNodeModules(): string | null {
+    let dir = process.cwd();
+    while (true) {
+      const candidate = path.join(dir, 'node_modules', '.bin', BINARY_NAME);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch { /* not found */ }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+    return null;
+  }
+
+  /**
+   * Returns `true` when `nautilus-orm` is listed as an installed npm package
+   * (local or global). Uses `npm ls` — no subprocess is spawned if npm is
+   * absent.
+   */
+  private _isInstalledViaNpm(): boolean {
+    try {
+      for (const extra of [[], ['-g']] as string[][]) {
+        const result = cp.spawnSync(
+          NPM_BIN,
+          ['ls', '--depth=0', '--json', NPM_PACKAGE, ...extra],
+          { encoding: 'utf8', timeout: 5000 },
+        );
+        if (result.status === 0 && result.stdout) {
+          const data = JSON.parse(result.stdout) as { dependencies?: Record<string, unknown> };
+          if (data.dependencies && NPM_PACKAGE in data.dependencies) return true;
+        }
+      }
+    } catch { /* npm not available */ }
+    return false;
   }
 
   private _which(name: string): string | null {

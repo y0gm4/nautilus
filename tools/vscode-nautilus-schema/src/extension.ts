@@ -1,3 +1,4 @@
+import * as cp from "child_process";
 import * as fs from "fs";
 import * as https from "https";
 import * as os from "os";
@@ -12,14 +13,15 @@ import {
 
 const GITHUB_REPO = "y0gm4/nautilus";
 const BIN_NAME = process.platform === "win32" ? "nautilus-lsp.exe" : "nautilus-lsp";
+const NPM_PACKAGE = "nautilus-orm-lsp";
 
 let client: LanguageClient | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  let serverPath: string;
+  let serverOptions: ServerOptions;
 
   try {
-    serverPath = await resolveServerPath(context);
+    serverOptions = await resolveServerOptions(context);
   } catch (err) {
     vscode.window.showErrorMessage(
       `nautilus-lsp: could not resolve binary — ${err}. ` +
@@ -27,11 +29,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
     return;
   }
-
-  const serverOptions: ServerOptions = {
-    command: serverPath,
-    transport: TransportKind.stdio,
-  };
 
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "nautilus" }],
@@ -58,23 +55,27 @@ export function deactivate(): Thenable<void> | undefined {
 // Path resolution
 
 /**
- * Resolves the `nautilus-lsp` binary path.
+ * Resolves how to launch `nautilus-lsp`.
  *
  * Search order:
  * 1. `nautilus.lspPath` VS Code setting (user-defined override).
  * 2. Dev build: `<repo-root>/target/debug/nautilus-lsp[.exe]`.
  * 3. Global storage cache (previously auto-downloaded binary).
  * 4. `nautilus-lsp[.exe]` on PATH.
- * 5. Auto-download from GitHub Releases -> cache in global storage.
+ * 5. Local npm install: `<workspace>/node_modules/.bin/nautilus-lsp`.
+ * 6. npm package available via `npx` (global or local install).
+ * 7. Auto-download from GitHub Releases -> cache in global storage.
  */
-async function resolveServerPath(context: vscode.ExtensionContext): Promise<string> {
+async function resolveServerOptions(
+  context: vscode.ExtensionContext
+): Promise<ServerOptions> {
   const rawSetting = vscode.workspace
     .getConfiguration("nautilus")
     .get<string>("lspPath");
   if (rawSetting && rawSetting.trim() !== "") {
     const setting = rawSetting.trim().replace(/^~(?=$|\/|\\)/, os.homedir());
     if (fs.existsSync(setting)) {
-      return setting;
+      return binaryServerOptions(setting);
     }
   }
 
@@ -84,19 +85,45 @@ async function resolveServerPath(context: vscode.ExtensionContext): Promise<stri
     "target", "debug", BIN_NAME
   );
   if (fs.existsSync(devBuild)) {
-    return devBuild;
+    return binaryServerOptions(devBuild);
   }
 
   const cachedPath = getCachedBinPath(context);
   if (fs.existsSync(cachedPath)) {
-    return cachedPath;
+    return binaryServerOptions(cachedPath);
   }
 
   if (isOnPath(BIN_NAME)) {
-    return BIN_NAME;
+    return binaryServerOptions(BIN_NAME);
   }
 
-  return downloadLsp(context);
+  const localBin = findInNodeModules();
+  if (localBin) {
+    return binaryServerOptions(localBin);
+  }
+
+  if (isInstalledVianpm()) {
+    return npxServerOptions();
+  }
+
+  const downloaded = await downloadLsp(context);
+  return binaryServerOptions(downloaded);
+}
+
+function binaryServerOptions(binPath: string): ServerOptions {
+  return {
+    command: binPath,
+    transport: TransportKind.stdio,
+  };
+}
+
+function npxServerOptions(): ServerOptions {
+  const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+  return {
+    command: npx,
+    args: [NPM_PACKAGE],
+    transport: TransportKind.stdio,
+  };
 }
 
 function getCachedBinPath(context: vscode.ExtensionContext): string {
@@ -108,6 +135,53 @@ function isOnPath(bin: string): boolean {
   const pathEnv = process.env.PATH ?? "";
   const dirs = pathEnv.split(path.delimiter);
   return dirs.some((dir) => fs.existsSync(path.join(dir, bin)));
+}
+
+/**
+ * Looks for `nautilus-lsp` in `node_modules/.bin` of each open workspace
+ * folder. Returns the first match, or `undefined` if none found.
+ */
+function findInNodeModules(): string | undefined {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders) {
+    return undefined;
+  }
+  for (const folder of folders) {
+    const candidate = path.join(folder.uri.fsPath, "node_modules", ".bin", BIN_NAME);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Returns `true` when the `nautilus-orm-lsp` npm package is already installed
+ * locally or globally and can be invoked without downloading.
+ *
+ * Uses `npm ls` so no extra binary is fetched; errors are silently ignored.
+ */
+function isInstalledVianpm(): boolean {
+  try {
+    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+    // Check local install first, then global (-g).
+    for (const extra of [[], ["-g"]]) {
+      const result = cp.spawnSync(
+        npm,
+        ["ls", "--depth=0", "--json", NPM_PACKAGE, ...extra],
+        { encoding: "utf8", timeout: 5000 }
+      );
+      if (result.status === 0 && result.stdout) {
+        const data = JSON.parse(result.stdout) as { dependencies?: Record<string, unknown> };
+        if (data.dependencies && NPM_PACKAGE in data.dependencies) {
+          return true;
+        }
+      }
+    }
+  } catch {
+    // npm not available or parse error — fall through
+  }
+  return false;
 }
 
 // Auto-download
