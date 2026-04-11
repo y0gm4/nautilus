@@ -8,7 +8,7 @@ This repository currently includes:
 
 - a `.nautilus` schema language
 - generators for Rust, Python, and JavaScript/TypeScript clients
-- a `nautilus` CLI for validate/format/generate/db/migrate workflows
+- a `nautilus` CLI for validate/format/generate/db/migrate workflows plus Studio app management
 - a JSON-RPC engine over stdin/stdout
 - an LSP server and a VS Code extension
 - PostgreSQL, MySQL, and SQLite support
@@ -17,7 +17,7 @@ This repository currently includes:
 
 | Component | Role |
 | --- | --- |
-| [crates/nautilus-cli](crates/nautilus-cli/README.md) | `nautilus` CLI (`generate`, `validate`, `format`, `db`, `migrate`, `engine`, `python`) |
+| [crates/nautilus-cli](crates/nautilus-cli/README.md) | `nautilus` CLI (`generate`, `validate`, `format`, `db`, `migrate`, `engine`, `python`, `studio`) |
 | [crates/nautilus-schema](crates/nautilus-schema/README.md) | Lexer, parser, validator, formatter, editor analysis for `.nautilus` |
 | [crates/nautilus-codegen](crates/nautilus-codegen/README.md) | Rust / Python / JS client generation |
 | [crates/nautilus-engine](crates/nautilus-engine/README.md) | JSON-RPC engine runtime |
@@ -618,6 +618,7 @@ or package names you import at runtime.
 | `migrate generate`, `migrate apply`, `migrate rollback`, `migrate status` | Versioned SQL migration workflow |
 | `engine serve` | Starts the JSON-RPC engine used by generated clients |
 | `python install`, `python uninstall` | Installs or removes a Python shim so `python -m nautilus` works without pip packaging |
+| `studio` | Downloads the latest platform-specific (`windows` / `linux` / `macos`) Nautilus Studio release, refreshes or uninstalls it, installs runtime deps, and starts the Next.js app |
 
 See [crates/nautilus-cli/README.md](crates/nautilus-cli/README.md) for the command-level breakdown.
 

@@ -124,7 +124,10 @@ impl EngineState {
         match provider {
             DatabaseProvider::Postgres => {
                 let pg_client = Client::postgres(url).await?;
-                Ok((Arc::new(PostgresDialect), DatabaseClient::Postgres(pg_client)))
+                Ok((
+                    Arc::new(PostgresDialect),
+                    DatabaseClient::Postgres(pg_client),
+                ))
             }
             DatabaseProvider::Mysql => {
                 let mysql_client = Client::mysql(url).await?;
@@ -132,7 +135,10 @@ impl EngineState {
             }
             DatabaseProvider::Sqlite => {
                 let sqlite_client = Client::sqlite(url).await?;
-                Ok((Arc::new(SqliteDialect), DatabaseClient::Sqlite(sqlite_client)))
+                Ok((
+                    Arc::new(SqliteDialect),
+                    DatabaseClient::Sqlite(sqlite_client),
+                ))
             }
         }
     }

@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.7"
+version = "1.0.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["y0gm4"]
@@ -24,15 +24,15 @@ keywords = ["orm", "database", "sql", "query-builder"]
 categories = ["database"]
 
 [workspace.dependencies]
-nautilus-core      = { path = "crates/nautilus-core",      package = "nautilus-orm-core",      version = "0.1" }
-nautilus-dialect   = { path = "crates/nautilus-dialect",   package = "nautilus-orm-dialect",   version = "0.1" }
-nautilus-connector = { path = "crates/nautilus-connector", package = "nautilus-orm-connector", version = "0.1" }
-nautilus-protocol  = { path = "crates/nautilus-protocol",  package = "nautilus-orm-protocol",  version = "0.1" }
-nautilus-schema    = { path = "crates/nautilus-schema",    package = "nautilus-orm-schema",    version = "0.1" }
-nautilus-codegen   = { path = "crates/nautilus-codegen",   package = "nautilus-orm-codegen",   version = "0.1" }
-nautilus-migrate   = { path = "crates/nautilus-migrate",   package = "nautilus-orm-migrate",   version = "0.1" }
-nautilus-engine    = { path = "crates/nautilus-engine",    package = "nautilus-orm-engine",    version = "0.1" }
-nautilus-lsp       = { path = "crates/nautilus-lsp",       package = "nautilus-orm-lsp",       version = "0.1" }
+nautilus-core      = { path = "crates/nautilus-core",      package = "nautilus-orm-core",      version = "1.0.0" }
+nautilus-dialect   = { path = "crates/nautilus-dialect",   package = "nautilus-orm-dialect",   version = "1.0.0" }
+nautilus-connector = { path = "crates/nautilus-connector", package = "nautilus-orm-connector", version = "1.0.0" }
+nautilus-protocol  = { path = "crates/nautilus-protocol",  package = "nautilus-orm-protocol",  version = "1.0.0" }
+nautilus-schema    = { path = "crates/nautilus-schema",    package = "nautilus-orm-schema",    version = "1.0.0" }
+nautilus-codegen   = { path = "crates/nautilus-codegen",   package = "nautilus-orm-codegen",   version = "1.0.0" }
+nautilus-migrate   = { path = "crates/nautilus-migrate",   package = "nautilus-orm-migrate",   version = "1.0.0" }
+nautilus-engine    = { path = "crates/nautilus-engine",    package = "nautilus-orm-engine",    version = "1.0.0" }
+nautilus-lsp       = { path = "crates/nautilus-lsp",       package = "nautilus-orm-lsp",       version = "1.0.0" }
 
 [workspace.lints.clippy]
 all = "warn"

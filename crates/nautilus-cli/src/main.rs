@@ -21,7 +21,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Database management commands (push, status, …)
+    /// Database management commands (push, status, ...)
     Db {
         #[command(subcommand)]
         subcommand: commands::db::DbCommand,
@@ -48,7 +48,7 @@ enum Command {
         #[arg(long)]
         schema: Option<String>,
     },
-    /// Engine runtime — used internally by client libraries
+    /// Engine runtime - used internally by client libraries
     Engine {
         #[command(subcommand)]
         subcommand: commands::engine::EngineCommand,
@@ -61,11 +61,13 @@ enum Command {
     },
     /// Manage versioned SQL migration files (generate, apply, rollback, status)
     Migrate(commands::migrate::MigrateArgs),
-    /// Python integration — install or remove the site-packages .pth shim
+    /// Python integration - install or remove the site-packages .pth shim
     Python {
         #[command(subcommand)]
         subcommand: commands::python::PythonCommand,
     },
+    /// Manage the Nautilus Studio Next.js app checkout/build and launch it
+    Studio(commands::studio::StudioArgs),
 }
 
 #[tokio::main]
@@ -93,6 +95,7 @@ async fn main() {
         Command::Format { schema } => commands::format::run(schema).await,
         Command::Migrate(args) => commands::migrate::run(args).await,
         Command::Python { subcommand } => commands::python::run(subcommand).await,
+        Command::Studio(args) => commands::studio::run(args).await,
     };
 
     if let Err(e) = result {
@@ -171,10 +174,11 @@ mod tests {
     }
 
     #[test]
-    fn top_level_help_mentions_engine_and_python_commands() {
+    fn top_level_help_mentions_engine_python_and_studio_commands() {
         let help = top_level_help();
         assert!(help.contains("engine"));
         assert!(help.contains("python"));
+        assert!(help.contains("studio"));
     }
 
     #[test]
@@ -274,6 +278,30 @@ mod tests {
     }
 
     #[test]
+    fn studio_help_mentions_supported_flags() {
+        let help = help_for("studio");
+        assert!(help.contains("--update"));
+        assert!(help.contains("--uninstall"));
+    }
+
+    #[test]
+    fn studio_accepts_update_flag() {
+        let cli = Cli::try_parse_from(["nautilus", "studio", "--update"])
+            .expect("studio flags should parse");
+
+        match cli.command {
+            Command::Studio(args) => {
+                assert!(args.update);
+                assert!(!args.uninstall);
+            }
+            other => panic!(
+                "expected studio command, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
     fn cli_readme_tracks_local_generation_and_python_shim_behavior() {
         let readme = crate_readme();
         assert!(readme.contains("`nautilus-client-py`"));
@@ -289,6 +317,7 @@ mod tests {
         let readme = workspace_readme();
         assert!(readme.contains("| `engine serve` |"));
         assert!(readme.contains("| `python install`, `python uninstall` |"));
+        assert!(readme.contains("| `studio` |"));
         assert!(readme
             .contains("| `db push`, `db status`, `db pull`, `db drop`, `db reset`, `db seed` |"));
         assert!(

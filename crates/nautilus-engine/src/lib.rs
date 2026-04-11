@@ -268,6 +268,9 @@ model User {
             .and_then(|ds| ds.direct_url.as_deref())
             .and_then(|raw| resolve_datasource_url(raw).ok());
 
-        assert_eq!(direct, None, "unresolvable env() should produce None, not an error");
+        assert_eq!(
+            direct, None,
+            "unresolvable env() should produce None, not an error"
+        );
     }
 }

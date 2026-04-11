@@ -1,6 +1,6 @@
 # nautilus-cli
 
-`nautilus-cli` builds the `nautilus` binary: the main entry point for schema validation, code generation, live-database workflows, migrations, engine startup, and a small Python shim installer.
+`nautilus-cli` builds the `nautilus` binary: the main entry point for schema validation, code generation, live-database workflows, migrations, engine startup, a small Python shim installer, and Nautilus Studio lifecycle management.
 
 ## Current command surface
 
@@ -21,6 +21,7 @@
 | `nautilus migrate status` | Shows applied vs pending migrations |
 | `nautilus engine serve --schema <path>` | Starts the JSON-RPC engine on stdin/stdout |
 | `nautilus python install` / `uninstall` | Installs or removes a `.pth` shim so `python -m nautilus` resolves to the CLI binary |
+| `nautilus studio [--update] [--uninstall]` | Downloads the latest built Studio release on first run, optionally refreshes or removes it, installs runtime dependencies, and starts it |
 
 ## Day-to-day workflows
 
@@ -58,6 +59,7 @@ nautilus engine serve --schema schema.nautilus --migrate
 - For JS and Python, `nautilus generate` produces local source packages first. The normal workflow is to import the generated `output` directory; `install = true` only copies the same files into local `site-packages/nautilus` or `node_modules/nautilus` for convenience.
 - `--standalone` is meaningful only for the Rust generator; it emits a `Cargo.toml` next to the generated Rust sources.
 - The Python shim command is intentionally separate from code generation. It exists to make the installed CLI reachable from Python as `python -m nautilus`; it does not install or publish generated ORM clients.
+- `nautilus studio` looks up the latest GitHub Release for `STUDIO_GITHUB_REPO`, downloads the ZIP asset for the current platform named `nautilus-orm-studio-${tag}-${os}.zip` (`windows`, `linux`, or `macos`), extracts it into the local Nautilus data directory, installs runtime dependencies from the packaged `package-lock.json`, and launches Next from the project directory where `nautilus studio` was invoked while pointing it at the cached Studio app.
 
 ## Main dependencies
 
