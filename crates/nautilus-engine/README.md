@@ -21,14 +21,17 @@ It loads a validated schema, connects to a database, and serves requests on stdi
 Via the dedicated binary:
 
 ```bash
-cargo run -p nautilus-orm-engine -- --schema schema.nautilus --migrate
+cargo run -p nautilus-orm-engine -- --migrate
 ```
 
 Via the main CLI:
 
 ```bash
-nautilus engine serve --schema schema.nautilus --migrate
+nautilus engine serve --migrate
 ```
+
+If `--schema` is omitted, the engine auto-detects the first `.nautilus` file
+in the current directory.
 
 ## Runtime notes
 

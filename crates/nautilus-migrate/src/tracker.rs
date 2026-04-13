@@ -22,6 +22,7 @@ impl MigrationTracker {
         let create_table_sql = self.create_migrations_table_sql();
 
         sqlx::query(&create_table_sql)
+            .persistent(false)
             .execute(self.pool.as_ref())
             .await?;
 
@@ -72,6 +73,7 @@ CREATE TABLE IF NOT EXISTS _nautilus_migrations (
         let rows = sqlx::query(
             "SELECT name, checksum, applied_at, execution_time_ms FROM _nautilus_migrations ORDER BY id"
         )
+        .persistent(false)
         .fetch_all(self.pool.as_ref())
         .await?;
 
@@ -100,6 +102,7 @@ CREATE TABLE IF NOT EXISTS _nautilus_migrations (
     /// Check if a migration has been applied
     pub async fn is_applied(&self, name: &str) -> Result<bool> {
         let row = sqlx::query("SELECT COUNT(*) as count FROM _nautilus_migrations WHERE name = ?")
+            .persistent(false)
             .bind(name)
             .fetch_one(self.pool.as_ref())
             .await?;
@@ -119,6 +122,7 @@ CREATE TABLE IF NOT EXISTS _nautilus_migrations (
         sqlx::query(
             "INSERT INTO _nautilus_migrations (name, checksum, applied_at, execution_time_ms) VALUES (?, ?, ?, ?)"
         )
+        .persistent(false)
         .bind(&migration.name)
         .bind(&migration.checksum)
         .bind(&applied_at)
@@ -141,6 +145,7 @@ CREATE TABLE IF NOT EXISTS _nautilus_migrations (
         sqlx::query(
             "INSERT INTO _nautilus_migrations (name, checksum, applied_at, execution_time_ms) VALUES (?, ?, ?, ?)"
         )
+        .persistent(false)
         .bind(&migration.name)
         .bind(&migration.checksum)
         .bind(&applied_at)
@@ -154,6 +159,7 @@ CREATE TABLE IF NOT EXISTS _nautilus_migrations (
     /// Remove a migration record (for rollback)
     pub async fn remove_migration(&self, name: &str) -> Result<()> {
         sqlx::query("DELETE FROM _nautilus_migrations WHERE name = ?")
+            .persistent(false)
             .bind(name)
             .execute(self.pool.as_ref())
             .await?;
@@ -168,6 +174,7 @@ CREATE TABLE IF NOT EXISTS _nautilus_migrations (
         name: &str,
     ) -> Result<()> {
         sqlx::query("DELETE FROM _nautilus_migrations WHERE name = ?")
+            .persistent(false)
             .bind(name)
             .execute(&mut **tx)
             .await?;

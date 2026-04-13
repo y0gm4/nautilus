@@ -20,7 +20,7 @@ pub enum MigrateCommand {
         /// Human-readable label for this migration (e.g. "add_users").
         label: Option<String>,
 
-        /// Path to the schema file (default: ./schema.nautilus).
+        /// Path to the schema file (auto-detect the first .nautilus file if not specified).
         #[arg(short, long)]
         schema: Option<String>,
 
@@ -35,7 +35,7 @@ pub enum MigrateCommand {
 
     /// Apply all pending migration files in chronological order.
     Apply {
-        /// Path to the schema file (default: ./schema.nautilus).
+        /// Path to the schema file (auto-detect the first .nautilus file if not specified).
         #[arg(short, long)]
         schema: Option<String>,
 
@@ -54,7 +54,7 @@ pub enum MigrateCommand {
         #[arg(long, default_value = "1")]
         steps: usize,
 
-        /// Path to the schema file (default: ./schema.nautilus).
+        /// Path to the schema file (auto-detect the first .nautilus file if not specified).
         #[arg(short, long)]
         schema: Option<String>,
 
@@ -69,7 +69,7 @@ pub enum MigrateCommand {
 
     /// Show the pending / applied status of every migration file.
     Status {
-        /// Path to the schema file (default: ./schema.nautilus).
+        /// Path to the schema file (auto-detect the first .nautilus file if not specified).
         #[arg(short, long)]
         schema: Option<String>,
 

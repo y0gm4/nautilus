@@ -183,6 +183,14 @@ pub fn print_warning(msg: &str) {
     println!("  {}  {}", style(WARN).yellow(), style(msg).yellow());
 }
 
+pub fn print_tip(msg: &str) {
+    println!(
+        "  {}  {}",
+        style("TIP:").yellow().bold(),
+        style(msg).yellow()
+    );
+}
+
 /// Render an [`anyhow::Error`] and its causes in a multi-line, user-friendly form.
 pub fn format_error_chain(err: &Error) -> String {
     let mut chain = err.chain();

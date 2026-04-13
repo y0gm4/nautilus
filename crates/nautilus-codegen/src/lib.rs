@@ -41,14 +41,8 @@ pub fn resolve_schema_path(schema: Option<PathBuf>) -> Result<PathBuf> {
         return Ok(path);
     }
 
-    let current_dir = std::env::current_dir().context("Failed to get current directory")?;
-
-    let mut nautilus_files: Vec<PathBuf> = fs::read_dir(&current_dir)
-        .context("Failed to read current directory")?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("nautilus"))
-        .collect();
+    let nautilus_files = nautilus_schema::discover_schema_paths_in_current_dir()
+        .context("Failed to inspect current directory for .nautilus schema files")?;
 
     if nautilus_files.is_empty() {
         return Err(anyhow::anyhow!(
@@ -58,7 +52,6 @@ pub fn resolve_schema_path(schema: Option<PathBuf>) -> Result<PathBuf> {
         ));
     }
 
-    nautilus_files.sort();
     let schema_file = &nautilus_files[0];
 
     if nautilus_files.len() > 1 {

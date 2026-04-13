@@ -40,6 +40,11 @@ struct GitHubRelease {
     assets: Vec<GitHubReleaseAsset>,
 }
 
+#[derive(Debug, Deserialize)]
+struct StudioPackageManifest {
+    version: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 struct GitHubReleaseAsset {
     name: String,
@@ -120,6 +125,10 @@ fn run_sync(args: StudioArgs) -> Result<()> {
         )
     })?;
 
+    if !needs_download {
+        check_for_update_tip(&app_root);
+    }
+
     if !runtime_dependencies_installed(&app_root) {
         install_runtime_dependencies(&app_root)?;
     }
@@ -171,7 +180,7 @@ fn install_or_update_from_release(
     Ok(())
 }
 
-fn latest_release_asset() -> Result<GitHubReleaseAsset> {
+fn fetch_latest_release() -> Result<GitHubRelease> {
     let client = Client::builder()
         .build()
         .context("Failed to create HTTP client for Studio release lookup")?;
@@ -195,13 +204,17 @@ fn latest_release_asset() -> Result<GitHubReleaseAsset> {
         .into());
     }
 
-    let release: GitHubRelease = response
+    response
         .error_for_status()
         .context("Could not resolve the latest Nautilus Studio release")?
         .json()
-        .context("Failed to decode the latest Nautilus Studio release metadata")?;
+        .context("Failed to decode the latest Nautilus Studio release metadata")
+}
 
-    select_release_asset(&release)
+fn latest_release_asset() -> Result<GitHubReleaseAsset> {
+    let release = fetch_latest_release()?;
+    let asset = select_release_asset(&release)?;
+    Ok(asset)
 }
 
 fn select_release_asset(release: &GitHubRelease) -> Result<GitHubReleaseAsset> {
@@ -241,6 +254,75 @@ fn release_asset_platform() -> &'static str {
         "macos" => "macos",
         "linux" => "linux",
         other => other,
+    }
+}
+
+fn read_installed_version(app_root: &Path) -> Option<String> {
+    read_app_package_version(app_root)
+}
+
+fn read_app_package_version(app_root: &Path) -> Option<String> {
+    let manifest = std::fs::read_to_string(app_root.join("package.json")).ok()?;
+    let package: StudioPackageManifest = serde_json::from_str(&manifest).ok()?;
+    let version = package.version.trim().to_string();
+    if version.is_empty() {
+        None
+    } else {
+        Some(version)
+    }
+}
+
+fn normalize_version_label(version: &str) -> &str {
+    version.trim().trim_start_matches(|c| c == 'v' || c == 'V')
+}
+
+fn same_version(left: &str, right: &str) -> bool {
+    normalize_version_label(left) == normalize_version_label(right)
+}
+
+fn fetch_latest_release_tag_silently() -> Option<String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .ok()?;
+
+    let response = client
+        .get(format!(
+            "https://api.github.com/repos/{}/releases/latest",
+            STUDIO_GITHUB_REPO
+        ))
+        .header(reqwest::header::USER_AGENT, "nautilus-cli")
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .ok()?;
+
+    if !response.status().is_success() {
+        return None;
+    }
+
+    response.json::<GitHubRelease>().ok().map(|r| r.tag_name)
+}
+
+fn check_for_update_tip(app_root: &Path) {
+    let installed = match read_installed_version(app_root) {
+        Some(v) => v,
+        None => {
+            tui::print_tip(
+                "Could not determine the installed Nautilus Studio version from package.json. Run `nautilus studio --update` to refresh it.",
+            );
+            return;
+        }
+    };
+
+    let latest = match fetch_latest_release_tag_silently() {
+        Some(v) => v,
+        None => return,
+    };
+
+    if !same_version(&installed, &latest) {
+        tui::print_tip(&format!(
+            "A newer version of Nautilus Studio is available ({latest}). Run `nautilus studio --update` to install it."
+        ));
     }
 }
 
@@ -605,9 +687,9 @@ fn dirs_home() -> Result<PathBuf> {
 mod tests {
     use super::{
         collect_app_roots, expected_release_asset_name_for_platform, is_interrupt_exit_code,
-        next_cli_path, release_asset_platform, resolve_app_root, select_release_asset,
-        select_release_asset_for_platform, GitHubRelease, GitHubReleaseAsset,
-        StudioReleaseUnavailable, STUDIO_GITHUB_REPO,
+        next_cli_path, read_installed_version, release_asset_platform, resolve_app_root,
+        same_version, select_release_asset, select_release_asset_for_platform, GitHubRelease,
+        GitHubReleaseAsset, StudioReleaseUnavailable, STUDIO_GITHUB_REPO,
     };
     use std::path::{Path, PathBuf};
 
@@ -721,6 +803,30 @@ mod tests {
         collect_app_roots(temp_dir.path(), &mut discovered);
 
         assert_eq!(discovered, vec![nested]);
+    }
+
+    #[test]
+    fn installed_version_is_read_from_package_manifest() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let app_root = temp_dir.path().join("app");
+
+        std::fs::create_dir_all(&app_root).expect("create dirs");
+        std::fs::write(
+            app_root.join("package.json"),
+            r#"{"name":"nautilus-studio","version":"0.1.0"}"#,
+        )
+        .expect("package.json");
+
+        let version = read_installed_version(&app_root).expect("version");
+
+        assert_eq!(version, "0.1.0");
+    }
+
+    #[test]
+    fn version_comparison_ignores_optional_v_prefix() {
+        assert!(same_version("0.1.0", "v0.1.0"));
+        assert!(same_version("V0.1.0", "0.1.0"));
+        assert!(!same_version("0.1.0", "v0.2.0"));
     }
 
     #[test]

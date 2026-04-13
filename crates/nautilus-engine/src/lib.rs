@@ -17,6 +17,41 @@ use nautilus_schema::{ir::SchemaIr, validate_schema_source};
 pub use args::CliArgs;
 pub use state::EngineState;
 
+/// Resolve the schema path, auto-detecting the first `.nautilus` file in the
+/// current working directory when `--schema` is omitted.
+pub fn resolve_schema_path_arg(
+    schema_path: Option<String>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some(path) = schema_path {
+        return Ok(path);
+    }
+
+    let nautilus_files = nautilus_schema::discover_schema_paths_in_current_dir()?;
+    let schema_path = nautilus_files.first().cloned().ok_or(
+        "No .nautilus schema file found in current directory.\n\n\
+         Hint: Pass --schema <path> or create a .nautilus file in the current directory.",
+    )?;
+
+    if nautilus_files.len() > 1 {
+        eprintln!(
+            "warning: multiple .nautilus files found, using: {}",
+            schema_path.display()
+        );
+    }
+
+    Ok(schema_path.to_string_lossy().into_owned())
+}
+
+/// Resolve the schema path (with auto-detection when omitted) and then run the engine.
+pub async fn run_engine_with_schema_resolution(
+    schema_path: Option<String>,
+    database_url: Option<String>,
+    migrate: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let schema_path = resolve_schema_path_arg(schema_path)?;
+    run_engine(schema_path, database_url, migrate).await
+}
+
 /// Run the engine with explicit parameters.
 ///
 /// Parses the schema, connects to the database, optionally runs migrations,
@@ -93,7 +128,7 @@ pub async fn run_engine(
 /// Convenience entry point for the standalone binary: parses argv then calls [`run_engine`].
 pub async fn run_engine_from_cli() -> Result<(), Box<dyn std::error::Error>> {
     let args = CliArgs::parse()?;
-    run_engine(args.schema_path, args.database_url, args.migrate).await
+    run_engine_with_schema_resolution(args.schema_path, args.database_url, args.migrate).await
 }
 
 fn resolve_engine_runtime_url(
@@ -120,20 +155,33 @@ fn resolve_engine_migration_url(
     database_url_arg: Option<&str>,
     schema_ir: &SchemaIr,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let raw_url = database_url_arg
-        .map(str::to_string)
-        .or_else(|| {
-            schema_ir
-                .datasource
-                .as_ref()
-                .map(|ds| ds.admin_url().to_string())
-        })
-        .or_else(|| std::env::var("DATABASE_URL").ok())
-        .ok_or(
-            "No migration database URL provided. Use --database-url, set datasource direct_url/url, or set DATABASE_URL.",
-        )?;
+    if let Some(raw) = database_url_arg {
+        return resolve_datasource_url(raw);
+    }
 
-    resolve_datasource_url(&raw_url)
+    let datasource = schema_ir.datasource.as_ref();
+
+    if let Some(raw) = datasource.and_then(|ds| ds.direct_url.as_deref()) {
+        if let Ok(url) = resolve_datasource_url(raw) {
+            return Ok(url);
+        }
+    }
+
+    if let Ok(raw) = std::env::var("DATABASE_URL") {
+        return resolve_datasource_url(&raw);
+    }
+
+    if let Some(raw) = datasource
+        .map(|ds| ds.url.as_str())
+        .filter(|url| !url.is_empty())
+    {
+        return resolve_datasource_url(raw);
+    }
+
+    Err(
+        "No migration database URL provided. Use --database-url, set datasource direct_url/url, or set DATABASE_URL."
+            .into(),
+    )
 }
 
 fn resolve_datasource_url(raw: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -142,8 +190,14 @@ fn resolve_datasource_url(raw: &str) -> Result<String, Box<dyn std::error::Error
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_datasource_url, resolve_engine_migration_url, resolve_engine_runtime_url};
+    use super::{
+        resolve_datasource_url, resolve_engine_migration_url, resolve_engine_runtime_url,
+        resolve_schema_path_arg,
+    };
     use nautilus_schema::validate_schema_source;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
+    use tempfile::TempDir;
 
     struct EnvVarGuard {
         key: &'static str,
@@ -175,6 +229,69 @@ mod tests {
         validate_schema_source(source)
             .expect("schema should validate")
             .ir
+    }
+
+    fn working_dir_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct CurrentDirGuard {
+        original: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn set(path: &Path) -> Self {
+            let original = std::env::current_dir().expect("current dir should exist");
+            std::env::set_current_dir(path).expect("failed to switch current dir");
+            Self { original }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.original).expect("failed to restore current dir");
+        }
+    }
+
+    #[test]
+    fn resolve_schema_path_arg_auto_detects_first_nautilus_file() {
+        let _cwd_lock = working_dir_lock().lock().expect("cwd lock");
+        let temp_dir = TempDir::new().expect("temp dir");
+        let _dir_guard = CurrentDirGuard::set(temp_dir.path());
+
+        std::fs::write(
+            temp_dir.path().join("zeta.nautilus"),
+            "model User { id Int @id }\n",
+        )
+        .expect("failed to write zeta schema");
+        std::fs::write(
+            temp_dir.path().join("alpha.nautilus"),
+            "model Post { id Int @id }\n",
+        )
+        .expect("failed to write alpha schema");
+
+        let resolved = resolve_schema_path_arg(None).expect("schema should auto-resolve");
+        assert_eq!(
+            Path::new(&resolved)
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("alpha.nautilus")
+        );
+    }
+
+    #[test]
+    fn resolve_schema_path_arg_errors_when_no_nautilus_files_exist() {
+        let _cwd_lock = working_dir_lock().lock().expect("cwd lock");
+        let temp_dir = TempDir::new().expect("temp dir");
+        let _dir_guard = CurrentDirGuard::set(temp_dir.path());
+
+        let err = resolve_schema_path_arg(None).expect_err("missing schema should fail");
+        assert!(
+            err.to_string()
+                .contains("No .nautilus schema file found in current directory"),
+            "got: {err}"
+        );
     }
 
     #[test]

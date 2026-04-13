@@ -4,30 +4,44 @@ use anyhow::{bail, Context};
 use nautilus_migrate::{
     order_changes_for_apply, Change, ChangeRisk, DatabaseProvider, DiffApplier, LiveSchema,
 };
-use nautilus_schema::{ir::SchemaIr, validate_schema_source};
+use nautilus_schema::{discover_schema_paths_in_current_dir, ir::SchemaIr, validate_schema_source};
 use std::path::{Path, PathBuf};
 
 use crate::tui;
 
 /// Locate the `.nautilus` schema file.
 ///
-/// Priority: explicit `--schema` argument -> `schema.nautilus` in the current
-/// directory. Returns an error if neither is available.
+/// Priority: explicit `--schema` argument -> first `.nautilus` file in the
+/// current directory. Returns an error if neither is available.
 pub fn resolve_schema_path(schema_arg: Option<String>) -> anyhow::Result<PathBuf> {
-    schema_arg
-        .map(PathBuf::from)
-        .or_else(|| {
-            let default = PathBuf::from("schema.nautilus");
-            if default.exists() {
-                Some(default)
-            } else {
-                None
-            }
-        })
-        .context(
-            "Schema file not found. Pass --schema <path> or \
-             create schema.nautilus in the current directory.",
-        )
+    maybe_resolve_schema_path(schema_arg.as_deref())?.context(
+        "Schema file not found. Pass --schema <path> or create a .nautilus \
+         file in the current directory.",
+    )
+}
+
+/// Resolve the schema path when it is optional for the caller.
+pub(crate) fn maybe_resolve_schema_path(
+    schema_arg: Option<&str>,
+) -> anyhow::Result<Option<PathBuf>> {
+    if let Some(path) = schema_arg {
+        return Ok(Some(PathBuf::from(path)));
+    }
+
+    let nautilus_files = discover_schema_paths_in_current_dir()
+        .context("Failed to inspect current directory for .nautilus schema files")?;
+    let schema_path = nautilus_files.first().cloned();
+
+    if let Some(path) = &schema_path {
+        if nautilus_files.len() > 1 {
+            eprintln!(
+                "warning: multiple .nautilus files found, using: {}",
+                path.display()
+            );
+        }
+    }
+
+    Ok(schema_path)
 }
 
 /// Lex, parse, and validate a schema file, returning the [`SchemaIr`].
@@ -48,26 +62,33 @@ pub fn parse_and_validate_schema(path: &std::path::Path) -> anyhow::Result<Schem
 /// This mirrors Prisma-style behavior where CLI/admin flows can prefer a
 /// direct connection while runtime traffic continues to use the pooled `url`.
 pub fn resolve_db_url(db_url_arg: Option<String>, schema_ir: &SchemaIr) -> anyhow::Result<String> {
-    let raw = db_url_arg
-        .or_else(|| {
-            schema_ir
-                .datasource
-                .as_ref()
-                .and_then(|ds| ds.direct_url.clone())
-        })
-        .or_else(|| std::env::var("DATABASE_URL").ok())
-        .or_else(|| {
-            schema_ir
-                .datasource
-                .as_ref()
-                .filter(|ds| !ds.url.is_empty())
-                .map(|ds| ds.url.clone())
-        })
-        .context(
-            "No database URL found. Use --database-url, set datasource direct_url/url, \
-             or set DATABASE_URL.",
-        )?;
-    resolve_url(&raw)
+    if let Some(raw) = db_url_arg.as_deref() {
+        return resolve_url(raw);
+    }
+
+    let datasource = schema_ir.datasource.as_ref();
+
+    if let Some(raw) = datasource.and_then(|ds| ds.direct_url.as_deref()) {
+        if let Ok(url) = resolve_url(raw) {
+            return Ok(url);
+        }
+    }
+
+    if let Ok(raw) = std::env::var("DATABASE_URL") {
+        return resolve_url(&raw);
+    }
+
+    if let Some(raw) = datasource
+        .filter(|ds| !ds.url.is_empty())
+        .map(|ds| ds.url.as_str())
+    {
+        return resolve_url(raw);
+    }
+
+    bail!(
+        "No database URL found. Use --database-url, set datasource direct_url/url, \
+         or set DATABASE_URL."
+    )
 }
 
 /// Tri-variant connection wrapper around sqlx pool types.
@@ -135,6 +156,7 @@ impl Connection {
             let mut tx = pool.begin().await.context("begin transaction")?;
             for sql in stmts {
                 sqlx::query(sql)
+                    .persistent(false)
                     .execute(&mut *tx)
                     .await
                     .context("transaction error")?;
@@ -367,11 +389,16 @@ pub async fn apply_changes(
 /// Supports `KEY=VALUE` and `KEY="VALUE"` / `KEY='VALUE'`; `#` comments; blank
 /// lines. No variable-expansion is performed.
 pub(crate) fn load_dotenv_for_schema(schema_path: &Path) {
-    let search_dirs: &[PathBuf] = &[
+    let schema_dir = if schema_path.is_dir() {
+        schema_path.to_path_buf()
+    } else {
         schema_path
             .parent()
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(".")),
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+    let search_dirs = [
+        schema_dir,
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     ];
 
@@ -422,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_schema_path_only_falls_back_to_schema_nautilus() {
+    fn resolve_schema_path_auto_detects_first_nautilus_file() {
         let _cwd_lock = lock_working_dir();
         let temp_dir = TempDir::new().expect("temp dir");
         let _dir_guard = CurrentDirGuard::set(temp_dir.path());
@@ -432,23 +459,29 @@ mod tests {
             "model User { id Int @id }\n",
         )
         .expect("failed to write custom schema");
-
-        let err = resolve_schema_path(None).expect_err("only schema.nautilus should auto-resolve");
-        assert!(err
-            .to_string()
-            .contains("Schema file not found. Pass --schema <path> or create schema.nautilus"));
-
         std::fs::write(
-            temp_dir.path().join("schema.nautilus"),
-            "model User { id Int @id }\n",
+            temp_dir.path().join("alpha.nautilus"),
+            "model Post { id Int @id }\n",
         )
-        .expect("failed to write default schema");
+        .expect("failed to write alpha schema");
 
-        let resolved = resolve_schema_path(None).expect("default schema should resolve");
+        let resolved = resolve_schema_path(None).expect("schema should auto-resolve");
         assert_eq!(
             resolved.file_name().and_then(|name| name.to_str()),
-            Some("schema.nautilus")
+            Some("alpha.nautilus")
         );
+    }
+
+    #[test]
+    fn resolve_schema_path_errors_when_no_nautilus_files_exist() {
+        let _cwd_lock = lock_working_dir();
+        let temp_dir = TempDir::new().expect("temp dir");
+        let _dir_guard = CurrentDirGuard::set(temp_dir.path());
+
+        let err = resolve_schema_path(None).expect_err("missing schema should fail");
+        assert!(err
+            .to_string()
+            .contains("Schema file not found. Pass --schema <path> or create a .nautilus file"));
     }
 
     #[test]
@@ -489,6 +522,27 @@ model User {
 datasource db {
   provider = "postgresql"
   url      = "postgres://pooled/runtime"
+}
+
+model User {
+  id Int @id
+}
+"#,
+        );
+
+        let url = resolve_db_url(None, &schema_ir).expect("expected database url");
+        assert_eq!(url, "postgres://pooled/runtime");
+    }
+
+    #[test]
+    fn resolve_db_url_falls_back_to_runtime_url_when_direct_url_env_is_unset() {
+        let _env_guard = EnvVarGuard::unset("DATABASE_URL");
+        let schema_ir = parse_schema_ir(
+            r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://pooled/runtime"
+  direct_url = env("__NAUTILUS_TEST_UNSET_DIRECT_URL__")
 }
 
 model User {

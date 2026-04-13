@@ -3,7 +3,7 @@ use std::env;
 /// CLI arguments for the Nautilus engine
 #[derive(Debug)]
 pub struct CliArgs {
-    pub schema_path: String,
+    pub schema_path: Option<String>,
     /// Database URL from the `--database-url` flag.
     /// If `None`, the engine resolves runtime/admin URLs from `DATABASE_URL`
     /// and the schema datasource (`url` / `direct_url`).
@@ -51,8 +51,6 @@ impl CliArgs {
             }
         }
 
-        let schema_path = schema_path.ok_or("--schema is required")?;
-
         Ok(CliArgs {
             schema_path,
             database_url,
@@ -72,7 +70,7 @@ mod tests {
     #[test]
     fn minimal_args() {
         let cli = CliArgs::parse_from(&args(&["--schema", "path.nautilus"])).unwrap();
-        assert_eq!(cli.schema_path, "path.nautilus");
+        assert_eq!(cli.schema_path.as_deref(), Some("path.nautilus"));
         assert_eq!(cli.database_url, None);
         assert!(!cli.migrate);
     }
@@ -87,7 +85,7 @@ mod tests {
             "--migrate",
         ]))
         .unwrap();
-        assert_eq!(cli.schema_path, "s.nautilus");
+        assert_eq!(cli.schema_path.as_deref(), Some("s.nautilus"));
         assert_eq!(
             cli.database_url,
             Some("postgres://localhost/db".to_string())
@@ -96,9 +94,10 @@ mod tests {
     }
 
     #[test]
-    fn missing_schema() {
-        let err = CliArgs::parse_from(&args(&["--migrate"])).unwrap_err();
-        assert!(err.contains("--schema is required"), "got: {err}");
+    fn schema_is_optional() {
+        let cli = CliArgs::parse_from(&args(&["--migrate"])).unwrap();
+        assert_eq!(cli.schema_path, None);
+        assert!(cli.migrate);
     }
 
     #[test]

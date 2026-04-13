@@ -55,7 +55,7 @@ enum Command {
     },
     /// Format (canonically indent) a .nautilus schema file in-place
     Format {
-        /// Path to the schema file (default: ./schema.nautilus)
+        /// Path to the schema file (auto-detect the first .nautilus file if not specified)
         #[arg(long)]
         schema: Option<String>,
     },
@@ -151,26 +151,40 @@ mod tests {
     }
 
     #[test]
-    fn format_help_mentions_schema_nautilus_default() {
+    fn format_help_mentions_schema_auto_detection() {
         let help = help_for("format");
         assert!(help.contains("--schema <SCHEMA>"));
-        assert!(help.contains("default: ./schema.nautilus"));
+        assert!(help.contains("auto-detect the first .nautilus file if not specified"));
     }
 
     #[test]
     fn db_help_mentions_no_generate_on_push() {
         let help = help_for_nested("db", "push");
+        assert!(help.contains("auto-detect the first .nautilus file if not specified"));
         assert!(help.contains("--no-generate"));
     }
 
     #[test]
     fn db_pull_help_mentions_case_flags() {
         let help = help_for_nested("db", "pull");
+        assert!(help.contains("auto-detects the first .nautilus file if omitted"));
         assert!(help.contains("--model-case <MODEL_CASE>"));
         assert!(help.contains("--field-case <FIELD_CASE>"));
         assert!(help.contains("auto"));
         assert!(help.contains("snake"));
         assert!(help.contains("pascal"));
+    }
+
+    #[test]
+    fn migrate_generate_help_mentions_schema_auto_detection() {
+        let help = help_for_nested("migrate", "generate");
+        assert!(help.contains("auto-detect the first .nautilus file if not specified"));
+    }
+
+    #[test]
+    fn engine_serve_help_mentions_schema_auto_detection() {
+        let help = help_for_nested("engine", "serve");
+        assert!(help.contains("auto-detect the first .nautilus file if not specified"));
     }
 
     #[test]

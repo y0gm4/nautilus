@@ -44,7 +44,7 @@ fn pull_naming_options(
 pub enum DbCommand {
     /// Push the current schema state to the database, creating or updating tables
     Push {
-        /// Path to the schema file (default: ./schema.nautilus)
+        /// Path to the schema file (auto-detect the first .nautilus file if not specified)
         #[arg(short, long)]
         schema: Option<String>,
 
@@ -62,7 +62,7 @@ pub enum DbCommand {
     },
     /// Show pending schema changes without applying them (dry-run diff)
     Status {
-        /// Path to the schema file (default: ./schema.nautilus)
+        /// Path to the schema file (auto-detect the first .nautilus file if not specified)
         #[arg(short, long)]
         schema: Option<String>,
 
@@ -72,7 +72,7 @@ pub enum DbCommand {
     },
     /// Introspect live database and write an equivalent .nautilus schema file
     Pull {
-        /// Path to the schema file (used to read the datasource URL if not provided explicitly)
+        /// Path to the schema file (used to read the datasource URL if not provided explicitly; auto-detects the first .nautilus file if omitted)
         #[arg(short, long)]
         schema: Option<String>,
 
@@ -94,7 +94,7 @@ pub enum DbCommand {
     },
     /// Drop all tables permanently without recreating them
     Drop {
-        /// Path to the schema file (default: ./schema.nautilus)
+        /// Path to the schema file (auto-detect the first .nautilus file if not specified)
         #[arg(short, long)]
         schema: Option<String>,
 
@@ -108,7 +108,7 @@ pub enum DbCommand {
     },
     /// Drop all tables then re-push the schema from scratch
     Reset {
-        /// Path to the schema file (default: ./schema.nautilus)
+        /// Path to the schema file (auto-detect the first .nautilus file if not specified)
         #[arg(short, long)]
         schema: Option<String>,
 

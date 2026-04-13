@@ -15,7 +15,7 @@ impl SchemaInspector {
             .await
             .map_err(|e| MigrationError::Database(format!("PostgreSQL connection failed: {e}")))?;
 
-        let schema_name: Option<String> = sqlx::query("SELECT current_schema() AS schema_name")
+        let schema_name: Option<String> = pg_query("SELECT current_schema() AS schema_name")
             .fetch_one(&pool)
             .await
             .map_err(|e| {
@@ -31,7 +31,7 @@ impl SchemaInspector {
             })?;
         let schema_name = schema_name.unwrap_or_else(|| "public".to_string());
 
-        let table_rows = sqlx::query(
+        let table_rows = pg_query(
             "SELECT c.relname AS table_name \
              FROM pg_class c \
              JOIN pg_namespace n ON n.oid = c.relnamespace \
@@ -62,7 +62,7 @@ impl SchemaInspector {
         let mut live = LiveSchema::default();
 
         for table_name in table_names {
-            let col_rows = sqlx::query(
+            let col_rows = pg_query(
                 "SELECT column_name, \
                         udt_name, \
                         is_nullable, \
@@ -167,7 +167,7 @@ impl SchemaInspector {
                 });
             }
 
-            let pk_rows = sqlx::query(
+            let pk_rows = pg_query(
                 "SELECT kcu.column_name \
                  FROM information_schema.table_constraints tc \
                  JOIN information_schema.key_column_usage kcu \
@@ -198,7 +198,7 @@ impl SchemaInspector {
                     ))
                 })?;
 
-            let idx_rows = sqlx::query(
+            let idx_rows = pg_query(
                 "SELECT \
                      idx.relname                                           AS index_name, \
                      attr.attname                                          AS column_name, \
@@ -230,7 +230,7 @@ impl SchemaInspector {
 
             let indexes = group_pg_indexes(idx_rows);
 
-            let check_rows = sqlx::query(
+            let check_rows = pg_query(
                 "SELECT c.conname AS constraint_name, \
                         pg_get_constraintdef(c.oid) AS constraint_def \
                  FROM pg_constraint c \
@@ -287,7 +287,7 @@ impl SchemaInspector {
                 }
             }
 
-            let fk_rows = sqlx::query(
+            let fk_rows = pg_query(
                 "SELECT \
                      c.conname                                    AS constraint_name, \
                      a.attname                                    AS column_name, \
@@ -335,7 +335,7 @@ impl SchemaInspector {
             );
         }
 
-        let enum_rows = sqlx::query(
+        let enum_rows = pg_query(
             "SELECT t.typname AS enum_name, e.enumlabel AS variant \
              FROM pg_type t \
              JOIN pg_enum e ON t.oid = e.enumtypid \
@@ -368,7 +368,7 @@ impl SchemaInspector {
             live.enums.entry(enum_name).or_default().push(variant);
         }
 
-        let composite_rows = sqlx::query(
+        let composite_rows = pg_query(
             "SELECT t.typname AS composite_name, \
                     a.attname AS field_name, \
                     pg_catalog.format_type(a.atttypid, a.atttypmod) AS field_type \
@@ -432,13 +432,31 @@ impl SchemaInspector {
     }
 }
 
+fn pg_query(sql: &str) -> sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    // PgBouncer transaction pooling and similar proxies can reject named
+    // prepared statements. `persistent(false)` keeps these metadata queries on
+    // unnamed statements while still letting us bind parameters safely.
+    sqlx::query::<sqlx::Postgres>(sql).persistent(false)
+}
+
 fn postgres_connect_options(url: &str) -> Result<sqlx::postgres::PgConnectOptions> {
     use std::str::FromStr;
 
     // `db pull`/`db push` introspection is often run through PgBouncer or other
     // transaction-pooling proxies where persistent named prepared statements are
-    // not safe. Disabling the statement cache keeps introspection portable.
+    // not safe. Disabling the statement cache plus non-persistent queries keeps
+    // introspection portable.
     sqlx::postgres::PgConnectOptions::from_str(url)
         .map(|options| options.statement_cache_capacity(0))
         .map_err(|e| MigrationError::Database(format!("Invalid PostgreSQL URL: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pg_query;
+
+    #[test]
+    fn pg_introspection_queries_are_non_persistent() {
+        assert!(!sqlx::Execute::persistent(&pg_query("SELECT 1")));
+    }
 }

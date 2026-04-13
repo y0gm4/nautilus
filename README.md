@@ -216,6 +216,8 @@ nautilus generate --schema schema.nautilus
 ```
 
 `nautilus db push` regenerates the client automatically unless you pass `--no-generate`.
+If `--schema` is omitted, schema-based commands auto-detect the first
+`.nautilus` file in the current directory.
 
 Generated clients are local build artifacts, not registry packages. If your
 schema uses `output = "./db"`, the normal consumption path is to import that

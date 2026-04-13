@@ -581,7 +581,10 @@ impl MigrationExecutor {
             return Ok(());
         }
 
-        sqlx::query(sql).execute(&mut **tx).await?;
+        sqlx::query(sql)
+            .persistent(false)
+            .execute(&mut **tx)
+            .await?;
         Ok(())
     }
 }

@@ -50,6 +50,7 @@
 
 use ast::Schema;
 use ir::SchemaIr;
+use std::path::{Path, PathBuf};
 
 pub mod analysis;
 pub mod ast;
@@ -139,6 +140,25 @@ pub fn validate_schema_source(source: &str) -> Result<ValidatedSchema> {
     let ast = parse_schema_source(source)?;
     let ir = validate_schema(ast.clone())?;
     Ok(ValidatedSchema { ast, ir })
+}
+
+/// Return every `.nautilus` file directly inside `dir`, sorted lexicographically.
+pub fn discover_schema_paths(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("nautilus")
+        })
+        .collect();
+    paths.sort();
+    Ok(paths)
+}
+
+/// Return every `.nautilus` file in the current working directory, sorted lexicographically.
+pub fn discover_schema_paths_in_current_dir() -> std::io::Result<Vec<PathBuf>> {
+    let current_dir = std::env::current_dir()?;
+    discover_schema_paths(&current_dir)
 }
 
 /// Resolve `env(VAR_NAME)` syntax in a connection URL.

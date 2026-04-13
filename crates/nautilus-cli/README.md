@@ -19,7 +19,7 @@
 | `nautilus migrate apply` | Applies pending migrations |
 | `nautilus migrate rollback [--steps N]` | Rolls back the last applied migrations |
 | `nautilus migrate status` | Shows applied vs pending migrations |
-| `nautilus engine serve --schema <path>` | Starts the JSON-RPC engine on stdin/stdout |
+| `nautilus engine serve [--schema <path>]` | Starts the JSON-RPC engine on stdin/stdout |
 | `nautilus python install` / `uninstall` | Installs or removes a `.pth` shim so `python -m nautilus` resolves to the CLI binary |
 | `nautilus studio [--update] [--uninstall]` | Downloads the latest built Studio release on first run, optionally refreshes or removes it, installs runtime dependencies, and starts it |
 
@@ -46,12 +46,12 @@ nautilus migrate status --schema schema.nautilus
 ### Local engine debugging
 
 ```bash
-nautilus engine serve --schema schema.nautilus --migrate
+nautilus engine serve --migrate
 ```
 
 ## Notes
 
-- If `--schema` is omitted, generation and validation commands auto-detect the first `.nautilus` file in the current directory.
+- If `--schema` is omitted, schema-based commands auto-detect the first `.nautilus` file in the current directory.
 - The generator provider inside the schema decides the client target:
   - `nautilus-client-rs`
   - `nautilus-client-py`
