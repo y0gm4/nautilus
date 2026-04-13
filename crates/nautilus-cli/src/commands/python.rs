@@ -29,6 +29,7 @@ pub async fn run(cmd: PythonCommand) -> Result<()> {
 const SHIM_INIT: &str = "";
 
 const SHIM_MAIN: &str = r#"import os
+import subprocess
 import shutil
 import sys
 
@@ -40,7 +41,12 @@ def main() -> None:
         print(f"Error: '{binary_name}' not found in PATH.", file=sys.stderr)
         print("Install it with: cargo install nautilus-cli", file=sys.stderr)
         sys.exit(1)
-    os.execv(binary, [binary] + sys.argv[1:])
+    env = dict(os.environ)
+    env["NAUTILUS_PYTHON_WRAPPER"] = "1"
+    argv = [binary] + sys.argv[1:]
+    if sys.platform == "win32":
+        raise SystemExit(subprocess.run(argv, env=env).returncode)
+    os.execve(binary, argv, env)
 
 
 if __name__ == "__main__":
@@ -178,4 +184,17 @@ fn dirs_home() -> anyhow::Result<PathBuf> {
         .map_err(|_| {
             anyhow::anyhow!("Could not determine home directory (HOME / USERPROFILE not set)")
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SHIM_MAIN;
+
+    #[test]
+    fn shim_main_marks_wrapped_processes_and_avoids_windows_execv() {
+        assert!(SHIM_MAIN.contains("NAUTILUS_PYTHON_WRAPPER"));
+        assert!(SHIM_MAIN.contains("subprocess.run"));
+        assert!(SHIM_MAIN.contains("os.execve"));
+        assert!(!SHIM_MAIN.contains("os.execv("));
+    }
 }

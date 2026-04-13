@@ -7,12 +7,38 @@
 use anyhow::Error;
 use console::{style, Emoji, Term};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::time::Duration;
+use std::{
+    io::{self, Write},
+    time::Duration,
+};
 
 pub static CHECK: Emoji<'_, '_> = Emoji("✔ ", "+");
 pub static CROSS: Emoji<'_, '_> = Emoji("✖ ", "x");
 pub static ARROW: Emoji<'_, '_> = Emoji("◈ ", "*");
 pub static WARN: Emoji<'_, '_> = Emoji("⚠ ", "!");
+
+const PYTHON_WRAPPER_ENV: &str = "NAUTILUS_PYTHON_WRAPPER";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConfirmationResponse {
+    Accept,
+    Reject,
+    Invalid,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectionResponse {
+    Selected(usize),
+    Cancelled,
+    Invalid,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RawSelection {
+    Selected(usize),
+    Cancelled,
+    Fallback,
+}
 
 fn term_width() -> usize {
     Term::stdout().size().1 as usize
@@ -20,6 +46,42 @@ fn term_width() -> usize {
 
 fn rule(width: usize) -> String {
     "─".repeat(width.min(72))
+}
+
+fn wrapped_by_python() -> bool {
+    std::env::var_os(PYTHON_WRAPPER_ENV).is_some()
+}
+
+fn read_stdin_line() -> io::Result<Option<String>> {
+    let mut line = String::new();
+    let bytes_read = io::stdin().read_line(&mut line)?;
+    if bytes_read == 0 {
+        Ok(None)
+    } else {
+        Ok(Some(line))
+    }
+}
+
+fn parse_confirmation_response(input: &str) -> ConfirmationResponse {
+    match input.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => ConfirmationResponse::Accept,
+        "" | "n" | "no" => ConfirmationResponse::Reject,
+        _ => ConfirmationResponse::Invalid,
+    }
+}
+
+fn parse_selection_response(input: &str, options_len: usize) -> SelectionResponse {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return SelectionResponse::Cancelled;
+    }
+
+    match trimmed.parse::<usize>() {
+        Ok(choice) if (1..=options_len).contains(&choice) => {
+            SelectionResponse::Selected(choice - 1)
+        }
+        _ => SelectionResponse::Invalid,
+    }
 }
 
 pub fn print_header(command: &str) {
@@ -372,13 +434,41 @@ pub fn print_warning_box(msg: &str) {
     println!();
 }
 
-/// Show an interactive selection menu with arrow-key navigation.
-///
-/// Prints *prompt* followed by the list of *options*.  The user moves the
-/// cursor with ↑ / ↓ and confirms with Enter.  Pressing Escape returns `None`.
-/// Returns the 0-based index of the chosen option on Enter, or `None` on
-/// Escape / I/O error.
-pub fn select_option(prompt: &str, options: &[&str]) -> Option<usize> {
+fn select_option_line(prompt: &str, options: &[&str]) -> Option<usize> {
+    println!();
+    println!("  {}", style(prompt).bold());
+    println!();
+    for (index, option) in options.iter().enumerate() {
+        println!("  {}. {}", index + 1, option);
+    }
+    println!();
+
+    loop {
+        print!(
+            "  ? Select an option [1-{}] (press Enter to cancel): ",
+            options.len()
+        );
+        let _ = io::stdout().flush();
+
+        let line = match read_stdin_line() {
+            Ok(Some(line)) => line,
+            Ok(None) | Err(_) => return None,
+        };
+
+        match parse_selection_response(&line, options.len()) {
+            SelectionResponse::Selected(index) => return Some(index),
+            SelectionResponse::Cancelled => return None,
+            SelectionResponse::Invalid => {
+                print_warning(&format!(
+                    "Enter a number between 1 and {}, or press Enter to cancel.",
+                    options.len()
+                ));
+            }
+        }
+    }
+}
+
+fn select_option_raw(prompt: &str, options: &[&str]) -> RawSelection {
     use console::Key;
     let term = Term::stdout();
     let mut selected = 0usize;
@@ -411,37 +501,71 @@ pub fn select_option(prompt: &str, options: &[&str]) -> Option<usize> {
             }
             Ok(Key::Enter) => {
                 term.clear_last_lines(total_lines).ok();
-                return Some(selected);
+                return RawSelection::Selected(selected);
             }
-            Ok(Key::Escape) | Err(_) => {
+            Ok(Key::Escape) => {
                 term.clear_last_lines(total_lines).ok();
-                return None;
+                return RawSelection::Cancelled;
             }
-            _ => {}
+            Ok(_) | Err(_) => {
+                term.clear_last_lines(total_lines).ok();
+                return RawSelection::Fallback;
+            }
         }
 
         term.clear_last_lines(total_lines).ok();
     }
 }
 
+/// Show an interactive selection menu.
+///
+/// The native arrow-key UI is kept for direct terminal launches. When Nautilus
+/// is started through the Python wrapper, the prompt falls back to a numbered
+/// selection flow, which is more reliable on Windows console shims.
+pub fn select_option(prompt: &str, options: &[&str]) -> Option<usize> {
+    if options.is_empty() {
+        return None;
+    }
+
+    if wrapped_by_python() || !Term::stdout().is_term() {
+        return select_option_line(prompt, options);
+    }
+
+    match select_option_raw(prompt, options) {
+        RawSelection::Selected(index) => Some(index),
+        RawSelection::Cancelled => None,
+        RawSelection::Fallback => select_option_line(prompt, options),
+    }
+}
+
 /// Prompt for explicit confirmation before a destructive operation.
 /// Returns `true` only if the user types `y` or `yes`.
 pub fn confirm_destructive() -> bool {
-    print!("  ? Apply destructive changes? This will cause data loss. [y/N] ");
-    let _ = std::io::Write::flush(&mut std::io::stdout());
-    let term = Term::stdout();
-    match term.read_char() {
-        Ok(ch) => {
-            println!("{}", ch);
-            matches!(ch, 'y' | 'Y')
+    loop {
+        print!("  ? Apply destructive changes? This will cause data loss. [y/N] ");
+        let _ = io::stdout().flush();
+
+        let line = match read_stdin_line() {
+            Ok(Some(line)) => line,
+            Ok(None) | Err(_) => return false,
+        };
+
+        match parse_confirmation_response(&line) {
+            ConfirmationResponse::Accept => return true,
+            ConfirmationResponse::Reject => return false,
+            ConfirmationResponse::Invalid => {
+                print_warning("Please answer with `y` or `n`.");
+            }
         }
-        Err(_) => false,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::format_error_chain;
+    use super::{
+        format_error_chain, parse_confirmation_response, parse_selection_response,
+        ConfirmationResponse, SelectionResponse,
+    };
     use anyhow::anyhow;
 
     #[test]
@@ -452,5 +576,66 @@ mod tests {
         assert!(rendered.contains("outer failure"));
         assert!(rendered.contains("Caused by:"));
         assert!(rendered.contains("inner failure"));
+    }
+
+    #[test]
+    fn confirmation_parser_accepts_yes_variants() {
+        assert_eq!(
+            parse_confirmation_response("y"),
+            ConfirmationResponse::Accept
+        );
+        assert_eq!(
+            parse_confirmation_response("YES"),
+            ConfirmationResponse::Accept
+        );
+    }
+
+    #[test]
+    fn confirmation_parser_rejects_default_and_no_variants() {
+        assert_eq!(
+            parse_confirmation_response(""),
+            ConfirmationResponse::Reject
+        );
+        assert_eq!(
+            parse_confirmation_response("n"),
+            ConfirmationResponse::Reject
+        );
+        assert_eq!(
+            parse_confirmation_response("No"),
+            ConfirmationResponse::Reject
+        );
+    }
+
+    #[test]
+    fn confirmation_parser_flags_invalid_input() {
+        assert_eq!(
+            parse_confirmation_response("maybe"),
+            ConfirmationResponse::Invalid
+        );
+    }
+
+    #[test]
+    fn selection_parser_accepts_valid_numeric_choices() {
+        assert_eq!(
+            parse_selection_response("2", 3),
+            SelectionResponse::Selected(1)
+        );
+    }
+
+    #[test]
+    fn selection_parser_treats_blank_as_cancel() {
+        assert_eq!(
+            parse_selection_response("", 3),
+            SelectionResponse::Cancelled
+        );
+    }
+
+    #[test]
+    fn selection_parser_rejects_out_of_range_values() {
+        assert_eq!(parse_selection_response("4", 3), SelectionResponse::Invalid);
+        assert_eq!(
+            parse_selection_response("abc", 3),
+            SelectionResponse::Invalid
+        );
     }
 }
