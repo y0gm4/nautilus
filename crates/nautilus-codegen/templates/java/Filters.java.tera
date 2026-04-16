@@ -1,0 +1,48 @@
+package {{ package_name }}.dsl;
+
+import {{ package_name }}.internal.JsonSupport;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
+public final class Filters {
+    private Filters() {
+    }
+
+    public static void equals(ObjectNode node, String field, Object value) {
+        node.set(field, JsonSupport.toJsonNode(value));
+    }
+
+    public static void operator(ObjectNode node, String field, String operator, Object value) {
+        ObjectNode fieldNode;
+        if (node.has(field) && node.get(field).isObject()) {
+            fieldNode = (ObjectNode) node.get(field);
+        } else {
+            fieldNode = JsonSupport.object();
+            node.set(field, fieldNode);
+        }
+        fieldNode.set(operator, JsonSupport.toJsonNode(value));
+    }
+
+    public static void and(ObjectNode node, ObjectNode child) {
+        append(node, "AND", child);
+    }
+
+    public static void or(ObjectNode node, ObjectNode child) {
+        append(node, "OR", child);
+    }
+
+    public static void not(ObjectNode node, ObjectNode child) {
+        node.set("NOT", child);
+    }
+
+    private static void append(ObjectNode node, String key, ObjectNode child) {
+        if (child == null || child.isEmpty()) {
+            return;
+        }
+        ArrayNode items = node.has(key) && node.get(key).isArray()
+            ? (ArrayNode) node.get(key)
+            : JsonSupport.array();
+        items.add(child);
+        node.set(key, items);
+    }
+}

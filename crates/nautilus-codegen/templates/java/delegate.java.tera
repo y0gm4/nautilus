@@ -1,0 +1,402 @@
+package {{ package_name }}.client;
+
+{%- for import in imports %}
+import {{ import }};
+{%- endfor %}
+
+public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
+    public {{ name }}(RpcCaller client) {
+        super(client, "{{ model_name }}");
+    }
+
+{% if is_async %}
+    public CompletableFuture<List<{{ model_name }}>> findMany() {
+        return async(() -> findManyInternal(new {{ dsl_name }}.FindManyArgs()));
+    }
+
+    public CompletableFuture<List<{{ model_name }}>> findMany(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return async(() -> {
+            {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return findManyInternal(args);
+        });
+    }
+
+    public CompletableFuture<List<{{ model_name }}>> findMany({{ dsl_name }}.FindManyArgs args) {
+        return async(() -> findManyInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args));
+    }
+
+    public CompletableFuture<{{ model_name }}> findFirst(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return async(() -> {
+            {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return findFirstInternal(args);
+        });
+    }
+
+    public CompletableFuture<{{ model_name }}> findUnique(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return findFirst(spec);
+    }
+
+    public CompletableFuture<{{ model_name }}> findFirstOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return async(() -> {
+            {{ model_name }} record = findFirst(spec).join();
+            if (record == null) {
+                throw new NotFoundException("findFirstOrThrow: no {{ model_name }} record found matching the given filter");
+            }
+            return record;
+        });
+    }
+
+    public CompletableFuture<{{ model_name }}> findUniqueOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return async(() -> {
+            {{ model_name }} record = findUnique(spec).join();
+            if (record == null) {
+                throw new NotFoundException("findUniqueOrThrow: no {{ model_name }} record found matching the given filter");
+            }
+            return record;
+        });
+    }
+
+    public CompletableFuture<{{ model_name }}> create(Consumer<{{ dsl_name }}.CreateInput> spec) {
+        return async(() -> {
+            {{ dsl_name }}.CreateInput input = new {{ dsl_name }}.CreateInput();
+            if (spec != null) {
+                spec.accept(input);
+            }
+            return createInternal(input);
+        });
+    }
+
+    public CompletableFuture<{{ model_name }}> create({{ dsl_name }}.CreateInput data) {
+        return async(() -> createInternal(data == null ? new {{ dsl_name }}.CreateInput() : data));
+    }
+
+    public CompletableFuture<List<{{ model_name }}>> createMany(List<{{ dsl_name }}.CreateInput> data) {
+        return async(() -> createManyInternal(data));
+    }
+
+    public CompletableFuture<List<{{ model_name }}>> update(Consumer<{{ dsl_name }}.UpdateArgs> spec) {
+        return async(() -> {
+            {{ dsl_name }}.UpdateArgs args = new {{ dsl_name }}.UpdateArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return updateInternal(args);
+        });
+    }
+
+    public CompletableFuture<{{ model_name }}> delete(Consumer<{{ dsl_name }}.DeleteArgs> spec) {
+        return async(() -> {
+            {{ dsl_name }}.DeleteArgs args = new {{ dsl_name }}.DeleteArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return deleteInternal(args);
+        });
+    }
+
+    public CompletableFuture<Long> deleteMany(Consumer<{{ dsl_name }}.DeleteArgs> spec) {
+        return async(() -> {
+            {{ dsl_name }}.DeleteArgs args = new {{ dsl_name }}.DeleteArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return deleteManyInternal(args);
+        });
+    }
+
+    public CompletableFuture<Long> count() {
+        return async(() -> countInternal(new {{ dsl_name }}.CountArgs()));
+    }
+
+    public CompletableFuture<Long> count(Consumer<{{ dsl_name }}.CountArgs> spec) {
+        return async(() -> {
+            {{ dsl_name }}.CountArgs args = new {{ dsl_name }}.CountArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return countInternal(args);
+        });
+    }
+
+    public CompletableFuture<{{ model_name }}> upsert(Consumer<{{ dsl_name }}.UpsertArgs> spec) {
+        return async(() -> {
+            {{ dsl_name }}.UpsertArgs args = new {{ dsl_name }}.UpsertArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return upsertInternal(args);
+        });
+    }
+
+    public CompletableFuture<List<JsonNode>> groupBy(Consumer<{{ dsl_name }}.GroupByArgs> spec) {
+        return async(() -> {
+            {{ dsl_name }}.GroupByArgs args = new {{ dsl_name }}.GroupByArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return groupByInternal(args);
+        });
+    }
+
+    public CompletableFuture<List<JsonNode>> rawQuery(String sql) {
+        return async(() -> rawQueryInternal(sql));
+    }
+
+    public CompletableFuture<List<JsonNode>> rawStmtQuery(String sql, List<?> params) {
+        return async(() -> rawStmtQueryInternal(sql, params));
+    }
+
+{% else %}
+    public List<{{ model_name }}> findMany() {
+        return findMany(new {{ dsl_name }}.FindManyArgs());
+    }
+
+    public List<{{ model_name }}> findMany(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return findMany(args);
+    }
+
+    public List<{{ model_name }}> findMany({{ dsl_name }}.FindManyArgs args) {
+        return findManyInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args);
+    }
+
+    public {{ model_name }} findFirst(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return findFirstInternal(args);
+    }
+
+    public {{ model_name }} findUnique(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return findFirst(spec);
+    }
+
+    public {{ model_name }} findFirstOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        {{ model_name }} record = findFirst(spec);
+        if (record == null) {
+            throw new NotFoundException("findFirstOrThrow: no {{ model_name }} record found matching the given filter");
+        }
+        return record;
+    }
+
+    public {{ model_name }} findUniqueOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        {{ model_name }} record = findUnique(spec);
+        if (record == null) {
+            throw new NotFoundException("findUniqueOrThrow: no {{ model_name }} record found matching the given filter");
+        }
+        return record;
+    }
+
+    public {{ model_name }} create(Consumer<{{ dsl_name }}.CreateInput> spec) {
+        {{ dsl_name }}.CreateInput input = new {{ dsl_name }}.CreateInput();
+        if (spec != null) {
+            spec.accept(input);
+        }
+        return createInternal(input);
+    }
+
+    public {{ model_name }} create({{ dsl_name }}.CreateInput data) {
+        return createInternal(data == null ? new {{ dsl_name }}.CreateInput() : data);
+    }
+
+    public List<{{ model_name }}> createMany(List<{{ dsl_name }}.CreateInput> data) {
+        return createManyInternal(data);
+    }
+
+    public List<{{ model_name }}> update(Consumer<{{ dsl_name }}.UpdateArgs> spec) {
+        {{ dsl_name }}.UpdateArgs args = new {{ dsl_name }}.UpdateArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return updateInternal(args);
+    }
+
+    public {{ model_name }} delete(Consumer<{{ dsl_name }}.DeleteArgs> spec) {
+        {{ dsl_name }}.DeleteArgs args = new {{ dsl_name }}.DeleteArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return deleteInternal(args);
+    }
+
+    public long deleteMany(Consumer<{{ dsl_name }}.DeleteArgs> spec) {
+        {{ dsl_name }}.DeleteArgs args = new {{ dsl_name }}.DeleteArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return deleteManyInternal(args);
+    }
+
+    public long count() {
+        return countInternal(new {{ dsl_name }}.CountArgs());
+    }
+
+    public long count(Consumer<{{ dsl_name }}.CountArgs> spec) {
+        {{ dsl_name }}.CountArgs args = new {{ dsl_name }}.CountArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return countInternal(args);
+    }
+
+    public {{ model_name }} upsert(Consumer<{{ dsl_name }}.UpsertArgs> spec) {
+        {{ dsl_name }}.UpsertArgs args = new {{ dsl_name }}.UpsertArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return upsertInternal(args);
+    }
+
+    public List<JsonNode> groupBy(Consumer<{{ dsl_name }}.GroupByArgs> spec) {
+        {{ dsl_name }}.GroupByArgs args = new {{ dsl_name }}.GroupByArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return groupByInternal(args);
+    }
+
+    public List<JsonNode> rawQuery(String sql) {
+        return rawQueryInternal(sql);
+    }
+
+    public List<JsonNode> rawStmtQuery(String sql, List<?> params) {
+        return rawStmtQueryInternal(sql, params);
+    }
+
+{% endif %}
+    private List<{{ model_name }}> findManyInternal({{ dsl_name }}.FindManyArgs args) {
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", 1);
+        request.put("model", "{{ model_name }}");
+        request.set("args", args == null ? JsonSupport.object() : args.node());
+        if (args != null && args.chunkSize() != null) {
+            request.put("chunkSize", args.chunkSize().intValue());
+        }
+        JsonNode result = rpc("query.findMany", request);
+        return rows(result, {{ model_name }}::fromJsonNode);
+    }
+
+    private {{ model_name }} findFirstInternal({{ dsl_name }}.FindManyArgs args) {
+        {{ dsl_name }}.FindManyArgs actual = args == null ? new {{ dsl_name }}.FindManyArgs() : args;
+        actual.take(1);
+        List<{{ model_name }}> rows = findManyInternal(actual);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    private {{ model_name }} createInternal({{ dsl_name }}.CreateInput data) {
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", 1);
+        request.put("model", "{{ model_name }}");
+        request.set("data", data == null ? JsonSupport.object() : data.node());
+        request.put("returnData", true);
+        JsonNode result = rpc("query.create", request);
+        JsonNode row = JsonSupport.firstDataRow(result);
+        if (row == null || row.isNull()) {
+            throw new NautilusException("create: engine returned no data");
+        }
+        return {{ model_name }}.fromJsonNode(row);
+    }
+
+    private List<{{ model_name }}> createManyInternal(List<{{ dsl_name }}.CreateInput> data) {
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", 1);
+        request.put("model", "{{ model_name }}");
+        ArrayNode items = JsonSupport.array();
+        for ({{ dsl_name }}.CreateInput item : data) {
+            items.add(item.node());
+        }
+        request.set("data", items);
+        request.put("returnData", true);
+        JsonNode result = rpc("query.createMany", request);
+        return rows(result, {{ model_name }}::fromJsonNode);
+    }
+
+    private List<{{ model_name }}> updateInternal({{ dsl_name }}.UpdateArgs args) {
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", 1);
+        request.put("model", "{{ model_name }}");
+        request.set("filter", args == null ? JsonSupport.object() : args.whereNode());
+        request.set("data", args == null ? JsonSupport.object() : args.dataNode());
+        request.put("returnData", true);
+        JsonNode result = rpc("query.update", request);
+        return rows(result, {{ model_name }}::fromJsonNode);
+    }
+
+    private {{ model_name }} deleteInternal({{ dsl_name }}.DeleteArgs args) {
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", 1);
+        request.put("model", "{{ model_name }}");
+        request.set("filter", args == null ? JsonSupport.object() : args.whereNode());
+        request.put("returnData", true);
+        JsonNode result = rpc("query.delete", request);
+        JsonNode row = JsonSupport.firstDataRow(result);
+        if (row == null || row.isNull()) {
+            throw new NotFoundException("delete: no {{ model_name }} record found matching the given filter");
+        }
+        return {{ model_name }}.fromJsonNode(row);
+    }
+
+    private long deleteManyInternal({{ dsl_name }}.DeleteArgs args) {
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", 1);
+        request.put("model", "{{ model_name }}");
+        request.set("filter", args == null ? JsonSupport.object() : args.whereNode());
+        request.put("returnData", false);
+        JsonNode result = rpc("query.delete", request);
+        return JsonSupport.count(result);
+    }
+
+    private long countInternal({{ dsl_name }}.CountArgs args) {
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", 1);
+        request.put("model", "{{ model_name }}");
+        request.set("args", args == null ? JsonSupport.object() : args.node());
+        JsonNode result = rpc("query.count", request);
+        return JsonSupport.count(result);
+    }
+
+    private {{ model_name }} upsertInternal({{ dsl_name }}.UpsertArgs args) {
+        List<{{ model_name }}> existing = findManyInternal(new {{ dsl_name }}.FindManyArgs().where(w -> w.raw(args.whereNode())).take(1));
+        if (!existing.isEmpty()) {
+            List<{{ model_name }}> updated = updateInternal(new {{ dsl_name }}.UpdateArgs().where(w -> w.raw(args.whereNode())).data(args.updateNode()));
+            return updated.isEmpty() ? existing.get(0) : updated.get(0);
+        }
+        return createInternal(new {{ dsl_name }}.CreateInput(args.createNode()));
+    }
+
+    private List<JsonNode> groupByInternal({{ dsl_name }}.GroupByArgs args) {
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", 1);
+        request.put("model", "{{ model_name }}");
+        request.set("args", args == null ? JsonSupport.object() : args.node());
+        JsonNode result = rpc("query.groupBy", request);
+        return JsonSupport.dataList(result, JsonNode::deepCopy);
+    }
+
+    private List<JsonNode> rawQueryInternal(String sql) {
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", 1);
+        request.put("sql", sql);
+        JsonNode result = rpc("query.rawQuery", request);
+        return JsonSupport.dataList(result, JsonNode::deepCopy);
+    }
+
+    private List<JsonNode> rawStmtQueryInternal(String sql, List<?> params) {
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", 1);
+        request.put("sql", sql);
+        request.set("params", JsonSupport.toJsonNode(params));
+        JsonNode result = rpc("query.rawStmtQuery", request);
+        return JsonSupport.dataList(result, JsonNode::deepCopy);
+    }
+}

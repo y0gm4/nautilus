@@ -1,0 +1,17 @@
+package {{ package_name }}.internal;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+public final class TransactionException extends NautilusException {
+    public TransactionException(String message) {
+        super(message);
+    }
+
+    public TransactionException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
+    public TransactionException(String message, Integer code, JsonNode data) {
+        super(message, code, data);
+    }
+}

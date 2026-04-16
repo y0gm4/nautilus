@@ -1,0 +1,37 @@
+package {{ package_name }}.model;
+
+{%- for import in imports %}
+import {{ import }};
+{%- endfor %}
+
+public record {{ name }}(
+{%- for component in components %}
+    {{ component.ty }} {{ component.name }}{% if not loop.last %},{% endif %}
+{%- endfor %}
+) implements {{ implements_type }} {
+{%- if static_delegate and static_delegate_accessor %}
+    public static {{ static_delegate }} nautilus() {
+        Object client = GlobalNautilusRegistry.require();
+        return ((Nautilus) client).{{ static_delegate_accessor }}();
+    }
+
+{%- endif %}
+    public static {{ name }} fromJsonNode(JsonNode row) {
+        if (row == null || row.isNull()) {
+            return null;
+        }
+{%- for read in reads %}
+{{ read }}
+{%- endfor %}
+        return new {{ name }}({{ ctor_args | join(sep=", ") }});
+    }
+
+    @Override
+    public JsonNode toJsonNode() {
+        ObjectNode node = JsonSupport.object();
+{%- for write in writes %}
+{{ write }}
+{%- endfor %}
+        return node;
+    }
+}

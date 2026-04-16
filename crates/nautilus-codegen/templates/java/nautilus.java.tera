@@ -1,0 +1,114 @@
+package {{ package_name }}.client;
+
+{%- for import in imports %}
+import {{ import }};
+{%- endfor %}
+
+public final class Nautilus extends BaseNautilusClient {
+    private static final String SCHEMA_PATH = {{ schema_path_literal }};
+
+{%- for model in models %}
+    private final {{ model.delegate_name }} {{ model.camel }};
+{%- endfor %}
+
+    private final boolean autoRegistered;
+
+    public Nautilus() {
+        this(new NautilusOptions());
+    }
+
+    public Nautilus(NautilusOptions options) {
+        super(SCHEMA_PATH, options == null ? new NautilusOptions() : options);
+{%- for model in models %}
+        this.{{ model.camel }} = new {{ model.delegate_name }}(this);
+{%- endfor %}
+        this.autoRegistered = options != null && options.autoRegister();
+        if (this.autoRegistered) {
+            GlobalNautilusRegistry.register(this);
+        }
+        connect();
+    }
+
+{%- for model in models %}
+    public {{ model.delegate_name }} {{ model.camel }}() {
+        return this.{{ model.camel }};
+    }
+
+{%- endfor %}
+{% if is_async %}
+    public <T> CompletableFuture<T> transaction(Function<TransactionClient, CompletableFuture<T>> callback) {
+        return transaction(callback, new TransactionOptions());
+    }
+
+    public <T> CompletableFuture<T> transaction(
+        Function<TransactionClient, CompletableFuture<T>> callback,
+        TransactionOptions options
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            String transactionId = startTransaction(options);
+            TransactionClient tx = new TransactionClient(this, transactionId);
+            try {
+                T result = callback.apply(tx).join();
+                commitTransaction(transactionId);
+                return result;
+            } catch (CompletionException e) {
+                rollbackTransaction(transactionId);
+                throw e;
+            } catch (RuntimeException e) {
+                rollbackTransaction(transactionId);
+                throw e;
+            }
+        }, executor());
+    }
+
+    public CompletableFuture<List<JsonNode>> transactionBatch(List<TransactionBatchOperation> operations) {
+        return transactionBatch(operations, new TransactionOptions());
+    }
+
+    public CompletableFuture<List<JsonNode>> transactionBatch(
+        List<TransactionBatchOperation> operations,
+        TransactionOptions options
+    ) {
+        return CompletableFuture.supplyAsync(() -> runTransactionBatch(operations, options), executor());
+    }
+{% else %}
+    public <T> T transaction(Function<TransactionClient, T> callback) {
+        return transaction(callback, new TransactionOptions());
+    }
+
+    public <T> T transaction(Function<TransactionClient, T> callback, TransactionOptions options) {
+        String transactionId = startTransaction(options);
+        TransactionClient tx = new TransactionClient(this, transactionId);
+        try {
+            T result = callback.apply(tx);
+            commitTransaction(transactionId);
+            return result;
+        } catch (RuntimeException e) {
+            rollbackTransaction(transactionId);
+            throw e;
+        }
+    }
+
+    public List<JsonNode> transactionBatch(List<TransactionBatchOperation> operations) {
+        return transactionBatch(operations, new TransactionOptions());
+    }
+
+    public List<JsonNode> transactionBatch(List<TransactionBatchOperation> operations, TransactionOptions options) {
+        return runTransactionBatch(operations, options);
+    }
+{% endif %}
+    public void disconnect() {
+        close();
+    }
+
+    @Override
+    public void close() {
+        try {
+            super.close();
+        } finally {
+            if (this.autoRegistered) {
+                GlobalNautilusRegistry.unregister(this);
+            }
+        }
+    }
+}

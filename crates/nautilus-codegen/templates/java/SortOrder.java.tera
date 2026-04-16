@@ -1,0 +1,16 @@
+package {{ package_name }}.dsl;
+
+public enum SortOrder {
+    ASC("asc"),
+    DESC("desc");
+
+    private final String wireValue;
+
+    SortOrder(String wireValue) {
+        this.wireValue = wireValue;
+    }
+
+    public String wireValue() {
+        return this.wireValue;
+    }
+}

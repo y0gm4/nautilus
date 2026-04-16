@@ -1,0 +1,24 @@
+package {{ package_name }}.client;
+
+import {{ package_name }}.internal.JsonSupport;
+import {{ package_name }}.internal.WireSerializable;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
+public final class TransactionBatchOperation implements WireSerializable {
+    private final String method;
+    private final ObjectNode params;
+
+    public TransactionBatchOperation(String method, ObjectNode params) {
+        this.method = method;
+        this.params = params == null ? JsonSupport.object() : params.deepCopy();
+    }
+
+    @Override
+    public JsonNode toJsonNode() {
+        ObjectNode node = JsonSupport.object();
+        node.put("method", this.method);
+        node.set("params", this.params.deepCopy());
+        return node;
+    }
+}

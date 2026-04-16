@@ -49,14 +49,22 @@ nautilus migrate status --schema schema.nautilus
 nautilus engine serve --migrate
 ```
 
+### Plain Java bundle generation
+
+```bash
+nautilus generate --schema schema.nautilus
+```
+
+When the schema uses `provider = "nautilus-client-java"` and `mode = "jar"`,
+the same command writes the normal Maven module to `output/` and also leaves a
+plain Java bundle at `output/dist/{artifact_id}.jar` plus `output/dist/lib/*.jar`.
+
 ## Notes
 
 - If `--schema` is omitted, schema-based commands auto-detect the first `.nautilus` file in the current directory.
-- The generator provider inside the schema decides the client target:
-  - `nautilus-client-rs`
-  - `nautilus-client-py`
-  - `nautilus-client-js`
+- The generator provider inside the schema decides the client target: `nautilus-client-rs`, `nautilus-client-py`, `nautilus-client-js`, or `nautilus-client-java`.
 - For JS and Python, `nautilus generate` produces local source packages first. The normal workflow is to import the generated `output` directory; `install = true` only copies the same files into local `site-packages/nautilus` or `node_modules/nautilus` for convenience.
+- For Java, `nautilus generate` writes a Maven module to the configured `output` directory by default. When the schema sets `mode = "jar"`, generation also builds `output/dist/{artifact_id}.jar` plus `output/dist/lib/*.jar` for plain `java` / `javac` usage, then removes the temporary `.nautilus-build` directory. `install = true` is currently ignored for the Java generator.
 - `--standalone` is meaningful only for the Rust generator; it emits a `Cargo.toml` next to the generated Rust sources.
 - The Python shim command is intentionally separate from code generation. It exists to make the installed CLI reachable from Python as `python -m nautilus`; it does not install or publish generated ORM clients.
 - `nautilus studio` looks up the latest GitHub Release for `STUDIO_GITHUB_REPO`, downloads the ZIP asset for the current platform named `nautilus-orm-studio-${tag}-${os}.zip` (`windows`, `linux`, or `macos`), extracts it into the local Nautilus data directory, installs runtime dependencies from the packaged `package-lock.json`, and launches Next from the project directory where `nautilus studio` was invoked while pointing it at the cached Studio app.

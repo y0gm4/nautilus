@@ -100,8 +100,7 @@ Desktop.ini
 
 benchmark/
 examples/
-# Insta snapshots — track approved baselines, ignore review artifacts
+# Insta snapshots — ignore all generated artifacts
 **/snapshots/*
 !**/snapshots/.gitkeep
-!**/snapshots/*.snap
 **/snapshots/*.snap.new

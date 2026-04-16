@@ -83,6 +83,21 @@ impl SchemaValidator {
             {
                 self.errors.push_back(err);
             }
+            if let Err(err) = Self::generator_java_output_required(generator, *client_provider) {
+                self.errors.push_back(err);
+            }
+            if let Err(err) = Self::generator_java_package_value(generator, *client_provider) {
+                self.errors.push_back(err);
+            }
+            if let Err(err) = Self::generator_java_group_id_value(generator, *client_provider) {
+                self.errors.push_back(err);
+            }
+            if let Err(err) = Self::generator_java_artifact_id_value(generator, *client_provider) {
+                self.errors.push_back(err);
+            }
+            if let Err(err) = Self::generator_java_mode_value(generator, *client_provider) {
+                self.errors.push_back(err);
+            }
         }
 
         let valid_fields = Self::valid_generator_fields(provider_info.as_ref().map(|(_, p)| *p));
@@ -237,6 +252,19 @@ impl SchemaValidator {
         }
     }
 
+    pub(super) fn generator_java_output_required(
+        generator: &GeneratorDecl,
+        client_provider: ClientProvider,
+    ) -> Result<()> {
+        if client_provider == ClientProvider::Java && generator.find_field("output").is_none() {
+            return Err(SchemaError::Validation(
+                "Generator field 'output' is required for 'nautilus-client-java'".to_string(),
+                generator.span,
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn generator_interface_kind(generator: &GeneratorDecl) -> Result<InterfaceKind> {
         let Some(iface_field) = generator.find_field("interface") else {
             return Ok(InterfaceKind::Sync);
@@ -295,12 +323,116 @@ impl SchemaValidator {
         }
     }
 
+    fn generator_java_string_field(
+        generator: &GeneratorDecl,
+        field_name: &str,
+        client_provider: ClientProvider,
+    ) -> Result<Option<String>> {
+        let Some(field) = generator.find_field(field_name) else {
+            return if client_provider == ClientProvider::Java {
+                Err(SchemaError::Validation(
+                    format!(
+                        "Generator field '{}' is required for 'nautilus-client-java'",
+                        field_name
+                    ),
+                    generator.span,
+                ))
+            } else {
+                Ok(None)
+            };
+        };
+
+        if client_provider != ClientProvider::Java {
+            return Err(SchemaError::Validation(
+                format!(
+                    "Field '{}' is only supported for 'nautilus-client-java'",
+                    field_name
+                ),
+                field.span,
+            ));
+        }
+
+        match &field.value {
+            Expr::Literal(Literal::String(value, _)) => Ok(Some(value.clone())),
+            _ => Err(SchemaError::Validation(
+                format!("Generator '{}' must be a string literal", field_name),
+                field.span,
+            )),
+        }
+    }
+
+    pub(super) fn generator_java_package_value(
+        generator: &GeneratorDecl,
+        client_provider: ClientProvider,
+    ) -> Result<Option<String>> {
+        Self::generator_java_string_field(generator, "package", client_provider)
+    }
+
+    pub(super) fn generator_java_group_id_value(
+        generator: &GeneratorDecl,
+        client_provider: ClientProvider,
+    ) -> Result<Option<String>> {
+        Self::generator_java_string_field(generator, "group_id", client_provider)
+    }
+
+    pub(super) fn generator_java_artifact_id_value(
+        generator: &GeneratorDecl,
+        client_provider: ClientProvider,
+    ) -> Result<Option<String>> {
+        Self::generator_java_string_field(generator, "artifact_id", client_provider)
+    }
+
+    pub(super) fn generator_java_mode_value(
+        generator: &GeneratorDecl,
+        client_provider: ClientProvider,
+    ) -> Result<Option<JavaGenerationMode>> {
+        let Some(field) = generator.find_field("mode") else {
+            return if client_provider == ClientProvider::Java {
+                Ok(Some(JavaGenerationMode::Maven))
+            } else {
+                Ok(None)
+            };
+        };
+
+        if client_provider != ClientProvider::Java {
+            return Err(SchemaError::Validation(
+                "Field 'mode' is only supported for 'nautilus-client-java'".to_string(),
+                field.span,
+            ));
+        }
+
+        let mode = match &field.value {
+            Expr::Literal(Literal::String(value, _)) => value.as_str(),
+            _ => {
+                return Err(SchemaError::Validation(
+                    "Generator 'mode' must be a string literal".to_string(),
+                    field.span,
+                ));
+            }
+        };
+
+        match mode {
+            "maven" => Ok(Some(JavaGenerationMode::Maven)),
+            "jar" => Ok(Some(JavaGenerationMode::Jar)),
+            other => Err(SchemaError::Validation(
+                format!(
+                    "Invalid value '{}' for generator field 'mode'. Allowed values: \"maven\", \"jar\"",
+                    other
+                ),
+                field.span,
+            )),
+        }
+    }
+
     pub(super) fn valid_generator_fields(
         client_provider: Option<ClientProvider>,
     ) -> Vec<&'static str> {
         let mut fields = KNOWN_GENERATOR_FIELDS.to_vec();
         if client_provider.is_none() || client_provider == Some(ClientProvider::Python) {
             fields.extend_from_slice(PYTHON_ONLY_GENERATOR_FIELDS);
+        }
+        if client_provider.is_none() || client_provider == Some(ClientProvider::Java) {
+            fields.extend_from_slice(JAVA_ONLY_GENERATOR_FIELDS);
         }
         fields
     }

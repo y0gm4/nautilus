@@ -5,11 +5,12 @@ use nautilus_codegen::{
     composite_type_gen::generate_all_composite_types,
     enum_gen::generate_all_enums,
     generator::generate_all_models,
+    java::generate_java_client,
     python::{
         generate_all_python_models, generate_python_client, generate_python_enums,
         python_runtime_files,
     },
-    writer::{write_python_code, write_rust_code},
+    writer::{write_java_code, write_python_code, write_rust_code},
 };
 use nautilus_schema::validate_schema_source;
 
@@ -68,6 +69,27 @@ model User {
   id      Int     @id @default(autoincrement())
   address Address?
   status  Status
+}
+"#;
+
+const JAVA_SCHEMA: &str = r#"
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+  role Role
 }
 "#;
 
@@ -580,5 +602,61 @@ fn test_write_python_code_without_client_no_client_py() {
     assert!(
         !tmp.path().join("client.py").exists(),
         "client.py should not be created when client_code is None"
+    );
+}
+
+#[test]
+fn test_write_java_code_creates_maven_module_structure() {
+    let ir = validate(JAVA_SCHEMA);
+    let files =
+        generate_java_client(&ir, "schema.nautilus", false).expect("generate_java_client failed");
+    let tmp = tempfile::TempDir::new().expect("failed to create temp dir");
+    let path = tmp.path().to_str().unwrap();
+
+    write_java_code(path, &files).expect("write_java_code failed");
+
+    let root = tmp.path();
+    let package_root = root.join("src/main/java/com/acme/db");
+
+    assert!(root.join("pom.xml").exists(), "pom.xml missing");
+    assert!(
+        package_root.join("client").join("Nautilus.java").exists(),
+        "client/Nautilus.java missing"
+    );
+    assert!(
+        package_root
+            .join("client")
+            .join("UserDelegate.java")
+            .exists(),
+        "client/UserDelegate.java missing"
+    );
+    assert!(
+        package_root.join("model").join("User.java").exists(),
+        "model/User.java missing"
+    );
+    assert!(
+        package_root.join("enums").join("Role.java").exists(),
+        "enums/Role.java missing"
+    );
+    assert!(
+        package_root.join("dsl").join("UserDsl.java").exists(),
+        "dsl/UserDsl.java missing"
+    );
+    assert!(
+        package_root
+            .join("internal")
+            .join("GlobalNautilusRegistry.java")
+            .exists(),
+        "internal/GlobalNautilusRegistry.java missing"
+    );
+
+    let pom = std::fs::read_to_string(root.join("pom.xml")).expect("failed to read pom.xml");
+    assert!(
+        pom.contains("<maven.compiler.release>21</maven.compiler.release>"),
+        "pom.xml should target Java 21:\n{pom}"
+    );
+    assert!(
+        pom.contains("jackson-databind"),
+        "pom.xml should include Jackson databind:\n{pom}"
     );
 }

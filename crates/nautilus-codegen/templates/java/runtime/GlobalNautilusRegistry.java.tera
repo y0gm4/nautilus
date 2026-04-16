@@ -1,0 +1,32 @@
+package {{ package_name }}.internal;
+
+import java.util.concurrent.atomic.AtomicReference;
+
+public final class GlobalNautilusRegistry {
+    private static final AtomicReference<Object> INSTANCE = new AtomicReference<>();
+
+    private GlobalNautilusRegistry() {
+    }
+
+    public static void register(Object client) {
+        if (!INSTANCE.compareAndSet(null, client)) {
+            throw new IllegalStateException(
+                "A Nautilus instance with autoRegister=true already exists. Only one auto-registered instance is allowed at a time."
+            );
+        }
+    }
+
+    public static void unregister(Object client) {
+        INSTANCE.compareAndSet(client, null);
+    }
+
+    public static Object require() {
+        Object client = INSTANCE.get();
+        if (client == null) {
+            throw new IllegalStateException(
+                "No Nautilus instance with autoRegister=true found. Create one with: new Nautilus(new NautilusOptions().autoRegister(true))"
+            );
+        }
+        return client;
+    }
+}

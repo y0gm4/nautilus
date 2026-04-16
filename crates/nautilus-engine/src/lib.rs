@@ -17,6 +17,14 @@ use nautilus_schema::{ir::SchemaIr, validate_schema_source};
 pub use args::CliArgs;
 pub use state::EngineState;
 
+fn eprint_warning(message: &str) {
+    eprintln!(
+        "{} {}",
+        console::style("[engine] warning:").yellow().bold(),
+        console::style(message).yellow()
+    );
+}
+
 /// Resolve the schema path, auto-detecting the first `.nautilus` file in the
 /// current working directory when `--schema` is omitted.
 pub fn resolve_schema_path_arg(
@@ -33,10 +41,10 @@ pub fn resolve_schema_path_arg(
     )?;
 
     if nautilus_files.len() > 1 {
-        eprintln!(
-            "warning: multiple .nautilus files found, using: {}",
+        eprint_warning(&format!(
+            "multiple .nautilus files found, using: {}",
             schema_path.display()
-        );
+        ));
     }
 
     Ok(schema_path.to_string_lossy().into_owned())
@@ -103,11 +111,10 @@ pub async fn run_engine(
             .and_then(|raw| match resolve_datasource_url(raw) {
                 Ok(url) => Some(url),
                 Err(e) => {
-                    eprintln!(
-                        "[engine] Warning: direct_url could not be resolved ({}), \
-                         raw queries will use the pooled connection",
+                    eprint_warning(&format!(
+                        "direct_url could not be resolved ({}), raw queries will use the pooled connection",
                         e
-                    );
+                    ));
                     None
                 }
             })

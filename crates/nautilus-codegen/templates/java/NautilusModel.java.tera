@@ -1,0 +1,6 @@
+package {{ package_name }}.model;
+
+import {{ package_name }}.internal.WireSerializable;
+
+public interface NautilusModel extends WireSerializable {
+}

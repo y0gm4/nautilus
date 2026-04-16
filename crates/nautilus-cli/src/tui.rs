@@ -183,6 +183,10 @@ pub fn print_warning(msg: &str) {
     println!("  {}  {}", style(WARN).yellow(), style(msg).yellow());
 }
 
+pub fn eprint_warning(msg: &str) {
+    eprintln!("  {}  {}", style(WARN).yellow(), style(msg).yellow());
+}
+
 pub fn print_tip(msg: &str) {
     println!(
         "  {}  {}",

@@ -52,6 +52,10 @@ impl SchemaValidator {
         let interface = Self::generator_interface_kind(generator)?;
         let recursive_type_depth =
             Self::generator_recursive_type_depth(generator, client_provider, &provider)?;
+        let java_package = Self::generator_java_package_value(generator, client_provider)?;
+        let java_group_id = Self::generator_java_group_id_value(generator, client_provider)?;
+        let java_artifact_id = Self::generator_java_artifact_id_value(generator, client_provider)?;
+        let java_mode = Self::generator_java_mode_value(generator, client_provider)?;
 
         Ok(GeneratorIr {
             name: generator.name.value.clone(),
@@ -59,6 +63,10 @@ impl SchemaValidator {
             output,
             interface,
             recursive_type_depth,
+            java_package,
+            java_group_id,
+            java_artifact_id,
+            java_mode,
             span: generator.span,
         })
     }

@@ -418,6 +418,30 @@ pub fn write_js_code(
     Ok(())
 }
 
+/// Write generated Java code to the output directory, preserving the relative
+/// file layout produced by the Java generator.
+pub fn write_java_code(output_path: &str, files: &[(String, String)]) -> Result<()> {
+    let output_dir = Path::new(output_path);
+
+    clear_output_dir(output_path)?;
+
+    fs::create_dir_all(output_dir)
+        .with_context(|| format!("Failed to create directory: {}", output_dir.display()))?;
+
+    for (relative_path, content) in files {
+        let file_path = output_dir.join(relative_path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        }
+
+        fs::write(&file_path, content)
+            .with_context(|| format!("Failed to write file: {}", file_path.display()))?;
+    }
+
+    Ok(())
+}
+
 fn clear_output_dir(output_path: &str) -> Result<()> {
     let output_dir = Path::new(output_path);
     if output_dir.exists() {

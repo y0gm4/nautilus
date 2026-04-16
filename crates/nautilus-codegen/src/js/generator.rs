@@ -62,6 +62,7 @@ fn render(template: &str, ctx: &Context) -> String {
     JS_TEMPLATES
         .render(template, ctx)
         .unwrap_or_else(|e| panic!("template rendering failed for '{}': {:?}", template, e))
+        .replace("\r\n", "\n")
 }
 
 #[derive(Debug, Clone, Serialize)]

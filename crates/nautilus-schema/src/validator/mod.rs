@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 const KNOWN_DATASOURCE_FIELDS: &[&str] = &["provider", "url", "direct_url"];
 const KNOWN_GENERATOR_FIELDS: &[&str] = &["provider", "output", "interface"];
 const PYTHON_ONLY_GENERATOR_FIELDS: &[&str] = &["recursive_type_depth"];
+const JAVA_ONLY_GENERATOR_FIELDS: &[&str] = &["package", "group_id", "artifact_id", "mode"];
 
 /// Validates a schema AST and produces a validated IR.
 ///

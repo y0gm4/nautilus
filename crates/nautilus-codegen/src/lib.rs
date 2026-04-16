@@ -10,6 +10,7 @@ pub mod backend;
 pub mod composite_type_gen;
 pub mod enum_gen;
 pub mod generator;
+pub mod java;
 pub mod js;
 pub mod python;
 pub mod type_helpers;
@@ -22,6 +23,7 @@ use std::path::{Path, PathBuf};
 use crate::composite_type_gen::generate_all_composite_types;
 use crate::enum_gen::generate_all_enums;
 use crate::generator::generate_all_models;
+use crate::java::{build_java_bundle, generate_java_client};
 use crate::js::{
     generate_all_js_models, generate_js_client, generate_js_composite_types, generate_js_enums,
     generate_js_models_index, js_runtime_files,
@@ -30,9 +32,17 @@ use crate::python::{
     generate_all_python_models, generate_python_composite_types, generate_python_enums,
     python_runtime_files,
 };
-use crate::writer::{write_js_code, write_python_code, write_rust_code};
-use nautilus_schema::ir::{ResolvedFieldType, SchemaIr};
+use crate::writer::{write_java_code, write_js_code, write_python_code, write_rust_code};
+use nautilus_schema::ir::{JavaGenerationMode, ResolvedFieldType, SchemaIr};
 use nautilus_schema::{parse_schema_source, validate_schema_source};
+
+fn eprint_warning(message: &str) {
+    eprintln!(
+        "{} {}",
+        console::style("warning:").yellow().bold(),
+        console::style(message).yellow()
+    );
+}
 
 /// Auto-detect the first `.nautilus` file in the current directory, or return
 /// `schema` as-is if explicitly provided.
@@ -55,10 +65,10 @@ pub fn resolve_schema_path(schema: Option<PathBuf>) -> Result<PathBuf> {
     let schema_file = &nautilus_files[0];
 
     if nautilus_files.len() > 1 {
-        eprintln!(
-            "warning: multiple .nautilus files found, using: {}",
+        eprint_warning(&format!(
+            "multiple .nautilus files found, using: {}",
             schema_file.display()
-        );
+        ));
     }
 
     Ok(schema_file.clone())
@@ -293,7 +303,9 @@ pub fn generate_command(schema_path: &PathBuf, options: GenerateOptions) -> Resu
                         let _ = fs::remove_dir_all(&tmp_dir);
                         final_output = installed.display().to_string();
                     } else {
-                        eprintln!("warning: no output path specified and --no-install given; nothing written");
+                        eprint_warning(
+                            "no output path specified and --no-install given; nothing written",
+                        );
                         return Ok(());
                     }
                 }
@@ -368,15 +380,67 @@ pub fn generate_command(schema_path: &PathBuf, options: GenerateOptions) -> Resu
                         let _ = fs::remove_dir_all(&tmp_dir);
                         final_output = installed.display().to_string();
                     } else {
-                        eprintln!("warning: no output path specified and --no-install given; nothing written");
+                        eprint_warning(
+                            "no output path specified and --no-install given; nothing written",
+                        );
                         return Ok(());
                     }
                 }
             }
         }
+        "nautilus-client-java" => {
+            client_name = "Java";
+            let java_mode = ir
+                .generator
+                .as_ref()
+                .and_then(|g| g.java_mode)
+                .unwrap_or(JavaGenerationMode::Maven);
+
+            if install {
+                match java_mode {
+                    JavaGenerationMode::Maven => eprint_warning(
+                        "install = true is currently ignored for 'nautilus-client-java'; the generated Maven module is written only to the configured output path",
+                    ),
+                    JavaGenerationMode::Jar => eprint_warning(
+                        "install = true is currently ignored for 'nautilus-client-java'; generation writes the Maven module to the configured output path and the plain Java bundle to output/dist",
+                    ),
+                }
+            }
+
+            let abs_path = schema_path
+                .canonicalize()
+                .unwrap_or_else(|_| schema_path.clone());
+            let schema_path_str = abs_path
+                .to_string_lossy()
+                .trim_start_matches(r"\\?\")
+                .replace('\\', "/");
+
+            let output_path = output_path_opt
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("Java generation requires generator.output"))?;
+            let files = generate_java_client(&ir, &schema_path_str, is_async)?;
+            write_java_code(output_path, &files)?;
+
+            final_output = if java_mode == JavaGenerationMode::Jar {
+                let artifact_id = ir
+                    .generator
+                    .as_ref()
+                    .and_then(|g| g.java_artifact_id.as_deref())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Java bundle mode requires generator.artifact_id to build the jar name"
+                        )
+                    })?;
+                build_java_bundle(output_path, artifact_id)?
+                    .display()
+                    .to_string()
+            } else {
+                output_path.to_string()
+            };
+        }
         other => {
             return Err(anyhow::anyhow!(
-                "Unsupported generator provider: '{}'. Supported: 'nautilus-client-rs', 'nautilus-client-py', 'nautilus-client-js'",
+                "Unsupported generator provider: '{}'. Supported: 'nautilus-client-rs', 'nautilus-client-py', 'nautilus-client-js', 'nautilus-client-java'",
                 other
             ));
         }

@@ -1,0 +1,225 @@
+package {{ package_name }}.internal;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.NullNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.UUID;
+import java.util.function.Function;
+
+public final class JsonSupport {
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+        .registerModule(new JavaTimeModule())
+        .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+
+    private JsonSupport() {
+    }
+
+    public static ObjectMapper mapper() {
+        return MAPPER;
+    }
+
+    public static ObjectNode object() {
+        return JsonNodeFactory.instance.objectNode();
+    }
+
+    public static ArrayNode array() {
+        return JsonNodeFactory.instance.arrayNode();
+    }
+
+    public static JsonNode toJsonNode(Object value) {
+        if (value == null) {
+            return NullNode.instance;
+        }
+        if (value instanceof JsonNode node) {
+            return node;
+        }
+        if (value instanceof WireSerializable serializable) {
+            return serializable.toJsonNode();
+        }
+        if (value instanceof Enum<?> enumValue) {
+            return JsonNodeFactory.instance.textNode(enumValue.name());
+        }
+        if (value instanceof OffsetDateTime time) {
+            return JsonNodeFactory.instance.textNode(time.toString());
+        }
+        if (value instanceof UUID uuid) {
+            return JsonNodeFactory.instance.textNode(uuid.toString());
+        }
+        if (value instanceof BigDecimal decimal) {
+            return JsonNodeFactory.instance.numberNode(decimal);
+        }
+        if (value instanceof byte[] bytes) {
+            return JsonNodeFactory.instance.binaryNode(bytes);
+        }
+        if (value instanceof Collection<?> values) {
+            ArrayNode array = array();
+            for (Object item : values) {
+                array.add(toJsonNode(item));
+            }
+            return array;
+        }
+        return MAPPER.valueToTree(value);
+    }
+
+    public static ObjectNode objectNode(JsonNode node) {
+        if (node instanceof ObjectNode objectNode) {
+            return objectNode.deepCopy();
+        }
+        return object();
+    }
+
+    public static JsonNode firstPresent(JsonNode object, String... keys) {
+        if (object == null || object.isNull()) {
+            return null;
+        }
+        for (String key : keys) {
+            if (object.has(key)) {
+                return object.get(key);
+            }
+        }
+        return null;
+    }
+
+    public static String asString(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return node.asText();
+    }
+
+    public static Boolean asBoolean(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isBoolean()) {
+            return node.booleanValue();
+        }
+        if (node.isInt() || node.isLong()) {
+            return node.asInt() != 0;
+        }
+        String value = node.asText();
+        if ("true".equalsIgnoreCase(value) || "1".equals(value)) {
+            return Boolean.TRUE;
+        }
+        if ("false".equalsIgnoreCase(value) || "0".equals(value)) {
+            return Boolean.FALSE;
+        }
+        return null;
+    }
+
+    public static Integer asInteger(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return node.isNumber() ? node.intValue() : Integer.valueOf(node.asText());
+    }
+
+    public static Long asLong(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return node.isNumber() ? node.longValue() : Long.valueOf(node.asText());
+    }
+
+    public static Double asDouble(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return node.isNumber() ? node.doubleValue() : Double.valueOf(node.asText());
+    }
+
+    public static BigDecimal asBigDecimal(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return node.isNumber() ? node.decimalValue() : new BigDecimal(node.asText());
+    }
+
+    public static OffsetDateTime asOffsetDateTime(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return OffsetDateTime.parse(node.asText());
+    }
+
+    public static UUID asUuid(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return UUID.fromString(node.asText());
+    }
+
+    public static byte[] asBytes(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        try {
+            return node.binaryValue();
+        } catch (IOException e) {
+            throw new ProtocolException("Invalid binary payload", e);
+        }
+    }
+
+    public static JsonNode asJsonNode(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return node.deepCopy();
+    }
+
+    public static <E extends Enum<E>> E asEnum(JsonNode node, Class<E> enumType) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return Enum.valueOf(enumType, node.asText());
+    }
+
+    public static <T> T asObject(JsonNode node, Function<JsonNode, T> mapper) {
+        if (node == null || node.isNull() || !node.isObject()) {
+            return null;
+        }
+        return mapper.apply(node);
+    }
+
+    public static <T> List<T> asList(JsonNode node, Function<JsonNode, T> mapper) {
+        if (node == null || node.isNull() || !node.isArray()) {
+            return List.of();
+        }
+        List<T> items = new ArrayList<>();
+        for (JsonNode item : node) {
+            T mapped = mapper.apply(item);
+            if (mapped != null) {
+                items.add(mapped);
+            }
+        }
+        return List.copyOf(items);
+    }
+
+    public static <T> List<T> dataList(JsonNode result, Function<JsonNode, T> mapper) {
+        return asList(firstPresent(result, "data"), mapper);
+    }
+
+    public static JsonNode firstDataRow(JsonNode result) {
+        JsonNode data = firstPresent(result, "data");
+        if (data == null || !data.isArray() || data.isEmpty()) {
+            return null;
+        }
+        return data.get(0);
+    }
+
+    public static long count(JsonNode result) {
+        JsonNode count = firstPresent(result, "count");
+        return count == null || count.isNull() ? 0L : count.asLong();
+    }
+}

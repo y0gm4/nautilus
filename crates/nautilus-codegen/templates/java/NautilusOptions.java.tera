@@ -1,0 +1,34 @@
+package {{ package_name }}.client;
+
+public final class NautilusOptions {
+    private boolean migrate;
+    private boolean autoRegister;
+    private String enginePath;
+
+    public NautilusOptions migrate(boolean migrate) {
+        this.migrate = migrate;
+        return this;
+    }
+
+    public NautilusOptions autoRegister(boolean autoRegister) {
+        this.autoRegister = autoRegister;
+        return this;
+    }
+
+    public NautilusOptions enginePath(String enginePath) {
+        this.enginePath = enginePath;
+        return this;
+    }
+
+    public boolean migrate() {
+        return this.migrate;
+    }
+
+    public boolean autoRegister() {
+        return this.autoRegister;
+    }
+
+    public String enginePath() {
+        return this.enginePath;
+    }
+}

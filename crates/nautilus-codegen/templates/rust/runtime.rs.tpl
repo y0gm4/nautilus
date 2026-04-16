@@ -92,7 +92,7 @@ where
             .engine_state
             .get_or_try_init(|| async move {
                 let schema = parse_generated_schema()?;
-                EngineState::new(schema, (*database_url).clone())
+                EngineState::new(schema, (*database_url).clone(), None)
                     .await
                     .map(Arc::new)
                     .map_err(|e| {

@@ -1,0 +1,7 @@
+package {{ package_name }}.internal;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+public interface WireSerializable {
+    JsonNode toJsonNode();
+}

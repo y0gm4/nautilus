@@ -320,6 +320,8 @@ mod tests {
         let readme = crate_readme();
         assert!(readme.contains("`nautilus-client-py`"));
         assert!(readme.contains("`nautilus-client-js`"));
+        assert!(readme.contains("`nautilus-client-java`"));
+        assert!(readme.contains("mode = \"jar\""));
         assert!(
             readme.contains("The normal workflow is to import the generated `output` directory")
         );
@@ -337,5 +339,7 @@ mod tests {
         assert!(
             readme.contains("Generated clients are local build artifacts, not registry packages.")
         );
+        assert!(readme.contains("#### Java"));
+        assert!(readme.contains("### Java generator setup"));
     }
 }

@@ -814,6 +814,140 @@ generator client {
 }
 
 #[test]
+fn test_generator_java_fields_validate_for_java_provider() {
+    let source = r#"
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+  mode        = "jar"
+}
+"#;
+    let ast = parse(source).unwrap();
+    let ir = validate_schema(ast).unwrap();
+    let gen = ir.generator.as_ref().unwrap();
+    assert_eq!(gen.provider, "nautilus-client-java");
+    assert_eq!(gen.output.as_deref(), Some("./generated-java"));
+    assert_eq!(gen.java_package.as_deref(), Some("com.acme.db"));
+    assert_eq!(gen.java_group_id.as_deref(), Some("com.acme"));
+    assert_eq!(gen.java_artifact_id.as_deref(), Some("db-client"));
+    assert_eq!(
+        gen.java_mode,
+        Some(nautilus_schema::ir::JavaGenerationMode::Jar)
+    );
+}
+
+#[test]
+fn test_generator_java_fields_rejected_for_non_java_provider() {
+    let source = r#"
+generator client {
+  provider = "nautilus-client-py"
+  output   = "./generated"
+  package  = "com.acme.db"
+}
+"#;
+    let ast = parse(source).unwrap();
+    let err = validate_schema(ast).unwrap_err();
+    match err {
+        SchemaError::Validation(msg, _) => {
+            assert!(
+                msg.contains("package") && msg.contains("nautilus-client-java"),
+                "got: {}",
+                msg
+            );
+        }
+        _ => panic!("Expected validation error"),
+    }
+}
+
+#[test]
+fn test_generator_java_requires_output() {
+    let source = r#"
+generator client {
+  provider    = "nautilus-client-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+}
+"#;
+    let ast = parse(source).unwrap();
+    let err = validate_schema(ast).unwrap_err();
+    match err {
+        SchemaError::Validation(msg, _) => {
+            assert!(
+                msg.contains("output") && msg.contains("nautilus-client-java"),
+                "got: {}",
+                msg
+            );
+        }
+        _ => panic!("Expected validation error"),
+    }
+}
+
+#[test]
+fn test_generator_java_mode_defaults_to_maven() {
+    let source = r#"
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+}
+"#;
+    let ast = parse(source).unwrap();
+    let ir = validate_schema(ast).unwrap();
+    let gen = ir.generator.as_ref().unwrap();
+    assert_eq!(
+        gen.java_mode,
+        Some(nautilus_schema::ir::JavaGenerationMode::Maven)
+    );
+}
+
+#[test]
+fn test_generator_java_mode_rejected_for_non_java_provider() {
+    let source = r#"
+generator client {
+  provider = "nautilus-client-js"
+  output   = "./generated"
+  mode     = "jar"
+}
+"#;
+    let ast = parse(source).unwrap();
+    let err = validate_schema(ast).unwrap_err();
+    match err {
+        SchemaError::Validation(msg, _) => {
+            assert!(msg.contains("mode") && msg.contains("nautilus-client-java"));
+        }
+        _ => panic!("Expected validation error"),
+    }
+}
+
+#[test]
+fn test_generator_java_mode_rejects_invalid_value() {
+    let source = r#"
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+  mode        = "uber"
+}
+"#;
+    let ast = parse(source).unwrap();
+    let err = validate_schema(ast).unwrap_err();
+    match err {
+        SchemaError::Validation(msg, _) => {
+            assert!(msg.contains("mode") && msg.contains("\"maven\", \"jar\""));
+        }
+        _ => panic!("Expected validation error"),
+    }
+}
+
+#[test]
 fn test_missing_back_relation_error() {
     let source = r#"
 model User {

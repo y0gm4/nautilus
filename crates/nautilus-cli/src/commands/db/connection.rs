@@ -34,10 +34,10 @@ pub(crate) fn maybe_resolve_schema_path(
 
     if let Some(path) = &schema_path {
         if nautilus_files.len() > 1 {
-            eprintln!(
-                "warning: multiple .nautilus files found, using: {}",
+            tui::eprint_warning(&format!(
+                "multiple .nautilus files found, using: {}",
                 path.display()
-            );
+            ));
         }
     }
 

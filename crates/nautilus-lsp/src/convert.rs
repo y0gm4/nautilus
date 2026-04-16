@@ -181,7 +181,7 @@ fn is_quoted_string_completion(item: &CompletionItem) -> bool {
 fn enclosing_string_span(tokens: &[Token], offset: usize) -> Option<Span> {
     tokens.iter().find_map(|token| match &token.kind {
         TokenKind::String(_) if token.span.start < offset && offset < token.span.end => {
-            Some(token.span.clone())
+            Some(token.span)
         }
         _ => None,
     })

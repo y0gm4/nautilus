@@ -1598,6 +1598,7 @@ dependencies = [
  "heck",
  "insta",
  "nautilus-orm-schema",
+ "reqwest",
  "serde",
  "tempfile",
  "tera",
@@ -1644,6 +1645,7 @@ name = "nautilus-orm-engine"
 version = "1.0.1"
 dependencies = [
  "chrono",
+ "console 0.16.3",
  "futures",
  "nautilus-orm-connector",
  "nautilus-orm-core",

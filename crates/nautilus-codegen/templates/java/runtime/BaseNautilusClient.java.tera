@@ -1,0 +1,299 @@
+package {{ package_name }}.internal;
+
+import {{ package_name }}.client.NautilusOptions;
+import {{ package_name }}.client.TransactionBatchOperation;
+import {{ package_name }}.client.TransactionOptions;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
+
+public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
+    private static final long RPC_TIMEOUT_SECONDS = 30L;
+
+    private final String schemaPath;
+    private final NautilusOptions options;
+    private final EngineProcess engine;
+    private final AtomicLong nextRequestId = new AtomicLong();
+    private final Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
+    private final Map<Long, ArrayNode> partialData = new ConcurrentHashMap<>();
+    private final Object writeLock = new Object();
+    private final ExecutorService executor = Executors.newCachedThreadPool(runnable -> {
+        Thread thread = new Thread(runnable, "nautilus-java-client");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    private volatile BufferedWriter writer;
+    private volatile Thread readerThread;
+    private volatile boolean connected;
+
+    protected BaseNautilusClient(String schemaPath, NautilusOptions options) {
+        this.schemaPath = schemaPath;
+        this.options = options == null ? new NautilusOptions() : options;
+        this.engine = new EngineProcess(this.options);
+    }
+
+    protected final void connect() {
+        if (this.connected) {
+            return;
+        }
+        try {
+            this.engine.spawn(this.schemaPath);
+            this.writer = new BufferedWriter(
+                new OutputStreamWriter(this.engine.process().getOutputStream(), StandardCharsets.UTF_8)
+            );
+            startReader();
+            this.connected = true;
+            handshake();
+        } catch (IOException e) {
+            this.connected = false;
+            throw new ProtocolException("Failed to start Nautilus engine", e);
+        } catch (RuntimeException e) {
+            this.connected = false;
+            close();
+            throw e;
+        }
+    }
+
+    @Override
+    public final JsonNode rpc(String method, ObjectNode params) {
+        connect();
+
+        long requestId = this.nextRequestId.incrementAndGet();
+        ObjectNode request = JsonSupport.object();
+        request.put("jsonrpc", "2.0");
+        request.put("id", requestId);
+        request.put("method", method);
+        request.set("params", params == null ? JsonSupport.object() : params);
+
+        CompletableFuture<JsonNode> future = new CompletableFuture<>();
+        this.pending.put(requestId, future);
+
+        try {
+            String payload = JsonSupport.mapper().writeValueAsString(request);
+            synchronized (this.writeLock) {
+                this.writer.write(payload);
+                this.writer.newLine();
+                this.writer.flush();
+            }
+            return future.get(RPC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new ProtocolException("Request " + requestId + " timed out", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ProtocolException("Interrupted while waiting for engine response", e);
+        } catch (Exception e) {
+            if (e instanceof CompletionException completion && completion.getCause() instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (e.getCause() instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new ProtocolException("Request failed", e);
+        } finally {
+            this.pending.remove(requestId);
+        }
+    }
+
+    @Override
+    public final Executor executor() {
+        return this.executor;
+    }
+
+    public final String startTransaction(TransactionOptions options) {
+        TransactionOptions actual = options == null ? new TransactionOptions() : options;
+        ObjectNode params = JsonSupport.object();
+        params.put("protocolVersion", 1);
+        params.put("timeoutMs", actual.timeoutMs());
+        if (actual.isolationLevel() != null) {
+            params.put("isolationLevel", actual.isolationLevel().wireValue());
+        }
+        JsonNode result = rpc("transaction.start", params);
+        return JsonSupport.asString(JsonSupport.firstPresent(result, "id"));
+    }
+
+    public final void commitTransaction(String transactionId) {
+        ObjectNode params = JsonSupport.object();
+        params.put("protocolVersion", 1);
+        params.put("id", transactionId);
+        rpc("transaction.commit", params);
+    }
+
+    public final void rollbackTransaction(String transactionId) {
+        try {
+            ObjectNode params = JsonSupport.object();
+            params.put("protocolVersion", 1);
+            params.put("id", transactionId);
+            rpc("transaction.rollback", params);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    public final List<JsonNode> runTransactionBatch(
+        List<TransactionBatchOperation> operations,
+        TransactionOptions options
+    ) {
+        TransactionOptions actual = options == null ? new TransactionOptions() : options;
+        ObjectNode params = JsonSupport.object();
+        params.put("protocolVersion", 1);
+        params.put("timeoutMs", actual.timeoutMs());
+        if (actual.isolationLevel() != null) {
+            params.put("isolationLevel", actual.isolationLevel().wireValue());
+        }
+        ArrayNode items = JsonSupport.array();
+        for (TransactionBatchOperation operation : operations) {
+            items.add(operation.toJsonNode());
+        }
+        params.set("operations", items);
+        JsonNode result = rpc("transaction.batch", params);
+        return JsonSupport.asList(JsonSupport.firstPresent(result, "results"), JsonNode::deepCopy);
+    }
+
+    @Override
+    public void close() {
+        this.connected = false;
+        try {
+            if (this.writer != null) {
+                this.writer.close();
+            }
+        } catch (IOException ignored) {
+        }
+        this.engine.terminate();
+        ProtocolException error = new ProtocolException("Client disconnected");
+        for (CompletableFuture<JsonNode> future : this.pending.values()) {
+            future.completeExceptionally(error);
+        }
+        this.pending.clear();
+        this.partialData.clear();
+        this.executor.shutdownNow();
+    }
+
+    private void handshake() {
+        ObjectNode params = JsonSupport.object();
+        params.put("protocolVersion", 1);
+        params.put("clientName", "nautilus-java");
+        params.put("clientVersion", "{{ version }}");
+        JsonNode response = rpc("engine.handshake", params);
+        Integer protocolVersion = JsonSupport.asInteger(JsonSupport.firstPresent(response, "protocolVersion"));
+        if (protocolVersion == null || protocolVersion.intValue() != 1) {
+            throw new HandshakeException(
+                "Protocol version mismatch: engine uses " + protocolVersion + ", client expects 1"
+            );
+        }
+    }
+
+    private void startReader() throws IOException {
+        BufferedReader reader = new BufferedReader(
+            new InputStreamReader(this.engine.process().getInputStream(), StandardCharsets.UTF_8)
+        );
+        this.readerThread = new Thread(() -> readResponses(reader), "nautilus-java-engine-reader");
+        this.readerThread.setDaemon(true);
+        this.readerThread.start();
+    }
+
+    private void readResponses(BufferedReader reader) {
+        try {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+                JsonNode response = JsonSupport.mapper().readTree(trimmed);
+                JsonNode idNode = JsonSupport.firstPresent(response, "id");
+                if (idNode == null || idNode.isNull()) {
+                    continue;
+                }
+                long requestId = idNode.asLong();
+                CompletableFuture<JsonNode> future = this.pending.get(requestId);
+                if (future == null) {
+                    continue;
+                }
+
+                boolean partial = JsonSupport.asBoolean(JsonSupport.firstPresent(response, "partial")) == Boolean.TRUE;
+                if (partial) {
+                    ArrayNode chunk = (ArrayNode) JsonSupport.firstPresent(
+                        JsonSupport.firstPresent(response, "result"),
+                        "data"
+                    );
+                    if (chunk != null) {
+                        this.partialData.computeIfAbsent(requestId, key -> JsonSupport.array()).addAll(chunk);
+                    }
+                    continue;
+                }
+
+                JsonNode error = JsonSupport.firstPresent(response, "error");
+                if (error != null && !error.isNull()) {
+                    future.completeExceptionally(mapError(error));
+                    this.partialData.remove(requestId);
+                    continue;
+                }
+
+                JsonNode result = JsonSupport.firstPresent(response, "result");
+                ArrayNode partialData = this.partialData.remove(requestId);
+                if (partialData != null) {
+                    ObjectNode resultObject = JsonSupport.objectNode(result);
+                    ArrayNode existing = (ArrayNode) JsonSupport.firstPresent(resultObject, "data");
+                    ArrayNode merged = JsonSupport.array();
+                    merged.addAll(partialData);
+                    if (existing != null) {
+                        merged.addAll(existing);
+                    }
+                    resultObject.set("data", merged);
+                    future.complete(resultObject);
+                } else {
+                    future.complete(result);
+                }
+            }
+        } catch (Exception e) {
+            ProtocolException error = new ProtocolException(
+                buildEngineFailureMessage(this.engine.stderrOutput()),
+                e
+            );
+            for (CompletableFuture<JsonNode> future : this.pending.values()) {
+                future.completeExceptionally(error);
+            }
+        }
+    }
+
+    private static RuntimeException mapError(JsonNode error) {
+        Integer code = JsonSupport.asInteger(JsonSupport.firstPresent(error, "code"));
+        String message = JsonSupport.asString(JsonSupport.firstPresent(error, "message"));
+        JsonNode data = JsonSupport.firstPresent(error, "data");
+        if (code == null) {
+            return new ProtocolException(message == null ? "Unknown engine error" : message);
+        }
+        if (code.intValue() == 3004) {
+            return new NotFoundException("[" + code + "] " + message, code, data);
+        }
+        if (code.intValue() >= 4001 && code.intValue() <= 4004) {
+            return new TransactionException("[" + code + "] " + message, code, data);
+        }
+        return new NautilusException("[" + code + "] " + message, code, data);
+    }
+
+    private static String buildEngineFailureMessage(String stderr) {
+        if (stderr != null && !stderr.isBlank()) {
+            return "Engine process exited unexpectedly. Details: " + stderr.trim();
+        }
+        return "Engine process exited unexpectedly (no output on stderr).";
+    }
+}

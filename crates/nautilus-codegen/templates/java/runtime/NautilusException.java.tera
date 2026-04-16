@@ -1,0 +1,34 @@
+package {{ package_name }}.internal;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+public class NautilusException extends RuntimeException {
+    private final Integer code;
+    private final JsonNode data;
+
+    public NautilusException(String message) {
+        this(message, null, null, null);
+    }
+
+    public NautilusException(String message, Throwable cause) {
+        this(message, null, null, cause);
+    }
+
+    public NautilusException(String message, Integer code, JsonNode data) {
+        this(message, code, data, null);
+    }
+
+    public NautilusException(String message, Integer code, JsonNode data, Throwable cause) {
+        super(message, cause);
+        this.code = code;
+        this.data = data;
+    }
+
+    public Integer code() {
+        return this.code;
+    }
+
+    public JsonNode data() {
+        return this.data;
+    }
+}

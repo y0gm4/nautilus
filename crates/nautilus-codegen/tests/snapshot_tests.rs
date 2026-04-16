@@ -8,6 +8,7 @@
 use nautilus_codegen::{
     enum_gen::generate_all_enums,
     generator::generate_all_models,
+    java::generate_java_client,
     js::{generate_all_js_models, generate_js_client, js_runtime_files},
     python::{
         generate_all_python_models, generate_python_client, generate_python_enums,
@@ -20,6 +21,14 @@ fn validate(source: &str) -> nautilus_schema::ir::SchemaIr {
     validate_schema_source(source)
         .expect("validation failed")
         .ir
+}
+
+fn generated_java_file<'a>(files: &'a [(String, String)], suffix: &str) -> &'a str {
+    files
+        .iter()
+        .find(|(path, _)| path.ends_with(suffix))
+        .map(|(_, code)| code.as_str())
+        .unwrap_or_else(|| panic!("missing generated Java file ending with '{suffix}'"))
 }
 
 #[test]
@@ -941,5 +950,130 @@ model User {
     assert!(
         js_code.contains("if (args?.chunkSize != null) request['chunkSize'] = args.chunkSize;"),
         "expected generated JS findMany() to forward chunkSize at the protocol level:\n{js_code}"
+    );
+}
+
+#[test]
+fn test_java_sync_generation_exposes_model_delegate_and_autoregister_accessor() {
+    let ir = validate(
+        r#"
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+  interface   = "sync"
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+  role Role
+}
+"#,
+    );
+    let files =
+        generate_java_client(&ir, "schema.nautilus", false).expect("generate_java_client failed");
+    let user_model = generated_java_file(&files, "model/User.java");
+    let nautilus_client = generated_java_file(&files, "client/Nautilus.java");
+
+    assert!(
+        user_model.contains("public static UserDelegate nautilus()"),
+        "expected generated Java model to expose static nautilus() accessor:\n{user_model}"
+    );
+    assert!(
+        user_model.contains("GlobalNautilusRegistry.require()"),
+        "expected generated Java model to resolve the auto-registered client:\n{user_model}"
+    );
+    assert!(
+        nautilus_client.contains("GlobalNautilusRegistry.register(this);"),
+        "expected generated Java client to auto-register itself when configured:\n{nautilus_client}"
+    );
+
+    insta::assert_snapshot!("java_user_model_sync", user_model);
+}
+
+#[test]
+fn test_java_async_generation_exposes_completable_future_transaction_api() {
+    let ir = validate(
+        r#"
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+  interface   = "async"
+}
+
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let files =
+        generate_java_client(&ir, "schema.nautilus", true).expect("generate_java_client failed");
+    let delegate = generated_java_file(&files, "client/UserDelegate.java");
+    let nautilus_client = generated_java_file(&files, "client/Nautilus.java");
+
+    assert!(
+        delegate.contains("CompletableFuture<List<User>> findMany()"),
+        "expected generated Java async delegate to expose CompletableFuture APIs:\n{delegate}"
+    );
+    assert!(
+        nautilus_client.contains(
+            "public <T> CompletableFuture<T> transaction(Function<TransactionClient, CompletableFuture<T>> callback)"
+        ),
+        "expected generated Java async client to expose CompletableFuture transaction API:\n{nautilus_client}"
+    );
+
+    insta::assert_snapshot!("java_nautilus_async", nautilus_client);
+}
+
+#[test]
+fn test_java_runtime_loads_dotenv_before_spawning_engine() {
+    let ir = validate(
+        r#"
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+  interface   = "sync"
+}
+
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let files =
+        generate_java_client(&ir, "schema.nautilus", false).expect("generate_java_client failed");
+    let engine_process = generated_java_file(&files, "internal/EngineProcess.java");
+
+    assert!(
+        engine_process.contains("loadDotenv(builder.environment(), schemaPath);"),
+        "expected generated Java runtime to load .env before starting the engine:\n{engine_process}"
+    );
+    assert!(
+        engine_process.contains("Path candidate = root.resolve(\".env\");"),
+        "expected generated Java runtime to search for .env files near the schema:\n{engine_process}"
+    );
+    assert!(
+        engine_process.contains("environment.putIfAbsent(key, value);"),
+        "expected generated Java runtime to preserve pre-existing environment variables:\n{engine_process}"
+    );
+    assert!(
+        engine_process.contains("Optional<String> localBinary = findLocalBinary(schemaPath);"),
+        "expected generated Java runtime to prefer a local nautilus binary before PATH lookup:\n{engine_process}"
     );
 }

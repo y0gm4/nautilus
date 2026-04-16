@@ -1,0 +1,17 @@
+package {{ package_name }}.internal;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+public final class ProtocolException extends NautilusException {
+    public ProtocolException(String message) {
+        super(message);
+    }
+
+    public ProtocolException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
+    public ProtocolException(String message, Integer code, JsonNode data) {
+        super(message, code, data);
+    }
+}

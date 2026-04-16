@@ -276,6 +276,18 @@ fn completion_inside_generator_only_contains_generator_fields() {
         "missing recursive_type_depth: {:?}",
         labels
     );
+    assert!(labels.contains(&"package"), "missing package: {:?}", labels);
+    assert!(
+        labels.contains(&"group_id"),
+        "missing group_id: {:?}",
+        labels
+    );
+    assert!(
+        labels.contains(&"artifact_id"),
+        "missing artifact_id: {:?}",
+        labels
+    );
+    assert!(labels.contains(&"mode"), "missing mode: {:?}", labels);
     assert!(!labels.contains(&"url"), "unexpected url: {:?}", labels);
 }
 
@@ -419,7 +431,8 @@ generator client {
     assert!(
         h.content.contains("nautilus-client-rs")
             && h.content.contains("nautilus-client-py")
-            && h.content.contains("nautilus-client-js"),
+            && h.content.contains("nautilus-client-js")
+            && h.content.contains("nautilus-client-java"),
         "unexpected hover content: {}",
         h.content
     );

@@ -1,0 +1,25 @@
+package {{ package_name }}.client;
+
+{%- for import in imports %}
+import {{ import }};
+{%- endfor %}
+
+public final class TransactionClient extends BaseTransactionClient {
+{%- for model in models %}
+    private final {{ model.delegate_name }} {{ model.camel }};
+{%- endfor %}
+
+    public TransactionClient(BaseNautilusClient parent, String transactionId) {
+        super(parent, transactionId);
+{%- for model in models %}
+        this.{{ model.camel }} = new {{ model.delegate_name }}(this);
+{%- endfor %}
+    }
+
+{%- for model in models %}
+    public {{ model.delegate_name }} {{ model.camel }}() {
+        return this.{{ model.camel }};
+    }
+
+{%- endfor %}
+}

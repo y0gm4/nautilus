@@ -1,0 +1,258 @@
+package {{ package_name }}.internal;
+
+import {{ package_name }}.client.NautilusOptions;
+import java.io.BufferedInputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+public final class EngineProcess {
+    private static final String WINDOWS_BINARY = "nautilus.exe";
+    private static final String WINDOWS_LEGACY_BINARY = "nautilus-engine.exe";
+    private static final String UNIX_BINARY = "nautilus";
+    private static final String UNIX_LEGACY_BINARY = "nautilus-engine";
+
+    private final NautilusOptions options;
+    private Process process;
+    private Thread stderrThread;
+    private final StringBuilder stderrBuffer = new StringBuilder();
+
+    public EngineProcess(NautilusOptions options) {
+        this.options = options;
+    }
+
+    public synchronized void spawn(String schemaPath) throws IOException {
+        if (this.process != null && this.process.isAlive()) {
+            return;
+        }
+
+        String resolved = resolveBinary(schemaPath);
+        boolean legacy = resolved.endsWith(WINDOWS_LEGACY_BINARY) || resolved.endsWith(UNIX_LEGACY_BINARY);
+
+        List<String> command = new ArrayList<>();
+        command.add(resolved);
+        if (legacy) {
+            command.add("--schema");
+            command.add(schemaPath);
+        } else {
+            command.add("engine");
+            command.add("serve");
+            command.add("--schema");
+            command.add(schemaPath);
+        }
+        if (this.options.migrate()) {
+            command.add("--migrate");
+        }
+
+        ProcessBuilder builder = new ProcessBuilder(command);
+        loadDotenv(builder.environment(), schemaPath);
+        this.process = builder.start();
+        startStderrReader();
+    }
+
+    public synchronized void terminate() {
+        if (this.process == null) {
+            return;
+        }
+
+        this.process.destroy();
+        try {
+            this.process.waitFor();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        if (this.process.isAlive()) {
+            this.process.destroyForcibly();
+        }
+
+        this.process = null;
+    }
+
+    public synchronized boolean isRunning() {
+        return this.process != null && this.process.isAlive();
+    }
+
+    public synchronized Process process() {
+        return this.process;
+    }
+
+    public synchronized String stderrOutput() {
+        return this.stderrBuffer.toString();
+    }
+
+    private void startStderrReader() {
+        this.stderrBuffer.setLength(0);
+        this.stderrThread = new Thread(() -> {
+            Process current = this.process;
+            if (current == null) {
+                return;
+            }
+            try (BufferedInputStream input = new BufferedInputStream(current.getErrorStream())) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = input.read(buffer)) >= 0) {
+                    if (read > 0) {
+                        synchronized (this.stderrBuffer) {
+                            this.stderrBuffer.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
+                        }
+                    }
+                }
+            } catch (IOException ignored) {
+            }
+        }, "nautilus-java-engine-stderr");
+        this.stderrThread.setDaemon(true);
+        this.stderrThread.start();
+    }
+
+    private String resolveBinary(String schemaPath) {
+        if (this.options.enginePath() != null && !this.options.enginePath().isBlank()) {
+            return this.options.enginePath();
+        }
+
+        Optional<String> workspaceBinary = findWorkspaceBinary(schemaPath);
+        if (workspaceBinary.isPresent()) {
+            return workspaceBinary.get();
+        }
+
+        Optional<String> localBinary = findLocalBinary(schemaPath);
+        if (localBinary.isPresent()) {
+            return localBinary.get();
+        }
+
+        for (String candidate : binaryCandidates()) {
+            Path resolved = findOnPath(candidate);
+            if (resolved != null) {
+                return resolved.toString();
+            }
+        }
+
+        throw new IllegalStateException(
+            "Could not find a Nautilus engine binary. Install the nautilus CLI or set NautilusOptions.enginePath(...)"
+        );
+    }
+
+    private static void loadDotenv(Map<String, String> environment, String schemaPath) {
+        Optional<Path> dotenvPath = findDotenvPath(schemaPath);
+        if (dotenvPath.isEmpty()) {
+            return;
+        }
+
+        try {
+            for (String line : Files.readAllLines(dotenvPath.get(), StandardCharsets.UTF_8)) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    continue;
+                }
+
+                int eqIndex = trimmed.indexOf('=');
+                if (eqIndex < 1) {
+                    continue;
+                }
+
+                String key = trimmed.substring(0, eqIndex).trim();
+                String value = trimmed.substring(eqIndex + 1).trim();
+                if (
+                    value.length() >= 2 &&
+                    (
+                        (value.charAt(0) == '"' && value.charAt(value.length() - 1) == '"') ||
+                        (value.charAt(0) == '\'' && value.charAt(value.length() - 1) == '\'')
+                    )
+                ) {
+                    value = value.substring(1, value.length() - 1);
+                }
+
+                if (!key.isEmpty()) {
+                    environment.putIfAbsent(key, value);
+                }
+            }
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static Optional<Path> findDotenvPath(String schemaPath) {
+        for (Path root : searchRoots(schemaPath)) {
+            Path candidate = root.resolve(".env");
+            if (Files.isRegularFile(candidate)) {
+                return Optional.of(candidate);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<String> findWorkspaceBinary(String schemaPath) {
+        for (Path root : searchRoots(schemaPath)) {
+            for (String buildDir : List.of("debug", "release")) {
+                for (String binary : binaryCandidates()) {
+                    Path candidate = root.resolve("target").resolve(buildDir).resolve(binary);
+                    if (Files.isRegularFile(candidate)) {
+                        return Optional.of(candidate.toString());
+                    }
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<String> findLocalBinary(String schemaPath) {
+        for (Path root : searchRoots(schemaPath)) {
+            for (String binary : binaryCandidates()) {
+                Path candidate = root.resolve(binary);
+                if (Files.isRegularFile(candidate)) {
+                    return Optional.of(candidate.toString());
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static List<String> binaryCandidates() {
+        boolean windows = System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
+        if (windows) {
+            return List.of(WINDOWS_BINARY, WINDOWS_LEGACY_BINARY);
+        }
+        return List.of(UNIX_BINARY, UNIX_LEGACY_BINARY);
+    }
+
+    private static Path findOnPath(String binary) {
+        String pathEnv = System.getenv("PATH");
+        if (pathEnv == null || pathEnv.isBlank()) {
+            return null;
+        }
+        String separator = System.getProperty("path.separator");
+        for (String entry : pathEnv.split(separator)) {
+            Path candidate = Paths.get(entry).resolve(binary);
+            if (Files.isRegularFile(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static List<Path> searchRoots(String schemaPath) {
+        Set<Path> seen = new HashSet<>();
+        List<Path> roots = new ArrayList<>();
+
+        Path current = Paths.get(schemaPath).toAbsolutePath().getParent();
+        while (current != null && seen.add(current)) {
+            roots.add(current);
+            current = current.getParent();
+        }
+
+        Path cwd = Paths.get("").toAbsolutePath();
+        if (seen.add(cwd)) {
+            roots.add(cwd);
+        }
+
+        return roots;
+    }
+}

@@ -944,6 +944,26 @@ fn generator_field_completions() -> Vec<CompletionItem> {
                     .to_string(),
             ),
         ),
+        CompletionItem::new(
+            "package",
+            CompletionKind::FieldName,
+            Some("Root Java package for generated sources".to_string()),
+        ),
+        CompletionItem::new(
+            "group_id",
+            CompletionKind::FieldName,
+            Some("Maven groupId for the Java module".to_string()),
+        ),
+        CompletionItem::new(
+            "artifact_id",
+            CompletionKind::FieldName,
+            Some("Maven artifactId for the Java module".to_string()),
+        ),
+        CompletionItem::new(
+            "mode",
+            CompletionKind::FieldName,
+            Some("Java output mode: \"maven\" (default) or \"jar\"".to_string()),
+        ),
     ]
 }
 
@@ -1026,6 +1046,12 @@ fn config_value_completions(key: &str, block_kind: Option<ConfigBlockKind>) -> V
                     CompletionKind::Keyword,
                     Some("JavaScript/TypeScript client generator".to_string()),
                 ),
+                CompletionItem::with_insert(
+                    "nautilus-client-java",
+                    "\"nautilus-client-java\"",
+                    CompletionKind::Keyword,
+                    Some("Java client generator".to_string()),
+                ),
             ],
             None => vec![
                 CompletionItem::with_insert(
@@ -1064,6 +1090,12 @@ fn config_value_completions(key: &str, block_kind: Option<ConfigBlockKind>) -> V
                     CompletionKind::Keyword,
                     Some("JavaScript/TypeScript client generator".to_string()),
                 ),
+                CompletionItem::with_insert(
+                    "nautilus-client-java",
+                    "\"nautilus-client-java\"",
+                    CompletionKind::Keyword,
+                    Some("Java client generator".to_string()),
+                ),
             ],
         },
         "interface" => vec![
@@ -1078,6 +1110,20 @@ fn config_value_completions(key: &str, block_kind: Option<ConfigBlockKind>) -> V
                 "\"async\"",
                 CompletionKind::Keyword,
                 Some("Asynchronous client interface".to_string()),
+            ),
+        ],
+        "mode" => vec![
+            CompletionItem::with_insert(
+                "maven",
+                "\"maven\"",
+                CompletionKind::Keyword,
+                Some("Generate a Maven module (default)".to_string()),
+            ),
+            CompletionItem::with_insert(
+                "jar",
+                "\"jar\"",
+                CompletionKind::Keyword,
+                Some("Also build a plain Java jar bundle under output/dist".to_string()),
             ),
         ],
         _ => Vec::new(),

@@ -273,7 +273,7 @@ fn read_app_package_version(app_root: &Path) -> Option<String> {
 }
 
 fn normalize_version_label(version: &str) -> &str {
-    version.trim().trim_start_matches(|c| c == 'v' || c == 'V')
+    version.trim().trim_start_matches(['v', 'V'])
 }
 
 fn same_version(left: &str, right: &str) -> bool {

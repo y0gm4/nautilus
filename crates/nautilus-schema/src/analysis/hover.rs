@@ -196,7 +196,7 @@ pub fn config_field_hover(key: &str) -> String {
             "**provider**  \n",
             "Specifies the database provider or code-generator target.  \n\n",
             "Datasource values: `\"postgresql\"`, `\"mysql\"`, `\"sqlite\"`  \n",
-            "Generator values: `\"nautilus-client-rs\"`, `\"nautilus-client-py\"`, `\"nautilus-client-js\"`",
+            "Generator values: `\"nautilus-client-rs\"`, `\"nautilus-client-py\"`, `\"nautilus-client-js\"`, `\"nautilus-client-java\"`",
         ).to_string(),
         "url" => concat!(
             "**url**  \n",
@@ -229,6 +229,31 @@ pub fn config_field_hover(key: &str) -> String {
             "At the maximum depth the `include` field is omitted to prevent infinite type recursion.  \n\n",
             "Example: `recursive_type_depth = 3`",
         ).to_string(),
+        "package" => concat!(
+            "**package**  \n",
+            "*(Java client only)* Root Java package for the generated client sources.  \n\n",
+            "Example: `package = \"com.acme.db\"`",
+        )
+        .to_string(),
+        "group_id" => concat!(
+            "**group_id**  \n",
+            "*(Java client only)* Maven `groupId` used in the generated `pom.xml`.  \n\n",
+            "Example: `group_id = \"com.acme\"`",
+        )
+        .to_string(),
+        "artifact_id" => concat!(
+            "**artifact_id**  \n",
+            "*(Java client only)* Maven `artifactId` used in the generated `pom.xml`.  \n\n",
+            "Example: `artifact_id = \"db-client\"`",
+        )
+        .to_string(),
+        "mode" => concat!(
+            "**mode**  \n",
+            "*(Java client only)* Controls the Java packaging output.  \n\n",
+            "- `\"maven\"` *(default)* — generate the Maven module layout under `output/`.  \n",
+            "- `\"jar\"` — generate the Maven module layout and also build a plain Java jar bundle under `output/dist/`.",
+        )
+        .to_string(),
         other => format!("**{other}**"),
     }
 }

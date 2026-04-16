@@ -1,0 +1,7 @@
+package {{ package_name }}.enums;
+
+public enum {{ name }} {
+{%- for variant in variants %}
+    {{ variant }}{% if not loop.last %},{% else %};{% endif %}
+{%- endfor %}
+}

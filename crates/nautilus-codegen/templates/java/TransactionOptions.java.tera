@@ -1,0 +1,24 @@
+package {{ package_name }}.client;
+
+public final class TransactionOptions {
+    private int timeoutMs = 5000;
+    private IsolationLevel isolationLevel;
+
+    public TransactionOptions timeoutMs(int timeoutMs) {
+        this.timeoutMs = timeoutMs;
+        return this;
+    }
+
+    public TransactionOptions isolationLevel(IsolationLevel isolationLevel) {
+        this.isolationLevel = isolationLevel;
+        return this;
+    }
+
+    public int timeoutMs() {
+        return this.timeoutMs;
+    }
+
+    public IsolationLevel isolationLevel() {
+        return this.isolationLevel;
+    }
+}

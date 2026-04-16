@@ -7,7 +7,7 @@ Nautilus is a schema-first ORM toolkit built around a Rust query engine.
 This repository currently includes:
 
 - a `.nautilus` schema language
-- generators for Rust, Python, and JavaScript/TypeScript clients
+- generators for Rust, Python, JavaScript/TypeScript, and Java clients
 - a `nautilus` CLI for validate/format/generate/db/migrate workflows plus Studio app management
 - a JSON-RPC engine over stdin/stdout
 - an LSP server and a VS Code extension
@@ -19,7 +19,7 @@ This repository currently includes:
 | --- | --- |
 | [crates/nautilus-cli](crates/nautilus-cli/README.md) | `nautilus` CLI (`generate`, `validate`, `format`, `db`, `migrate`, `engine`, `python`, `studio`) |
 | [crates/nautilus-schema](crates/nautilus-schema/README.md) | Lexer, parser, validator, formatter, editor analysis for `.nautilus` |
-| [crates/nautilus-codegen](crates/nautilus-codegen/README.md) | Rust / Python / JS client generation |
+| [crates/nautilus-codegen](crates/nautilus-codegen/README.md) | Rust / Python / JS / Java client generation |
 | [crates/nautilus-engine](crates/nautilus-engine/README.md) | JSON-RPC engine runtime |
 | [crates/nautilus-protocol](crates/nautilus-protocol/README.md) | Wire-format types and method contracts |
 | [crates/nautilus-core](crates/nautilus-core/README.md) | Query AST, expressions, typed columns, values |
@@ -100,7 +100,7 @@ datasource db {
 }
 
 generator client {
-  provider = "nautilus-client-py"  // or "nautilus-client-rs", "nautilus-client-js"
+  provider = "nautilus-client-py"  // or "nautilus-client-rs", "nautilus-client-js", "nautilus-client-java"
   output   = "db"
 }
 
@@ -222,7 +222,49 @@ If `--schema` is omitted, schema-based commands auto-detect the first
 Generated clients are local build artifacts, not registry packages. If your
 schema uses `output = "./db"`, the normal consumption path is to import that
 directory directly, for example `from db import Nautilus` in Python or
-`import { Nautilus } from "./db/index.js"` in JavaScript.
+`import { Nautilus } from "./db/index.js"` in JavaScript. For Java, configure
+`package`, `group_id`, and `artifact_id`; then either depend on the generated
+`output` module from Maven/Gradle or set `mode = "jar"` and use
+`output/dist/{artifactId}.jar` together with `output/dist/lib/*` from plain
+`javac` / `java`.
+
+### Java generator setup
+
+If you target Java, configure the generator block explicitly:
+
+```prisma
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "db"
+  package     = "com.example.db"
+  group_id    = "com.example"
+  artifact_id = "nautilus-client"
+  interface   = "async"
+  mode        = "jar" // optional; default is "maven"
+}
+```
+
+With `mode = "maven"`, depend on the generated `db/` module from Maven or
+Gradle. With `mode = "jar"`, `nautilus generate` also writes:
+
+- `db/dist/nautilus-client.jar`
+- `db/dist/lib/*.jar`
+
+For plain Java usage, compile and run against those files directly.
+
+POSIX:
+
+```bash
+javac --release 21 -cp "db/dist/nautilus-client.jar:db/dist/lib/*" Main.java
+java -cp ".:db/dist/nautilus-client.jar:db/dist/lib/*" Main
+```
+
+Windows:
+
+```powershell
+javac --release 21 -cp "db\dist\nautilus-client.jar;db\dist\lib\*" Main.java
+java -cp ".;db\dist\nautilus-client.jar;db\dist\lib\*" Main
+```
 
 ## Usage Examples
 
@@ -375,6 +417,66 @@ async function main() {
 
 main();
 ```
+
+#### Java
+
+Assume `provider = "nautilus-client-java"` and `interface = "async"` in the
+generator block.
+
+```java
+import com.example.db.client.Nautilus;
+import com.example.db.client.NautilusOptions;
+import com.example.db.enums.Role;
+import com.example.db.model.User;
+import java.math.BigDecimal;
+import java.util.List;
+
+public final class App {
+    public static void main(String[] args) {
+        try (var client = new Nautilus(new NautilusOptions().autoRegister(true))) {
+            User user = client.user().create(u -> u
+                .email("alice@example.com")
+                .username("alice")
+                .name("Alice Smith")
+                .role(Role.ADMIN)
+                .tags(List.of("vip", "early-adopter"))
+            ).join();
+
+            User found = client.user().findUnique(q -> q
+                .where(w -> w.email("alice@example.com"))
+            ).join();
+
+            List<User> admins = User.nautilus().findMany(q -> q
+                .where(w -> w.role(Role.ADMIN))
+            ).join();
+
+            client.user().update(q -> q
+                .where(w -> w.email("alice@example.com"))
+                .data(u -> u
+                    .role(Role.MODERATOR)
+                    .bio("Hello world")
+                )
+            ).join();
+
+            client.product().create(p -> p
+                .name("Mechanical Keyboard")
+                .slug("mechanical-keyboard")
+                .price(new BigDecimal("149.99"))
+                .discount(new BigDecimal("20.00"))
+                .stock(50)
+                .tags(List.of("electronics", "peripherals"))
+            ).join();
+
+            client.user().delete(q -> q
+                .where(w -> w.email("alice@example.com"))
+            ).join();
+        }
+    }
+}
+```
+
+If you generate `interface = "sync"`, the same API shape returns plain values
+instead of `CompletableFuture`, so you can drop `.join()`.
 
 #### Rust
 
@@ -550,6 +652,45 @@ async function main() {
 main();
 ```
 
+#### Java
+
+Assume `provider = "nautilus-client-java"` and `interface = "async"` in the
+generator block.
+
+```java
+import com.example.db.client.Nautilus;
+import com.example.db.enums.OrderStatus;
+import com.example.db.model.Order;
+import java.math.BigDecimal;
+
+public final class App {
+    public static void main(String[] args) {
+        try (var client = new Nautilus()) {
+            Order order = client.transaction(tx ->
+                tx.user().create(u -> u
+                    .email("bob@example.com")
+                    .username("bob")
+                    .name("Bob Jones")
+                ).thenCompose(user ->
+                    tx.order().create(o -> o
+                        .userId(user.id())
+                        .status(OrderStatus.CONFIRMED)
+                        .totalAmount(new BigDecimal("149.99"))
+                    ).thenCompose(order ->
+                        tx.orderItem().create(i -> i
+                            .orderId(order.id())
+                            .productId(1L)
+                            .quantity(1)
+                            .unitPrice(new BigDecimal("149.99"))
+                        ).thenApply(ignored -> order)
+                    )
+                )
+            ).join();
+        }
+    }
+}
+```
+
 #### Rust
 
 ```rust
@@ -606,8 +747,9 @@ async fn main() -> anyhow::Result<()> {
 | `nautilus-client-rs` | Rust source tree | `nautilus generate --standalone` also emits a `Cargo.toml`; by default generation integrates the output with the nearest Cargo workspace unless `--no-install` is used |
 | `nautilus-client-py` | Python package | Default workflow: import the generated `output` package directly. `install = true` copies the same generated files into Python `site-packages/nautilus` for local convenience; it does not publish anything to PyPI. Supports `interface = "sync"` or `interface = "async"`; `recursive_type_depth` is currently Python-only |
 | `nautilus-client-js` | JS runtime + `.d.ts` typings | Default workflow: import from the generated `output` directory. `install = true` copies the same generated files into the nearest `node_modules/nautilus`; it does not publish an npm package |
+| `nautilus-client-java` | Generated Maven module or plain jar bundle | Default workflow: depend on the generated `output` module from your Java build. Set `mode = "jar"` to also build `output/dist/{artifactId}.jar` plus `output/dist/lib/*.jar` for plain Java usage; temporary build artifacts are cleaned before `generate` returns. `install = true` is currently ignored for Java |
 
-`nautilus-client-rs`, `nautilus-client-py`, and `nautilus-client-js` are schema
+`nautilus-client-rs`, `nautilus-client-py`, `nautilus-client-js`, and `nautilus-client-java` are schema
 provider names that select the generator. They are not necessarily the module
 or package names you import at runtime.
 

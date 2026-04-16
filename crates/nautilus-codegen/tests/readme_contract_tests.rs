@@ -1,5 +1,5 @@
 #[test]
-fn readme_tracks_generated_js_and_python_install_story() {
+fn readme_tracks_generated_client_install_story() {
     let readme = std::fs::read_to_string(format!("{}/README.md", env!("CARGO_MANIFEST_DIR")))
         .expect("failed to read codegen README");
 
@@ -8,5 +8,11 @@ fn readme_tracks_generated_js_and_python_install_story() {
     assert!(readme.contains("not a PyPI publish step"));
     assert!(readme.contains("node_modules/nautilus"));
     assert!(readme.contains("not an npm publish step"));
+    assert!(readme.contains("nautilus-client-java"));
+    assert!(readme.contains("Maven module"));
+    assert!(readme.contains("mode = \"jar\""));
+    assert!(readme.contains("`install = true` is ignored"));
+    assert!(readme.contains(".nautilus-build"));
+    assert!(readme.contains("javac --release 21"));
     assert!(readme.contains("The checked-in examples show the intended consumption pattern today"));
 }

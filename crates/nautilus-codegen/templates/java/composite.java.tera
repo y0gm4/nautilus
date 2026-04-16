@@ -1,0 +1,30 @@
+package {{ package_name }}.types;
+
+{%- for import in imports %}
+import {{ import }};
+{%- endfor %}
+
+public record {{ name }}(
+{%- for component in components %}
+    {{ component.ty }} {{ component.name }}{% if not loop.last %},{% endif %}
+{%- endfor %}
+) implements {{ implements_type }} {
+    public static {{ name }} fromJsonNode(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+{%- for read in reads %}
+{{ read }}
+{%- endfor %}
+        return new {{ name }}({{ ctor_args | join(sep=", ") }});
+    }
+
+    @Override
+    public JsonNode toJsonNode() {
+        ObjectNode node = JsonSupport.object();
+{%- for write in writes %}
+{{ write }}
+{%- endfor %}
+        return node;
+    }
+}

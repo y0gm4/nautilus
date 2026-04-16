@@ -1,0 +1,18 @@
+package {{ package_name }}.client;
+
+public enum IsolationLevel {
+    READ_UNCOMMITTED("readUncommitted"),
+    READ_COMMITTED("readCommitted"),
+    REPEATABLE_READ("repeatableRead"),
+    SERIALIZABLE("serializable");
+
+    private final String wireValue;
+
+    IsolationLevel(String wireValue) {
+        this.wireValue = wireValue;
+    }
+
+    public String wireValue() {
+        return this.wireValue;
+    }
+}

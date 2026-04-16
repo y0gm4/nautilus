@@ -112,6 +112,16 @@ pub enum InterfaceKind {
     Async,
 }
 
+/// Packaging mode for the generated Java client bundle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JavaGenerationMode {
+    /// Generate the default Maven module layout rooted at `output/`.
+    #[default]
+    Maven,
+    /// Generate the Maven module layout and also build a plain Java jar bundle.
+    Jar,
+}
+
 /// Validated generator configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneratorIr {
@@ -126,6 +136,14 @@ pub struct GeneratorIr {
     pub interface: InterfaceKind,
     /// Depth of recursive include TypedDicts generated for the Python client.
     pub recursive_type_depth: usize,
+    /// Root Java package for the generated client (Java provider only).
+    pub java_package: Option<String>,
+    /// Maven groupId for the generated Java module (Java provider only).
+    pub java_group_id: Option<String>,
+    /// Maven artifactId for the generated Java module (Java provider only).
+    pub java_artifact_id: Option<String>,
+    /// Java packaging mode (Java provider only).
+    pub java_mode: Option<JavaGenerationMode>,
     /// Span of the generator block.
     pub span: Span,
 }
@@ -561,6 +579,8 @@ pub enum ClientProvider {
     Python,
     /// JavaScript/TypeScript client (provider string: `"nautilus-client-js"`).
     JavaScript,
+    /// Java client (provider string: `"nautilus-client-java"`).
+    Java,
 }
 
 /// Error returned when parsing an unknown client provider string.
@@ -583,6 +603,7 @@ impl FromStr for ClientProvider {
             "nautilus-client-rs" => Ok(ClientProvider::Rust),
             "nautilus-client-py" => Ok(ClientProvider::Python),
             "nautilus-client-js" => Ok(ClientProvider::JavaScript),
+            "nautilus-client-java" => Ok(ClientProvider::Java),
             _ => Err(ParseClientProviderError),
         }
     }
@@ -594,6 +615,7 @@ impl ClientProvider {
         "nautilus-client-rs",
         "nautilus-client-py",
         "nautilus-client-js",
+        "nautilus-client-java",
     ];
 
     /// The canonical provider string used in `.nautilus` schema files.
@@ -602,6 +624,7 @@ impl ClientProvider {
             ClientProvider::Rust => "nautilus-client-rs",
             ClientProvider::Python => "nautilus-client-py",
             ClientProvider::JavaScript => "nautilus-client-js",
+            ClientProvider::Java => "nautilus-client-java",
         }
     }
 }

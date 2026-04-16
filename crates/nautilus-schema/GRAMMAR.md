@@ -97,6 +97,22 @@ generator client {
 }
 ```
 
+Java also supports a dedicated generator shape:
+
+```prisma
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "../generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+  mode        = "jar"
+  interface   = "async"
+}
+```
+
+The Java-only fields are `package`, `group_id`, `artifact_id`, and `mode`.
+
 ### Model
 
 ```ebnf
