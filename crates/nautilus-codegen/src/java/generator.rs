@@ -44,6 +44,10 @@ static JAVA_TEMPLATES: std::sync::LazyLock<Tera> = std::sync::LazyLock::new(|| {
             include_str!("../../templates/java/delegate.java.tera"),
         ),
         (
+            "_dsl_macros.tera",
+            include_str!("../../templates/java/_dsl_macros.tera"),
+        ),
+        (
             "java_dsl.tera",
             include_str!("../../templates/java/dsl.java.tera"),
         ),
@@ -280,10 +284,7 @@ struct NautilusTemplateContext {
 }
 
 fn render(template: &str, context: &Context) -> String {
-    JAVA_TEMPLATES
-        .render(template, context)
-        .unwrap_or_else(|error| panic!("template rendering failed for '{}': {:?}", template, error))
-        .replace("\r\n", "\n")
+    crate::template::render(&JAVA_TEMPLATES, template, context)
 }
 
 /// Render a template that only requires `package_name`.
@@ -521,101 +522,145 @@ fn generate_enum_file(config: &JavaConfig, enum_ir: &EnumIr) -> String {
     render("java_enum.tera", &context)
 }
 
-fn generate_composite_file(config: &JavaConfig, composite: &CompositeTypeIr) -> String {
+/// Shared imports every Java record template (composite, model) needs for
+/// Jackson serialization helpers plus the crate-local `JsonSupport`.
+fn base_record_imports(root_package: &str) -> BTreeSet<String> {
     let mut imports = BTreeSet::new();
-    imports.insert(format!("{}.internal.JsonSupport", config.root_package));
-    imports.insert(format!("{}.internal.WireSerializable", config.root_package));
+    imports.insert(format!("{root_package}.internal.JsonSupport"));
     imports.insert("com.fasterxml.jackson.databind.JsonNode".to_string());
     imports.insert("com.fasterxml.jackson.databind.node.ObjectNode".to_string());
+    imports
+}
+
+/// Render the per-field `toJsonNode` write guard used by composite and model
+/// records. Field name doubles as the wire key because composite and model
+/// records both serialize using the logical name unchanged.
+fn format_record_field_write(field_name: &str) -> String {
+    format!(
+        "        if (this.{field_name} != null) {{\n            node.set(\"{field_name}\", JsonSupport.toJsonNode(this.{field_name}));\n        }}\n",
+    )
+}
+
+/// Per-field render artifacts collected by [`build_record_context`].
+struct RecordField {
+    component: RecordComponentContext,
+    imports: BTreeSet<String>,
+    read: String,
+    ctor_arg: String,
+}
+
+/// Assemble the Tera [`Context`] shared by `composite.java.tera` and
+/// `model.java.tera`. Callers supply the record name, the extra imports
+/// (beyond the Jackson/JsonSupport base set), the per-field renderer, and the
+/// optional static-delegate accessor that only models emit.
+fn build_record_context<I, F>(
+    config: &JavaConfig,
+    name: String,
+    extra_imports: impl IntoIterator<Item = String>,
+    fields: I,
+    mut per_field: F,
+    implements_type: String,
+    static_delegate: Option<(String, String)>,
+) -> Context
+where
+    I: IntoIterator,
+    F: FnMut(I::Item) -> RecordField,
+{
+    let mut imports = base_record_imports(&config.root_package);
+    imports.extend(extra_imports);
 
     let mut components = Vec::new();
     let mut reads = Vec::new();
     let mut writes = Vec::new();
     let mut ctor_args = Vec::new();
-
-    for field in &composite.fields {
-        let (ty, field_imports) =
-            composite_field_to_java_type(field, &config.root_package, &composite.logical_name);
-        imports.extend(field_imports);
-        components.push(RecordComponentContext {
-            ty,
-            name: field.logical_name.clone(),
-        });
-        reads.push(generate_composite_field_read(field));
-        writes.push(format!(
-            "        if (this.{field_name} != null) {{\n            node.set(\"{logical}\", JsonSupport.toJsonNode(this.{field_name}));\n        }}\n",
-            field_name = field.logical_name,
-            logical = field.logical_name,
-        ));
-        ctor_args.push(field.logical_name.clone());
+    for field in fields {
+        let rendered = per_field(field);
+        imports.extend(rendered.imports);
+        writes.push(format_record_field_write(&rendered.component.name));
+        components.push(rendered.component);
+        reads.push(rendered.read);
+        ctor_args.push(rendered.ctor_arg);
     }
 
-    let context = Context::from_serialize(&RecordTemplateContext {
+    let (static_delegate, static_delegate_accessor) = match static_delegate {
+        Some((delegate, accessor)) => (Some(delegate), Some(accessor)),
+        None => (None, None),
+    };
+
+    Context::from_serialize(&RecordTemplateContext {
         package_name: config.root_package.clone(),
         imports: imports.into_iter().collect(),
-        name: composite.logical_name.clone(),
+        name,
         components,
         reads,
         writes,
         ctor_args,
-        static_delegate: None,
-        static_delegate_accessor: None,
-        implements_type: "WireSerializable".to_string(),
+        static_delegate,
+        static_delegate_accessor,
+        implements_type,
     })
-    .expect("Java composite context should serialize");
+    .expect("Java record context should serialize")
+}
+
+fn generate_composite_file(config: &JavaConfig, composite: &CompositeTypeIr) -> String {
+    let extra_imports = [format!("{}.internal.WireSerializable", config.root_package)];
+    let context = build_record_context(
+        config,
+        composite.logical_name.clone(),
+        extra_imports,
+        &composite.fields,
+        |field| {
+            let (ty, field_imports) =
+                composite_field_to_java_type(field, &config.root_package, &composite.logical_name);
+            RecordField {
+                component: RecordComponentContext {
+                    ty,
+                    name: field.logical_name.clone(),
+                },
+                imports: field_imports,
+                read: generate_composite_field_read(field),
+                ctor_arg: field.logical_name.clone(),
+            }
+        },
+        "WireSerializable".to_string(),
+        None,
+    );
     render("java_composite.tera", &context)
 }
 
 fn generate_model_file(config: &JavaConfig, model: &ModelIr) -> String {
-    let mut imports = BTreeSet::new();
-    imports.insert(format!("{}.client.Nautilus", config.root_package));
-    imports.insert(format!(
-        "{}.client.{}Delegate",
-        config.root_package, model.logical_name
-    ));
-    imports.insert(format!(
-        "{}.internal.GlobalNautilusRegistry",
-        config.root_package
-    ));
-    imports.insert(format!("{}.internal.JsonSupport", config.root_package));
-    imports.insert("com.fasterxml.jackson.databind.JsonNode".to_string());
-    imports.insert("com.fasterxml.jackson.databind.node.ObjectNode".to_string());
-
-    let mut components = Vec::new();
-    let mut reads = Vec::new();
-    let mut writes = Vec::new();
-    let mut ctor_args = Vec::new();
-
-    for field in &model.fields {
-        let (ty, field_imports) =
-            field_to_java_type(field, &config.root_package, &model.logical_name);
-        imports.extend(field_imports);
-        components.push(RecordComponentContext {
-            ty,
-            name: field.logical_name.clone(),
-        });
-        reads.push(generate_model_field_read(model, field));
-        writes.push(format!(
-            "        if (this.{field_name} != null) {{\n            node.set(\"{logical}\", JsonSupport.toJsonNode(this.{field_name}));\n        }}\n",
-            field_name = field.logical_name,
-            logical = field.logical_name,
-        ));
-        ctor_args.push(field.logical_name.clone());
-    }
-
-    let context = Context::from_serialize(&RecordTemplateContext {
-        package_name: config.root_package.clone(),
-        imports: imports.into_iter().collect(),
-        name: model.logical_name.clone(),
-        components,
-        reads,
-        writes,
-        ctor_args,
-        static_delegate: Some(format!("{}Delegate", model.logical_name)),
-        static_delegate_accessor: Some(model.logical_name.to_lower_camel_case()),
-        implements_type: "NautilusModel".to_string(),
-    })
-    .expect("Java model context should serialize");
+    let extra_imports = [
+        format!("{}.client.Nautilus", config.root_package),
+        format!(
+            "{}.client.{}Delegate",
+            config.root_package, model.logical_name
+        ),
+        format!("{}.internal.GlobalNautilusRegistry", config.root_package),
+    ];
+    let context = build_record_context(
+        config,
+        model.logical_name.clone(),
+        extra_imports,
+        &model.fields,
+        |field| {
+            let (ty, field_imports) =
+                field_to_java_type(field, &config.root_package, &model.logical_name);
+            RecordField {
+                component: RecordComponentContext {
+                    ty,
+                    name: field.logical_name.clone(),
+                },
+                imports: field_imports,
+                read: generate_model_field_read(model, field),
+                ctor_arg: field.logical_name.clone(),
+            }
+        },
+        "NautilusModel".to_string(),
+        Some((
+            format!("{}Delegate", model.logical_name),
+            model.logical_name.to_lower_camel_case(),
+        )),
+    );
     render("java_model.tera", &context)
 }
 

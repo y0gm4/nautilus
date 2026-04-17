@@ -5,10 +5,16 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use crate::java::generator::JACKSON_VERSION;
 
 const JAVA_RELEASE: &str = "21";
+
+/// Per-connection timeout for Maven artifact downloads. Protects CI/build
+/// runs from hanging indefinitely on a slow mirror without being so short
+/// that legitimate cold-cache downloads fail.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
 struct MavenJarDependency {
     group_path: &'static str,
@@ -224,6 +230,7 @@ fn parse_java_home_from_settings_output(output: &str) -> Option<PathBuf> {
 
 fn materialize_runtime_dependencies(lib_dir: &Path) -> Result<Vec<PathBuf>> {
     let client = Client::builder()
+        .timeout(DOWNLOAD_TIMEOUT)
         .build()
         .context("Failed to create HTTP client for Java bundle dependencies")?;
 
@@ -239,6 +246,7 @@ fn materialize_dependency(
     lib_dir: &Path,
     client: &Client,
 ) -> Result<PathBuf> {
+    let gav = dep_gav(dep);
     let relative = repo_relative_path(dep);
     let file_name = format!("{}-{}.jar", dep.artifact_id, dep.version);
     let destination = lib_dir.join(&file_name);
@@ -248,8 +256,22 @@ fn materialize_dependency(
         if local_path.is_file() {
             fs::copy(&local_path, &destination).with_context(|| {
                 format!(
-                    "Failed to copy {} into {}",
+                    "Failed to copy {gav} from {} into {}",
                     local_path.display(),
+                    destination.display()
+                )
+            })?;
+            return Ok(destination);
+        }
+    }
+
+    let cache_path = download_cache_dir().map(|dir| dir.join(&relative));
+    if let Some(cache_path) = cache_path.as_ref() {
+        if cache_path.is_file() {
+            fs::copy(cache_path, &destination).with_context(|| {
+                format!(
+                    "Failed to copy cached {gav} from {} into {}",
+                    cache_path.display(),
                     destination.display()
                 )
             })?;
@@ -264,24 +286,39 @@ fn materialize_dependency(
     let response = client
         .get(&url)
         .send()
-        .with_context(|| format!("Failed to download Java dependency from {url}"))?;
+        .with_context(|| format!("Failed to download {gav} from {url}"))?;
 
     let status = response.status();
     if !status.is_success() {
-        bail!(
-            "Could not download Java dependency `{}` from {} (HTTP {})",
-            file_name,
-            url,
-            status
-        );
+        bail!("Could not download {gav} from {url} (HTTP {status})",);
     }
 
     let bytes = response
         .bytes()
-        .with_context(|| format!("Failed to read dependency body from {url}"))?;
+        .with_context(|| format!("Failed to read {gav} body from {url}"))?;
     fs::write(&destination, &bytes)
-        .with_context(|| format!("Failed to write {}", destination.display()))?;
+        .with_context(|| format!("Failed to write {gav} to {}", destination.display()))?;
+
+    if let Some(cache_path) = cache_path {
+        if let Some(parent) = cache_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        // Best-effort cache write: if it fails (e.g. read-only cache dir)
+        // the build still succeeded, so don't surface the error.
+        let _ = fs::write(&cache_path, &bytes);
+    }
+
     Ok(destination)
+}
+
+/// Formats a dependency as `group:artifact:version` for diagnostic messages.
+fn dep_gav(dep: &MavenJarDependency) -> String {
+    format!(
+        "{}:{}:{}",
+        dep.group_path.replace('/', "."),
+        dep.artifact_id,
+        dep.version
+    )
 }
 
 fn repo_relative_path(dep: &MavenJarDependency) -> String {
@@ -297,6 +334,27 @@ fn maven_local_repo() -> Option<PathBuf> {
     }
 
     home_dir().map(|home| home.join(".m2").join("repository"))
+}
+
+/// Per-user download cache populated by `materialize_dependency` when a JAR
+/// is fetched over the network. Sits at `~/.cache/nautilus/maven` on
+/// Unix-like hosts and under `%LOCALAPPDATA%\nautilus\maven` on Windows so
+/// subsequent offline builds (and CI caches keyed on that path) can skip
+/// the download.
+fn download_cache_dir() -> Option<PathBuf> {
+    if let Some(override_path) = env::var_os("NAUTILUS_JAVA_CACHE") {
+        return Some(PathBuf::from(override_path));
+    }
+    if cfg!(windows) {
+        env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .map(|root| root.join("nautilus").join("maven"))
+    } else {
+        if let Some(xdg) = env::var_os("XDG_CACHE_HOME") {
+            return Some(PathBuf::from(xdg).join("nautilus").join("maven"));
+        }
+        home_dir().map(|home| home.join(".cache").join("nautilus").join("maven"))
+    }
 }
 
 fn home_dir() -> Option<PathBuf> {

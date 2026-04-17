@@ -61,10 +61,7 @@ pub static TEMPLATES: std::sync::LazyLock<Tera> = std::sync::LazyLock::new(|| {
 });
 
 fn render(template: &str, ctx: &Context) -> String {
-    TEMPLATES
-        .render(template, ctx)
-        .unwrap_or_else(|e| panic!("template rendering failed for '{}': {:?}", template, e))
-        .replace("\r\n", "\n")
+    crate::template::render(&TEMPLATES, template, ctx)
 }
 
 /// Template context for a single model field in the Rust codegen backend.

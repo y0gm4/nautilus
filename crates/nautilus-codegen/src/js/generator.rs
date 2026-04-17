@@ -59,10 +59,7 @@ pub static JS_TEMPLATES: std::sync::LazyLock<Tera> = std::sync::LazyLock::new(||
 });
 
 fn render(template: &str, ctx: &Context) -> String {
-    JS_TEMPLATES
-        .render(template, ctx)
-        .unwrap_or_else(|e| panic!("template rendering failed for '{}': {:?}", template, e))
-        .replace("\r\n", "\n")
+    crate::template::render(&JS_TEMPLATES, template, ctx)
 }
 
 #[derive(Debug, Clone, Serialize)]

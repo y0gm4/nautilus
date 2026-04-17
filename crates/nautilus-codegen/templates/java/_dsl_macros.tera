@@ -1,0 +1,10 @@
+{%- macro serializable_tail() -%}
+        public ObjectNode node() {
+            return this.node.deepCopy();
+        }
+
+        @Override
+        public JsonNode toJsonNode() {
+            return node();
+        }
+{%- endmacro serializable_tail %}
