@@ -128,3 +128,29 @@ pub(super) fn wrap_mutation_result(
         context,
     )
 }
+
+/// Execute the SQL for a mutation and wrap the result.
+///
+/// When `return_data` is true, runs `execute_query_on` with the model's value
+/// hints and returns `{count, data}`. Otherwise runs `execute_affected_on` and
+/// returns `{count}`.
+pub(super) async fn finish_mutation(
+    state: &EngineState,
+    sql: &Sql,
+    exec_tag: &'static str,
+    tx_id: Option<&str>,
+    model: &ModelIr,
+    return_data: bool,
+    result_label: &str,
+) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
+    if return_data {
+        let rows = normalize_rows_with_hints(
+            state.execute_query_on(sql, exec_tag, tx_id).await?,
+            &model_scalar_value_hints(model),
+        )?;
+        wrap_mutation_result(&rows, result_label)
+    } else {
+        let count = state.execute_affected_on(sql, exec_tag, tx_id).await?;
+        wrap_count_result(count, result_label)
+    }
+}
