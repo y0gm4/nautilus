@@ -14,6 +14,22 @@ import {
 const GITHUB_REPO = "y0gm4/nautilus";
 const BIN_NAME = process.platform === "win32" ? "nautilus-lsp.exe" : "nautilus-lsp";
 const NPM_PACKAGE = "nautilus-orm-lsp";
+const DOWNLOADED_RELEASE_TAG_KEY = "nautilus.downloadedLspReleaseTag";
+
+interface GitHubReleaseAsset {
+  name: string;
+  browser_download_url: string;
+}
+
+interface GitHubRelease {
+  tag_name: string;
+  assets: GitHubReleaseAsset[];
+}
+
+interface ResolvedReleaseAsset {
+  tagName: string;
+  downloadUrl: string;
+}
 
 let client: LanguageClient | undefined;
 
@@ -24,7 +40,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     serverOptions = await resolveServerOptions(context);
   } catch (err) {
     vscode.window.showErrorMessage(
-      `nautilus-lsp: could not resolve binary — ${err}. ` +
+      `nautilus-lsp: could not resolve binary - ${err}. ` +
         `Set "nautilus.lspPath" in your settings or add nautilus-lsp to PATH.`
     );
     return;
@@ -60,7 +76,7 @@ export function deactivate(): Thenable<void> | undefined {
  * Search order:
  * 1. `nautilus.lspPath` VS Code setting (user-defined override).
  * 2. Dev build: `<repo-root>/target/debug/nautilus-lsp[.exe]`.
- * 3. Global storage cache (previously auto-downloaded binary).
+ * 3. Global storage cache (auto-downloaded binary, refreshed from GitHub when a newer release exists).
  * 4. `nautilus-lsp[.exe]` on PATH.
  * 5. Local npm install: `<workspace>/node_modules/.bin/nautilus-lsp`.
  * 6. npm package available via `npx` (global or local install).
@@ -81,8 +97,11 @@ async function resolveServerOptions(
 
   const devBuild = path.join(
     context.extensionPath,
-    "..", "..",
-    "target", "debug", BIN_NAME
+    "..",
+    "..",
+    "target",
+    "debug",
+    BIN_NAME
   );
   if (fs.existsSync(devBuild)) {
     return binaryServerOptions(devBuild);
@@ -90,7 +109,8 @@ async function resolveServerOptions(
 
   const cachedPath = getCachedBinPath(context);
   if (fs.existsSync(cachedPath)) {
-    return binaryServerOptions(cachedPath);
+    const refreshedPath = await maybeUpdateCachedLsp(context);
+    return binaryServerOptions(refreshedPath);
   }
 
   if (isOnPath(BIN_NAME)) {
@@ -147,7 +167,12 @@ function findInNodeModules(): string | undefined {
     return undefined;
   }
   for (const folder of folders) {
-    const candidate = path.join(folder.uri.fsPath, "node_modules", ".bin", BIN_NAME);
+    const candidate = path.join(
+      folder.uri.fsPath,
+      "node_modules",
+      ".bin",
+      BIN_NAME
+    );
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -172,14 +197,16 @@ function isInstalledVianpm(): boolean {
         { encoding: "utf8", timeout: 5000 }
       );
       if (result.status === 0 && result.stdout) {
-        const data = JSON.parse(result.stdout) as { dependencies?: Record<string, unknown> };
+        const data = JSON.parse(result.stdout) as {
+          dependencies?: Record<string, unknown>;
+        };
         if (data.dependencies && NPM_PACKAGE in data.dependencies) {
           return true;
         }
       }
     }
   } catch {
-    // npm not available or parse error — fall through
+    // npm not available or parse error - fall through
   }
   return false;
 }
@@ -191,31 +218,103 @@ function platformTarget(): string {
   const plat = process.platform;
   const arch = process.arch;
 
-  if (plat === "linux" && arch === "x64")   { return "x86_64-unknown-linux-gnu"; }
-  if (plat === "darwin" && arch === "x64")  { return "x86_64-apple-darwin"; }
-  if (plat === "darwin" && arch === "arm64"){ return "aarch64-apple-darwin"; }
-  if (plat === "win32"  && arch === "x64")  { return "x86_64-pc-windows-msvc"; }
+  if (plat === "linux" && arch === "x64") {
+    return "x86_64-unknown-linux-gnu";
+  }
+  if (plat === "darwin" && arch === "x64") {
+    return "x86_64-apple-darwin";
+  }
+  if (plat === "darwin" && arch === "arm64") {
+    return "aarch64-apple-darwin";
+  }
+  if (plat === "win32" && arch === "x64") {
+    return "x86_64-pc-windows-msvc";
+  }
 
   throw new Error(`Unsupported platform: ${plat}/${arch}`);
 }
 
 function releaseDownloadUrl(target: string): string {
-  const asset =
-    process.platform === "win32"
-      ? `nautilus-lsp-${target}.exe`
-      : `nautilus-lsp-${target}`;
-  return `https://github.com/${GITHUB_REPO}/releases/latest/download/${asset}`;
+  return `https://github.com/${GITHUB_REPO}/releases/latest/download/${releaseAssetName(
+    target
+  )}`;
+}
+
+function releaseAssetName(target: string): string {
+  return process.platform === "win32"
+    ? `nautilus-lsp-${target}.exe`
+    : `nautilus-lsp-${target}`;
+}
+
+async function maybeUpdateCachedLsp(
+  context: vscode.ExtensionContext
+): Promise<string> {
+  const cachedPath = getCachedBinPath(context);
+  const currentTag = context.globalState.get<string>(DOWNLOADED_RELEASE_TAG_KEY);
+
+  try {
+    const release = await fetchLatestReleaseAsset(platformTarget());
+    if (currentTag === release.tagName) {
+      return cachedPath;
+    }
+
+    const notificationMessage = currentTag
+      ? `Found a newer Nautilus LSP version (${currentTag} -> ${release.tagName}). Downloading it now.`
+      : `Found a newer Nautilus LSP version (${release.tagName}). Downloading it now.`;
+    void vscode.window.showInformationMessage(notificationMessage);
+
+    const startMessage = currentTag
+      ? `Updating nautilus-lsp to ${release.tagName}...`
+      : "Refreshing cached nautilus-lsp binary...";
+    const doneMessage = currentTag
+      ? `nautilus-lsp updated to ${release.tagName}.`
+      : `Cached nautilus-lsp binary refreshed to ${release.tagName}.`;
+
+    return downloadLspToCache(context, {
+      release,
+      startMessage,
+      doneMessage,
+    });
+  } catch {
+    // Keep using the cached binary when release lookup or download fails.
+    return cachedPath;
+  }
 }
 
 async function downloadLsp(context: vscode.ExtensionContext): Promise<string> {
-  const target = platformTarget();
-  const url = releaseDownloadUrl(target);
-  const dest = getCachedBinPath(context);
+  return downloadLspToCache(context, {});
+}
 
-  const storageDir = context.globalStorageUri.fsPath;
-  if (!fs.existsSync(storageDir)) {
-    fs.mkdirSync(storageDir, { recursive: true });
+async function downloadLspToCache(
+  context: vscode.ExtensionContext,
+  options: {
+    release?: ResolvedReleaseAsset;
+    startMessage?: string;
+    doneMessage?: string;
   }
+): Promise<string> {
+  const target = platformTarget();
+  const dest = getCachedBinPath(context);
+  let release = options.release;
+
+  if (!release) {
+    try {
+      release = await fetchLatestReleaseAsset(target);
+    } catch {
+      release = undefined;
+    }
+  }
+
+  const url = release?.downloadUrl ?? releaseDownloadUrl(target);
+  const startMessage =
+    options.startMessage ?? "Downloading nautilus-lsp binary...";
+  const doneMessage =
+    options.doneMessage ??
+    (release
+      ? `nautilus-lsp downloaded (${release.tagName}).`
+      : "nautilus-lsp downloaded.");
+
+  ensureDirectory(context.globalStorageUri.fsPath);
 
   return vscode.window.withProgress(
     {
@@ -224,15 +323,125 @@ async function downloadLsp(context: vscode.ExtensionContext): Promise<string> {
       cancellable: false,
     },
     async (progress) => {
-      progress.report({ message: "Downloading nautilus-lsp binary…" });
-      await httpsDownload(url, dest);
-      if (os.platform() !== "win32") {
-        fs.chmodSync(dest, 0o755);
-      }
-      progress.report({ message: "nautilus-lsp downloaded." });
+      progress.report({ message: startMessage });
+      await downloadBinary(url, dest);
+      await context.globalState.update(
+        DOWNLOADED_RELEASE_TAG_KEY,
+        release?.tagName
+      );
+      progress.report({ message: doneMessage });
       return dest;
     }
   );
+}
+
+async function fetchLatestReleaseAsset(
+  target: string
+): Promise<ResolvedReleaseAsset> {
+  const release = await httpsGetJson<GitHubRelease>(
+    `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`
+  );
+  const assetName = releaseAssetName(target);
+  const asset = release.assets.find((candidate) => candidate.name === assetName);
+
+  if (!asset) {
+    throw new Error(
+      `Latest GitHub release does not include the ${assetName} asset.`
+    );
+  }
+
+  return {
+    tagName: release.tag_name,
+    downloadUrl: asset.browser_download_url,
+  };
+}
+
+function ensureDirectory(dirPath: string): void {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+async function downloadBinary(url: string, dest: string): Promise<void> {
+  const tempDest = `${dest}.tmp`;
+  removeIfExists(tempDest);
+
+  try {
+    await httpsDownload(url, tempDest);
+    if (process.platform !== "win32") {
+      fs.chmodSync(tempDest, 0o755);
+    }
+    replaceFile(tempDest, dest);
+  } catch (error) {
+    removeIfExists(tempDest);
+    throw error;
+  }
+}
+
+function replaceFile(source: string, dest: string): void {
+  removeIfExists(dest);
+  fs.renameSync(source, dest);
+}
+
+function removeIfExists(filePath: string): void {
+  if (fs.existsSync(filePath)) {
+    fs.rmSync(filePath, { force: true });
+  }
+}
+
+function httpsGetJson<T>(url: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const follow = (currentUrl: string) => {
+      https
+        .get(
+          currentUrl,
+          {
+            headers: {
+              Accept: "application/vnd.github+json",
+              "User-Agent": "nautilus-vscode-extension",
+            },
+          },
+          (res) => {
+            if (
+              res.statusCode &&
+              res.statusCode >= 300 &&
+              res.statusCode < 400 &&
+              res.headers.location
+            ) {
+              res.resume();
+              follow(new URL(res.headers.location, currentUrl).toString());
+              return;
+            }
+
+            if (res.statusCode !== 200) {
+              res.resume();
+              reject(
+                new Error(
+                  `HTTP ${res.statusCode ?? "?"} requesting ${currentUrl}`
+                )
+              );
+              return;
+            }
+
+            let body = "";
+            res.setEncoding("utf8");
+            res.on("data", (chunk) => {
+              body += chunk;
+            });
+            res.on("end", () => {
+              try {
+                resolve(JSON.parse(body) as T);
+              } catch (error) {
+                reject(error);
+              }
+            });
+          }
+        )
+        .on("error", reject);
+    };
+
+    follow(url);
+  });
 }
 
 /** Downloads `url` (following HTTP redirects) to `dest`. Rejects on HTTP error. */
@@ -240,34 +449,44 @@ function httpsDownload(url: string, dest: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const follow = (currentUrl: string) => {
       https
-        .get(currentUrl, (res) => {
-          if (
-            res.statusCode &&
-            res.statusCode >= 300 &&
-            res.statusCode < 400 &&
-            res.headers.location
-          ) {
-            follow(res.headers.location);
-            return;
-          }
+        .get(
+          currentUrl,
+          {
+            headers: {
+              "User-Agent": "nautilus-vscode-extension",
+            },
+          },
+          (res) => {
+            if (
+              res.statusCode &&
+              res.statusCode >= 300 &&
+              res.statusCode < 400 &&
+              res.headers.location
+            ) {
+              res.resume();
+              follow(new URL(res.headers.location, currentUrl).toString());
+              return;
+            }
 
-          if (res.statusCode !== 200) {
-            reject(
-              new Error(
-                `HTTP ${res.statusCode ?? "?"} downloading ${currentUrl}`
-              )
-            );
-            return;
-          }
+            if (res.statusCode !== 200) {
+              res.resume();
+              reject(
+                new Error(
+                  `HTTP ${res.statusCode ?? "?"} downloading ${currentUrl}`
+                )
+              );
+              return;
+            }
 
-          const file = fs.createWriteStream(dest);
-          res.pipe(file);
-          file.on("finish", () => file.close(() => resolve()));
-          file.on("error", (err) => {
-            fs.unlink(dest, () => undefined);
-            reject(err);
-          });
-        })
+            const file = fs.createWriteStream(dest);
+            res.pipe(file);
+            file.on("finish", () => file.close(() => resolve()));
+            file.on("error", (err) => {
+              fs.unlink(dest, () => undefined);
+              reject(err);
+            });
+          }
+        )
         .on("error", reject);
     };
 

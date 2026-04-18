@@ -2,7 +2,7 @@
   "name": "vscode-nautilus-schema",
   "displayName": "Nautilus Schema",
   "description": "Language support for the Nautilus schema DSL (*.nautilus files)",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "nautilus",
   "icon": "icons/icon.png",
   "license": "MIT OR Apache-2.0",
@@ -91,7 +91,7 @@
         "nautilus.lspPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Absolute path to the `nautilus-lsp` binary. Leave empty to use the auto-downloaded binary or the one on `PATH`."
+          "markdownDescription": "Absolute path to the `nautilus-lsp` binary. Leave empty to use the auto-downloaded and auto-updated GitHub binary or the one on `PATH`."
         }
       }
     }
