@@ -1,6 +1,6 @@
 # Nautilus Schema VS Code Extension
 
-Language support for the [Nautilus](https://github.com/y0gm4/nautilus) schema DSL (`*.nautilus` files).
+Language support for the [Nautilus](https://github.com/nautilus-env/nautilus) schema DSL (`*.nautilus` files).
 
 ## Features
 

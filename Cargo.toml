@@ -17,9 +17,9 @@ members = [
 version = "1.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-authors = ["y0gm4"]
-repository = "https://github.com/y0gm4/nautilus"
-homepage = "https://github.com/y0gm4/nautilus"
+authors = ["nautilus-env"]
+repository = "https://github.com/nautilus-env/nautilus"
+homepage = "https://github.com/nautilus-env/nautilus"
 keywords = ["orm", "database", "sql", "query-builder"]
 categories = ["database"]
 

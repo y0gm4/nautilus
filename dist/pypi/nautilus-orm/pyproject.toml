@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/y0gm4/nautilus"
+Repository = "https://github.com/nautilus-env/nautilus"
 
 [tool.hatch.build.targets.wheel]
 packages = ["nautilus"]

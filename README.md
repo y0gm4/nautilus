@@ -1,6 +1,6 @@
 # Nautilus
 
-[![CI](https://github.com/y0gm4/nautilus/actions/workflows/ci.yml/badge.svg)](https://github.com/y0gm4/nautilus/actions/workflows/ci.yml)
+[![CI](https://github.com/nautilus-env/nautilus/actions/workflows/ci.yml/badge.svg)](https://github.com/nautilus-env/nautilus/actions/workflows/ci.yml)
 
 Nautilus is a schema-first ORM toolkit built around a Rust query engine.
 
@@ -69,7 +69,7 @@ pip install nautilus-orm
 ### JavaScript / TypeScript
 
 ```bash
-npm install @y0gm4/nautilus-orm
+npm install @nautilus-env/nautilus-orm
 ```
 
 ### Rust
@@ -82,10 +82,10 @@ cargo install nautilus-orm
 
 ```bash
 # macOS / Linux
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/y0gm4/nautilus/releases/latest/download/nautilus-orm-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/nautilus-env/nautilus/releases/latest/download/nautilus-orm-installer.sh | sh
 
 # Windows
-powershell -ExecutionPolicy ByPass -c "irm https://github.com/y0gm4/nautilus/releases/latest/download/nautilus-orm-installer.ps1 | iex"
+powershell -ExecutionPolicy ByPass -c "irm https://github.com/nautilus-env/nautilus/releases/latest/download/nautilus-orm-installer.ps1 | iex"
 ```
 
 

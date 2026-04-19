@@ -11,7 +11,7 @@ import {
   TransportKind,
 } from "vscode-languageclient/node";
 
-const GITHUB_REPO = "y0gm4/nautilus";
+const GITHUB_REPO = "nautilus-env/nautilus";
 const BIN_NAME = process.platform === "win32" ? "nautilus-lsp.exe" : "nautilus-lsp";
 const NPM_PACKAGE = "nautilus-orm-lsp";
 const DOWNLOADED_RELEASE_TAG_KEY = "nautilus.downloadedLspReleaseTag";

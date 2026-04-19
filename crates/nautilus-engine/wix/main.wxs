@@ -62,7 +62,7 @@
         Id='*'
         Name='nautilus-orm-engine'
         UpgradeCode='2D973E64-3999-4EB0-965F-BF7A63AAAFDB'
-        Manufacturer='y0gm4'
+        Manufacturer='nautilus-env'
         Language='1033'
         Codepage='1252'
         Version='$(var.Version)'>
@@ -70,7 +70,7 @@
         <Package Id='*'
             Keywords='Installer'
             Description='Query execution engine for Nautilus ORM'
-            Manufacturer='y0gm4'
+            Manufacturer='nautilus-env'
             InstallerVersion='450'
             Languages='1033'
             Compressed='yes'
@@ -173,7 +173,7 @@
         <!--<Icon Id='ProductICO' SourceFile='wix\Product.ico'/>-->
         <!--<Property Id='ARPPRODUCTICON' Value='ProductICO' />-->
 
-        <Property Id='ARPHELPLINK' Value='https://github.com/y0gm4/nautilus'/>
+        <Property Id='ARPHELPLINK' Value='https://github.com/nautilus-env/nautilus'/>
 
         <UI>
             <UIRef Id='WixUI_FeatureTree'/>
