@@ -299,6 +299,28 @@ impl MigrationExecutor {
                 }
             }
 
+            Change::CreateExtension { name } => {
+                if strategy.supports_user_defined_types() {
+                    vec![format!(
+                        "DROP EXTENSION IF EXISTS \"{}\"",
+                        name.replace('"', "\"\"")
+                    )]
+                } else {
+                    vec![]
+                }
+            }
+
+            Change::DropExtension { name } => {
+                if strategy.supports_user_defined_types() {
+                    vec![format!(
+                        "-- Cannot auto-reverse extension drop for '{}'; reinstall manually",
+                        name,
+                    )]
+                } else {
+                    vec![]
+                }
+            }
+
             Change::DropEnum { name } | Change::AlterEnum { name, .. } => {
                 if strategy.supports_user_defined_types() {
                     vec![format!(

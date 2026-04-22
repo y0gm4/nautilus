@@ -10,6 +10,18 @@
     ],
     "description": "Datasource configuration block"
   },
+  "Datasource block (PostgreSQL extensions)": {
+    "prefix": "datasource-pg-ext",
+    "scope": "nautilus",
+    "body": [
+      "datasource db {",
+      "  provider   = \"postgresql\"",
+      "  url        = env(\"${1:DATABASE_URL}\")",
+      "  extensions = [${2:pg_trgm}]",
+      "}"
+    ],
+    "description": "PostgreSQL datasource block with extensions"
+  },
   "Generator block": {
     "prefix": "generator",
     "scope": "nautilus",

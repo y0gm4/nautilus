@@ -992,9 +992,12 @@ fn generate_regular_field_read(
 fn base_java_type_name(field_type: &ResolvedFieldType) -> &'static str {
     match field_type {
         ResolvedFieldType::Scalar(ScalarType::String)
+        | ResolvedFieldType::Scalar(ScalarType::Citext)
+        | ResolvedFieldType::Scalar(ScalarType::Ltree)
         | ResolvedFieldType::Scalar(ScalarType::Xml)
         | ResolvedFieldType::Scalar(ScalarType::Char { .. })
         | ResolvedFieldType::Scalar(ScalarType::VarChar { .. }) => "String",
+        ResolvedFieldType::Scalar(ScalarType::Hstore) => "JsonSupport.Hstore",
         ResolvedFieldType::Scalar(ScalarType::Boolean) => "Boolean",
         ResolvedFieldType::Scalar(ScalarType::Int) => "Integer",
         ResolvedFieldType::Scalar(ScalarType::BigInt) => "Long",
@@ -1012,9 +1015,12 @@ fn base_java_type_name(field_type: &ResolvedFieldType) -> &'static str {
 fn scalar_reader_for_type(scalar: &ScalarType) -> &'static str {
     match scalar {
         ScalarType::String
+        | ScalarType::Citext
+        | ScalarType::Ltree
         | ScalarType::Xml
         | ScalarType::Char { .. }
         | ScalarType::VarChar { .. } => "asString",
+        ScalarType::Hstore => "asHstore",
         ScalarType::Boolean => "asBoolean",
         ScalarType::Int => "asInteger",
         ScalarType::BigInt => "asLong",
@@ -1030,9 +1036,12 @@ fn scalar_reader_for_type(scalar: &ScalarType) -> &'static str {
 fn array_reader_for_scalar(scalar: &ScalarType) -> &'static str {
     match scalar {
         ScalarType::String
+        | ScalarType::Citext
+        | ScalarType::Ltree
         | ScalarType::Xml
         | ScalarType::Char { .. }
         | ScalarType::VarChar { .. } => "JsonSupport::asString",
+        ScalarType::Hstore => "JsonSupport::asHstore",
         ScalarType::Boolean => "JsonSupport::asBoolean",
         ScalarType::Int => "JsonSupport::asInteger",
         ScalarType::BigInt => "JsonSupport::asLong",

@@ -4,6 +4,7 @@ use crate::error::{ConnectorError as Error, Result};
 use crate::row_stream::RowStream;
 use crate::Row;
 use nautilus_core::Value;
+use sqlx::postgres::types::PgHstore;
 use sqlx::postgres::PgRow;
 use sqlx::{Column, Row as SqlxRow, TypeInfo, ValueRef};
 use uuid::Uuid;
@@ -33,6 +34,7 @@ pub(crate) fn decode_row_internal(row: PgRow) -> Result<Row> {
 /// Decode a value from a sqlx row by index and type.
 fn decode_value(row: &PgRow, idx: usize, type_info: &sqlx::postgres::PgTypeInfo) -> Result<Value> {
     let type_name = type_info.name();
+    let normalized_type_name = type_name.to_ascii_uppercase();
 
     if let Ok(is_null) = sqlx::Row::try_get_raw(row, idx).map(|raw| raw.is_null()) {
         if is_null {
@@ -40,7 +42,7 @@ fn decode_value(row: &PgRow, idx: usize, type_info: &sqlx::postgres::PgTypeInfo)
         }
     }
 
-    match type_name {
+    match normalized_type_name.as_str() {
         "BOOL" => row
             .try_get::<bool, _>(idx)
             .map(Value::Bool)
@@ -74,10 +76,15 @@ fn decode_value(row: &PgRow, idx: usize, type_info: &sqlx::postgres::PgTypeInfo)
             }
         }
 
-        "VARCHAR" | "TEXT" | "CHAR" | "BPCHAR" | "NAME" => row
+        "VARCHAR" | "TEXT" | "CHAR" | "BPCHAR" | "NAME" | "CITEXT" | "LTREE" => row
             .try_get::<String, _>(idx)
             .map(Value::String)
             .map_err(|e| Error::row_decode(e, "Failed to decode string")),
+
+        "HSTORE" => row
+            .try_get::<PgHstore, _>(idx)
+            .map(|map| Value::Hstore(map.0))
+            .map_err(|e| Error::row_decode(e, "Failed to decode HSTORE")),
 
         "BYTEA" => row
             .try_get::<Vec<u8>, _>(idx)
@@ -122,20 +129,26 @@ fn decode_value(row: &PgRow, idx: usize, type_info: &sqlx::postgres::PgTypeInfo)
         // Handle PostgreSQL 2D array types (TEXT[][], INT4[][], etc.)
         // sqlx doesn't support 2D array decoding natively, so we decode
         // the text representation and parse the PostgreSQL array literal.
-        _ if type_name.ends_with("[][]") => {
-            let element_type = &type_name[..type_name.len() - 4];
+        _ if normalized_type_name.ends_with("[][]") => {
+            let element_type = &normalized_type_name[..normalized_type_name.len() - 4];
             row.try_get::<String, _>(idx)
                 .map_err(|e| Error::row_decode(e, "Failed to decode 2D array"))
                 .and_then(|s| parse_pg_2d_array(&s, element_type))
         }
 
-        _ if type_name.ends_with("[]") => {
-            let element_type = &type_name[..type_name.len() - 2];
+        _ if normalized_type_name.ends_with("[]") => {
+            let element_type = &normalized_type_name[..normalized_type_name.len() - 2];
             match element_type {
-                "TEXT" | "VARCHAR" | "CHAR" | "BPCHAR" => row
+                "TEXT" | "VARCHAR" | "CHAR" | "BPCHAR" | "NAME" | "CITEXT" | "LTREE" => row
                     .try_get::<Vec<String>, _>(idx)
                     .map(|vec| Value::Array(vec.into_iter().map(Value::String).collect()))
                     .map_err(|e| Error::row_decode(e, "Failed to decode TEXT[]")),
+                "HSTORE" => row
+                    .try_get::<Vec<PgHstore>, _>(idx)
+                    .map(|vec| {
+                        Value::Array(vec.into_iter().map(|item| Value::Hstore(item.0)).collect())
+                    })
+                    .map_err(|e| Error::row_decode(e, "Failed to decode HSTORE[]")),
                 "INT2" | "INT4" => row
                     .try_get::<Vec<i32>, _>(idx)
                     .map(|vec| Value::Array(vec.into_iter().map(Value::I32).collect()))

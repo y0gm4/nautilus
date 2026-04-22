@@ -8,6 +8,14 @@ import type { {% for e in enum_imports %}{{ e }}{% if not loop.last %}, {% endif
 import type { {% for t in composite_type_imports %}{{ t }}{% if not loop.last %}, {% endif %}{% endfor %} } from '../types.js';
 {%- endif %}
 
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+export type JsonScalarOrArray = JsonPrimitive | JsonValue[];
+export type HstoreValue = Record<string, string | null>;
+
 export interface StringFilter {
   contains?:   string;
   startsWith?: string;
@@ -40,6 +48,18 @@ export interface DateFilter {
   isNull?: boolean;
 }
 
+export interface JsonFilter {
+  equals?: JsonValue;
+  not?:    JsonValue;
+  isNull?: boolean;
+}
+
+export interface HstoreFilter {
+  equals?: HstoreValue;
+  not?:    HstoreValue;
+  isNull?: boolean;
+}
+
 export type SortOrder = 'asc' | 'desc';
 
 export interface {{ model_name }}Model {
@@ -61,6 +81,10 @@ export interface {{ model_name }}WhereInput {
   {{ field.name }}?: Date | DateFilter;
 {%- elif field.base_type == "boolean" %}
   {{ field.name }}?: boolean;
+{%- elif field.base_type == "JsonValue" %}
+  {{ field.name }}?: JsonScalarOrArray | JsonFilter;
+{%- elif field.base_type == "HstoreValue" %}
+  {{ field.name }}?: HstoreFilter;
 {%- else %}
   {{ field.name }}?: {{ field.ts_type }};
 {%- endif %}

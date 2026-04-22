@@ -52,6 +52,30 @@ const _{{ table_name }}FieldToDb = {
 {%- endfor %}
 };
 
+const _{{ table_name }}ObjectValueDbFields = new Set([
+{%- for db_name in object_value_db_fields %}
+  '{{ db_name }}',
+{%- endfor %}
+]);
+
+const _FILTER_OPERATOR_KEYS = new Set([
+  'contains',
+  'endsWith',
+  'eq',
+  'equals',
+  'gt',
+  'gte',
+  'in',
+  'isNull',
+  'isNotNull',
+  'like',
+  'lt',
+  'lte',
+  'not',
+  'notIn',
+  'startsWith',
+]);
+
 const _MISSING = Symbol('missing');
 
 function _getWireValue(row, ...keys) {
@@ -92,6 +116,18 @@ function _coerceBooleanValue(value) {
     if (normalized === 'false' || normalized === '0') return false;
   }
   return value;
+}
+
+function _looksLikeFilterOperatorObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length > 0 && keys.every(key => _FILTER_OPERATOR_KEYS.has(key));
+}
+
+function _objectEqualityRequiresExplicitEquals(fieldName) {
+  throw new TypeError(
+    `Field '${fieldName}' stores object-like JSON/HSTORE values. Use { equals: ... } for object equality filters.`,
+  );
 }
 
 export function _coerce{{ model_name }}(row) {
@@ -140,14 +176,13 @@ function _processWhereFilters(where, fieldToDb) {
     } else {
       const dbKey = fieldToDb[k] ?? k;
       if (v && typeof v === 'object' && !Array.isArray(v)) {
+        if (_{{ table_name }}ObjectValueDbFields.has(dbKey) && !_looksLikeFilterOperatorObject(v)) {
+          _objectEqualityRequiresExplicitEquals(k);
+        }
         const ops = {};
         for (const [op, opVal] of Object.entries(v)) {
-          const actualOp = op === 'isNull' ? 'isNull' : op;
-          if (actualOp === 'equals') {
-            out[dbKey] = opVal;
-          } else {
-            ops[actualOp] = opVal;
-          }
+          const actualOp = op === 'equals' ? 'eq' : op;
+          ops[actualOp] = opVal;
         }
         if (Object.keys(ops).length > 0) out[dbKey] = ops;
       } else {

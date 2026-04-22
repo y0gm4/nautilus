@@ -75,6 +75,11 @@ pub struct DatasourceIr {
     /// prefer this over `url` so runtime traffic can continue to use a pooled
     /// connection string.
     pub direct_url: Option<String>,
+    /// PostgreSQL extensions declared in the datasource block.
+    ///
+    /// Names are lower-cased, deduplicated and sorted for stable output.
+    /// Empty for non-Postgres providers (enforced by the validator).
+    pub extensions: Vec<String>,
     /// Span of the datasource block.
     pub span: Span,
 }
@@ -266,6 +271,12 @@ pub enum ScalarType {
     Json,
     /// UUID value.
     Uuid,
+    /// Case-insensitive text value (PostgreSQL + citext extension).
+    Citext,
+    /// Key/value string map (PostgreSQL + hstore extension).
+    Hstore,
+    /// Label tree path (PostgreSQL + ltree extension).
+    Ltree,
     /// JSONB value (PostgreSQL only).
     Jsonb,
     /// XML value (PostgreSQL only).
@@ -296,6 +307,8 @@ impl ScalarType {
             ScalarType::Bytes => "Vec<u8>",
             ScalarType::Json => "serde_json::Value",
             ScalarType::Uuid => "uuid::Uuid",
+            ScalarType::Citext | ScalarType::Ltree => "String",
+            ScalarType::Hstore => "std::collections::BTreeMap<String, Option<String>>",
             ScalarType::Jsonb => "serde_json::Value",
             ScalarType::Xml | ScalarType::Char { .. } | ScalarType::VarChar { .. } => "String",
         }
@@ -304,7 +317,11 @@ impl ScalarType {
     /// Returns `true` when this scalar type is supported by the given database provider.
     pub fn supported_by(self, provider: DatabaseProvider) -> bool {
         match self {
-            ScalarType::Jsonb | ScalarType::Xml => provider == DatabaseProvider::Postgres,
+            ScalarType::Citext
+            | ScalarType::Hstore
+            | ScalarType::Ltree
+            | ScalarType::Jsonb
+            | ScalarType::Xml => provider == DatabaseProvider::Postgres,
             ScalarType::Char { .. } | ScalarType::VarChar { .. } => {
                 matches!(
                     provider,
@@ -318,7 +335,11 @@ impl ScalarType {
     /// Human-readable list of supported providers (for diagnostics).
     pub fn supported_providers(self) -> &'static str {
         match self {
-            ScalarType::Jsonb | ScalarType::Xml => "PostgreSQL only",
+            ScalarType::Citext
+            | ScalarType::Hstore
+            | ScalarType::Ltree
+            | ScalarType::Jsonb
+            | ScalarType::Xml => "PostgreSQL only",
             ScalarType::Char { .. } | ScalarType::VarChar { .. } => "PostgreSQL and MySQL",
             _ => "all databases",
         }

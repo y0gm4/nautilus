@@ -71,6 +71,11 @@ impl DdlGenerator {
         let strategy = ProviderStrategy::new(self.provider);
 
         if strategy.supports_user_defined_types() {
+            if let Some(ds) = &schema.datasource {
+                for ext in &ds.extensions {
+                    statements.push(self.generate_create_extension(ext));
+                }
+            }
             for enum_def in schema.enums.values() {
                 statements.push(self.generate_enum_type(enum_def));
             }
@@ -316,6 +321,27 @@ impl DdlGenerator {
             self.quote_type_identifier(&enum_def.logical_name.to_lowercase()),
             variants
         )
+    }
+
+    /// Generate CREATE EXTENSION IF NOT EXISTS for a PostgreSQL extension.
+    ///
+    /// The extension name is quoted with double quotes because some common
+    /// names contain hyphens (e.g. `uuid-ossp`) which cannot appear in an
+    /// unquoted identifier.
+    pub(crate) fn generate_create_extension(&self, name: &str) -> String {
+        format!(
+            "CREATE EXTENSION IF NOT EXISTS \"{}\"",
+            name.replace('"', "\"\"")
+        )
+    }
+
+    /// Generate DROP EXTENSION IF EXISTS for a PostgreSQL extension.
+    ///
+    /// Intentionally **does not** use CASCADE: if objects still depend on the
+    /// extension we want the DROP to fail loudly rather than silently destroy
+    /// dependent columns or indexes.
+    pub(crate) fn generate_drop_extension(&self, name: &str) -> String {
+        format!("DROP EXTENSION IF EXISTS \"{}\"", name.replace('"', "\"\""))
     }
 
     /// Generate CREATE TYPE ... AS (...) statement for a composite type (Postgres only).
@@ -751,6 +777,9 @@ impl DdlGenerator {
                     DatabaseProvider::Sqlite => "JSON",
                     DatabaseProvider::Mysql => "JSON",
                 },
+                ScalarType::Citext => "CITEXT",
+                ScalarType::Hstore => "HSTORE",
+                ScalarType::Ltree => "LTREE",
                 ScalarType::Jsonb => "JSONB",
                 ScalarType::Xml => "XML",
                 ScalarType::Char { length } => {
@@ -895,6 +924,9 @@ impl DdlGenerator {
             ScalarType::Bytes => "BYTEA",
             ScalarType::Json => "JSONB",
             ScalarType::Uuid => "UUID",
+            ScalarType::Citext => "CITEXT",
+            ScalarType::Hstore => "HSTORE",
+            ScalarType::Ltree => "LTREE",
             ScalarType::Jsonb => "JSONB",
             ScalarType::Xml => "XML",
             ScalarType::Char { length } => {

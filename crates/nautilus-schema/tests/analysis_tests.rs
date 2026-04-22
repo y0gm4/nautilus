@@ -237,6 +237,11 @@ fn completion_inside_datasource_only_contains_datasource_fields() {
         labels
     );
     assert!(
+        labels.contains(&"extensions"),
+        "missing extensions: {:?}",
+        labels
+    );
+    assert!(
         !labels.contains(&"output"),
         "unexpected output: {:?}",
         labels
@@ -292,6 +297,57 @@ fn completion_inside_generator_only_contains_generator_fields() {
 }
 
 #[test]
+fn completion_inside_datasource_extensions_value_suggests_known_extensions() {
+    let src = r#"datasource db {
+  provider   = "postgresql"
+  extensions = [
+}
+"#;
+    let offset = src.find('[').unwrap() + 1;
+    let items = completion(src, offset);
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+
+    assert!(labels.contains(&"pg_trgm"), "missing pg_trgm: {:?}", labels);
+    assert!(
+        labels.contains(&"pgcrypto"),
+        "missing pgcrypto: {:?}",
+        labels
+    );
+    assert!(
+        labels.contains(&"uuid-ossp"),
+        "missing uuid-ossp: {:?}",
+        labels
+    );
+
+    let uuid_ossp = items
+        .iter()
+        .find(|item| item.label == "uuid-ossp")
+        .expect("uuid-ossp completion");
+    assert_eq!(uuid_ossp.insert_text.as_deref(), Some("\"uuid-ossp\""));
+}
+
+#[test]
+fn completion_inside_multiline_extensions_array_suggests_known_extensions() {
+    let src = r#"datasource db {
+  provider   = "postgresql"
+  extensions = [
+    
+  ]
+}
+"#;
+    let offset = src.find("\n    \n").unwrap() + 5;
+    let items = completion(src, offset);
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+
+    assert!(labels.contains(&"pg_trgm"), "missing pg_trgm: {:?}", labels);
+    assert!(
+        labels.contains(&"uuid-ossp"),
+        "missing uuid-ossp: {:?}",
+        labels
+    );
+}
+
+#[test]
 fn completion_inside_default_args_excludes_unsupported_functions() {
     let src = "model User {\n  id Uuid @default()\n}";
     let offset = src.find("@default(").unwrap() + "@default(".len();
@@ -317,6 +373,53 @@ fn completion_inside_model_contains_scalar_types() {
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
     for ty in &["String", "Int", "Boolean", "Float", "DateTime", "Uuid"] {
         assert!(labels.contains(ty), "missing type '{}': {:?}", ty, labels);
+    }
+}
+
+#[test]
+fn completion_inside_postgres_model_includes_extension_backed_scalar_types() {
+    let src = r#"
+datasource db {
+  provider = "postgresql"
+  url      = "postgres://localhost/test"
+}
+
+model User {
+  
+}
+"#;
+    let offset = src.find("\n  \n").unwrap() + 3;
+    let items = completion(src, offset);
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+
+    for ty in &["Citext", "Hstore", "Ltree"] {
+        assert!(labels.contains(ty), "missing type '{}': {:?}", ty, labels);
+    }
+}
+
+#[test]
+fn completion_inside_mysql_model_omits_postgres_extension_backed_scalar_types() {
+    let src = r#"
+datasource db {
+  provider = "mysql"
+  url      = "mysql://localhost/test"
+}
+
+model User {
+  
+}
+"#;
+    let offset = src.find("\n  \n").unwrap() + 3;
+    let items = completion(src, offset);
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+
+    for ty in &["Citext", "Hstore", "Ltree"] {
+        assert!(
+            !labels.contains(ty),
+            "unexpected type '{}': {:?}",
+            ty,
+            labels
+        );
     }
 }
 
@@ -419,6 +522,34 @@ fn hover_on_model_field_returns_type_info() {
 }
 
 #[test]
+fn hover_on_extension_backed_scalar_type_mentions_required_extension() {
+    let src = r#"
+datasource db {
+  provider = "postgresql"
+  url      = "postgres://localhost/test"
+  extensions = [citext]
+}
+
+model User {
+  email Citext
+}
+"#;
+    let offset = src.find("Citext").unwrap() + 2;
+    let h = hover(src, offset).expect("hover returned None");
+
+    assert!(
+        h.content.contains("`citext` extension"),
+        "unexpected hover: {}",
+        h.content
+    );
+    assert!(
+        h.content.contains("CITEXT"),
+        "unexpected hover: {}",
+        h.content
+    );
+}
+
+#[test]
 fn hover_on_provider_field_mentions_real_generator_providers() {
     let src = r#"
 generator client {
@@ -439,6 +570,34 @@ generator client {
     assert!(
         !h.content.contains("\"python\""),
         "unexpected stale provider alias in hover: {}",
+        h.content
+    );
+}
+
+#[test]
+fn hover_on_extensions_field_describes_postgres_extensions() {
+    let src = r#"
+datasource db {
+  provider   = "postgresql"
+  extensions = [pg_trgm]
+}
+"#;
+    let offset = src.find("extensions").unwrap() + 2;
+    let h = hover(src, offset).expect("hover returned None");
+
+    assert!(
+        h.content.contains("PostgreSQL-only"),
+        "unexpected hover: {}",
+        h.content
+    );
+    assert!(
+        h.content.contains("pg_trgm"),
+        "unexpected hover: {}",
+        h.content
+    );
+    assert!(
+        h.content.contains("\"uuid-ossp\""),
+        "unexpected hover: {}",
         h.content
     );
 }

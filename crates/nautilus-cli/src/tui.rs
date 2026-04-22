@@ -375,6 +375,16 @@ fn describe_change(change: &nautilus_migrate::Change) -> (&'static str, String, 
             };
             ("~", format!("enum:{}", name), annotation)
         }
+        Change::CreateExtension { name } => (
+            "+",
+            format!("ext:{}", name),
+            "CREATE EXTENSION (safe)".into(),
+        ),
+        Change::DropExtension { name } => (
+            "-",
+            format!("ext:{}", name),
+            "DROP EXTENSION (destructive — fails if objects still depend on it)".into(),
+        ),
         Change::ForeignKeyAdded {
             table,
             columns,

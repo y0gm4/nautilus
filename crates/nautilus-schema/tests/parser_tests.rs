@@ -112,12 +112,15 @@ model AllTypes {
   bytes    Bytes
   json     Json
   uuid     Uuid
+  citext   Citext
+  hstore   Hstore
+  ltree    Ltree
 }
 "#;
 
     let schema = parse(source).unwrap();
     let model = schema.models().next().unwrap();
-    assert_eq!(model.fields.len(), 10);
+    assert_eq!(model.fields.len(), 13);
 
     assert!(matches!(model.fields[0].field_type, FieldType::String));
     assert!(matches!(model.fields[1].field_type, FieldType::Boolean));
@@ -135,6 +138,9 @@ model AllTypes {
     assert!(matches!(model.fields[7].field_type, FieldType::Bytes));
     assert!(matches!(model.fields[8].field_type, FieldType::Json));
     assert!(matches!(model.fields[9].field_type, FieldType::Uuid));
+    assert!(matches!(model.fields[10].field_type, FieldType::Citext));
+    assert!(matches!(model.fields[11].field_type, FieldType::Hstore));
+    assert!(matches!(model.fields[12].field_type, FieldType::Ltree));
 }
 
 #[test]

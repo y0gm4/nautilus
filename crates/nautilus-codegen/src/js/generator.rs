@@ -156,6 +156,7 @@ pub fn generate_js_model(model: &ModelIr, ir: &SchemaIr) -> ((String, String), (
     let mut order_by_fields: Vec<JsOrderByFieldContext> = Vec::new();
     let mut numeric_fields: Vec<JsAggregateFieldContext> = Vec::new();
     let mut orderable_fields: Vec<JsAggregateFieldContext> = Vec::new();
+    let mut object_value_db_fields: Vec<String> = Vec::new();
 
     for (idx, field) in model.scalar_fields().enumerate() {
         match &field.field_type {
@@ -210,6 +211,16 @@ pub fn generate_js_model(model: &ModelIr, ir: &SchemaIr) -> ((String, String), (
             });
         }
 
+        if matches!(
+            field.field_type,
+            ResolvedFieldType::Scalar(ScalarType::Json)
+                | ResolvedFieldType::Scalar(ScalarType::Jsonb)
+                | ResolvedFieldType::Scalar(ScalarType::Hstore)
+        ) && !field.is_array
+        {
+            object_value_db_fields.push(field.db_name.clone());
+        }
+
         if !auto_generated {
             let input_base = base_type.clone();
             let typed = if field.is_array {
@@ -246,10 +257,6 @@ pub fn generate_js_model(model: &ModelIr, ir: &SchemaIr) -> ((String, String), (
             });
         }
 
-        order_by_fields.push(JsOrderByFieldContext {
-            name: field.logical_name.clone(),
-        });
-
         let is_numeric = matches!(
             &field.field_type,
             ResolvedFieldType::Scalar(ScalarType::Int)
@@ -273,9 +280,14 @@ pub fn generate_js_model(model: &ModelIr, ir: &SchemaIr) -> ((String, String), (
             &field.field_type,
             ResolvedFieldType::Scalar(ScalarType::Boolean)
                 | ResolvedFieldType::Scalar(ScalarType::Json)
+                | ResolvedFieldType::Scalar(ScalarType::Jsonb)
+                | ResolvedFieldType::Scalar(ScalarType::Hstore)
                 | ResolvedFieldType::Scalar(ScalarType::Bytes)
         );
         if !is_non_orderable {
+            order_by_fields.push(JsOrderByFieldContext {
+                name: field.logical_name.clone(),
+            });
             orderable_fields.push(JsAggregateFieldContext {
                 name: field.logical_name.clone(),
                 ts_type: base_type,
@@ -354,6 +366,7 @@ pub fn generate_js_model(model: &ModelIr, ir: &SchemaIr) -> ((String, String), (
     context.insert("has_includes", &has_includes);
     context.insert("numeric_fields", &numeric_fields);
     context.insert("orderable_fields", &orderable_fields);
+    context.insert("object_value_db_fields", &object_value_db_fields);
     context.insert("has_numeric_fields", &has_numeric_fields);
     context.insert("has_enums", &has_enums);
     context.insert(

@@ -19,6 +19,19 @@ pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {
         Value::DateTime(dt) => serde_json::Value::String(dt.to_string()),
         Value::Uuid(u) => serde_json::Value::String(u.to_string()),
         Value::Json(j) => j.clone(),
+        Value::Hstore(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        value
+                            .as_ref()
+                            .map(|item| serde_json::Value::String(item.clone()))
+                            .unwrap_or(serde_json::Value::Null),
+                    )
+                })
+                .collect(),
+        ),
         Value::String(s) => serde_json::Value::String(s.clone()),
         Value::Bytes(b) => {
             serde_json::Value::String(b.iter().map(|byte| format!("{:02x}", byte)).collect())
@@ -73,5 +86,20 @@ mod tests {
         let inner = serde_json::json!({"a": 1});
         let v = Value::Json(inner.clone());
         assert_eq!(value_to_json(&v), inner);
+    }
+
+    #[test]
+    fn test_value_to_json_hstore() {
+        let value = Value::Hstore(std::collections::BTreeMap::from([
+            ("display_name".to_string(), Some("Bob".to_string())),
+            ("nickname".to_string(), None),
+        ]));
+        assert_eq!(
+            value_to_json(&value),
+            serde_json::json!({
+                "display_name": "Bob",
+                "nickname": null
+            })
+        );
     }
 }

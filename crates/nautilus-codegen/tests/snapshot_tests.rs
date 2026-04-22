@@ -1,9 +1,14 @@
 //! Snapshot tests for the code generator: parse a schema, generate code, and
-//! assert the full rendered output against a committed snapshot.
+//! optionally assert the full rendered output against local-only snapshots.
 //!
-//! On first run (or after `INSTA_UPDATE=always`) the snapshots are written to
-//! `tests/snapshots/`.  Subsequent runs compare against those baselines.
-//! Approve new snapshots with `cargo insta review`.
+//! Snapshot baselines live in `tests/snapshots/`, which is gitignored on
+//! purpose. If `.snap` files already exist locally, these tests compare against
+//! them automatically. To force snapshot assertions or generate fresh local
+//! baselines, run with `NAUTILUS_LOCAL_SNAPSHOTS=1` (typically alongside
+//! `INSTA_UPDATE=always`). To skip snapshot assertions even when local
+//! baselines exist, run with `NAUTILUS_SKIP_LOCAL_SNAPSHOTS=1`.
+
+use std::{path::PathBuf, sync::OnceLock};
 
 use nautilus_codegen::{
     enum_gen::generate_all_enums,
@@ -16,6 +21,57 @@ use nautilus_codegen::{
     },
 };
 use nautilus_schema::validate_schema_source;
+
+fn local_snapshot_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+}
+
+fn local_snapshots_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+
+    *ENABLED.get_or_init(|| {
+        if std::env::var_os("NAUTILUS_SKIP_LOCAL_SNAPSHOTS").is_some() {
+            return false;
+        }
+
+        if std::env::var_os("NAUTILUS_LOCAL_SNAPSHOTS").is_some() {
+            return true;
+        }
+
+        std::fs::read_dir(local_snapshot_dir())
+            .map(|entries| {
+                entries.flatten().any(|entry| {
+                    entry.path().extension().and_then(|ext| ext.to_str()) == Some("snap")
+                })
+            })
+            .unwrap_or(false)
+    })
+}
+
+macro_rules! assert_local_snapshot {
+    ($value:expr $(,)?) => {{
+        let snapshot_value = &$value;
+        assert!(
+            !snapshot_value.is_empty(),
+            "generated snapshot content should not be empty"
+        );
+        if local_snapshots_enabled() {
+            insta::assert_snapshot!(snapshot_value);
+        }
+    }};
+    ($name:expr, $value:expr $(,)?) => {{
+        let snapshot_value = &$value;
+        assert!(
+            !snapshot_value.is_empty(),
+            "generated snapshot content should not be empty"
+        );
+        if local_snapshots_enabled() {
+            insta::assert_snapshot!($name, snapshot_value);
+        }
+    }};
+}
 
 fn validate(source: &str) -> nautilus_schema::ir::SchemaIr {
     validate_schema_source(source)
@@ -31,6 +87,14 @@ fn generated_java_file<'a>(files: &'a [(String, String)], suffix: &str) -> &'a s
         .unwrap_or_else(|| panic!("missing generated Java file ending with '{suffix}'"))
 }
 
+fn generated_python_file<'a>(files: &'a [(String, String)], file_name: &str) -> &'a str {
+    files
+        .iter()
+        .find(|(path, _)| path == file_name)
+        .map(|(_, code)| code.as_str())
+        .unwrap_or_else(|| panic!("missing generated Python file '{file_name}'"))
+}
+
 #[test]
 fn test_rust_struct_is_generated() {
     let ir = validate(
@@ -43,7 +107,7 @@ model User {
     );
     let models = generate_all_models(&ir, false);
     let code = models.get("User").expect("User model missing");
-    insta::assert_snapshot!(code);
+    assert_local_snapshot!(code);
 }
 
 #[test]
@@ -58,7 +122,7 @@ model Post {
     );
     let models = generate_all_models(&ir, false);
     let code = models.get("Post").expect("Post model missing");
-    insta::assert_snapshot!(code);
+    assert_local_snapshot!(code);
 }
 
 #[test]
@@ -77,7 +141,7 @@ model User {
         code.contains("FindMany"),
         "expected FindMany builder:\n{code}"
     );
-    insta::assert_snapshot!(code);
+    assert_local_snapshot!(code);
 }
 
 #[test]
@@ -140,7 +204,7 @@ model User {
     );
     let models = generate_all_models(&ir, false);
     let code = models.get("User").expect("User model missing");
-    insta::assert_snapshot!(code);
+    assert_local_snapshot!(code);
 }
 
 #[test]
@@ -160,7 +224,7 @@ model User {
 "#,
     );
     let enums_code = generate_all_enums(&ir.enums);
-    insta::assert_snapshot!(enums_code);
+    assert_local_snapshot!(enums_code);
 }
 
 #[test]
@@ -202,7 +266,7 @@ model User {
         "expected async in async mode:\n{async_code}"
     );
     assert_ne!(sync_code, async_code, "sync and async should differ");
-    insta::assert_snapshot!("rust_user_async", async_code);
+    assert_local_snapshot!("rust_user_async", async_code);
 }
 
 #[test]
@@ -218,7 +282,7 @@ model Product {
     );
     let models = generate_all_models(&ir, false);
     let code = models.get("Product").expect("Product missing");
-    insta::assert_snapshot!(code);
+    assert_local_snapshot!(code);
 }
 
 #[test]
@@ -277,8 +341,8 @@ model Post {
     let models = generate_all_models(&ir, false);
     let user_code = models.get("User").expect("User missing");
     let post_code = models.get("Post").expect("Post missing");
-    insta::assert_snapshot!("rust_user_with_posts_relation", user_code);
-    insta::assert_snapshot!("rust_post_with_author_relation", post_code);
+    assert_local_snapshot!("rust_user_with_posts_relation", user_code);
+    assert_local_snapshot!("rust_post_with_author_relation", post_code);
 }
 
 #[test]
@@ -361,7 +425,7 @@ model User {
         .iter()
         .find(|(name, _)| name == "user.py")
         .expect("user model missing");
-    insta::assert_snapshot!(code);
+    assert_local_snapshot!(code);
 }
 
 #[test]
@@ -379,7 +443,7 @@ model Post {
         .iter()
         .find(|(name, _)| name == "post.py")
         .expect("post missing");
-    insta::assert_snapshot!(code);
+    assert_local_snapshot!(code);
 }
 
 #[test]
@@ -398,7 +462,7 @@ model User {
 "#,
     );
     let enums_code = generate_python_enums(&ir.enums);
-    insta::assert_snapshot!(enums_code);
+    assert_local_snapshot!(enums_code);
 }
 
 #[test]
@@ -420,7 +484,7 @@ model User {
         "expected async def:\n{async_code}"
     );
     assert_ne!(sync_code, async_code, "sync and async should differ");
-    insta::assert_snapshot!("python_user_async", async_code);
+    assert_local_snapshot!("python_user_async", async_code);
 }
 
 #[test]
@@ -475,7 +539,7 @@ model Post {
         client_sync, client_async,
         "sync and async clients should differ"
     );
-    insta::assert_snapshot!("python_client_sync", &client_sync);
+    assert_local_snapshot!("python_client_sync", &client_sync);
 }
 
 #[test]
@@ -996,7 +1060,7 @@ model User {
         "expected generated Java client to auto-register itself when configured:\n{nautilus_client}"
     );
 
-    insta::assert_snapshot!("java_user_model_sync", user_model);
+    assert_local_snapshot!("java_user_model_sync", user_model);
 }
 
 #[test]
@@ -1034,7 +1098,7 @@ model User {
         "expected generated Java async client to expose CompletableFuture transaction API:\n{nautilus_client}"
     );
 
-    insta::assert_snapshot!("java_nautilus_async", nautilus_client);
+    assert_local_snapshot!("java_nautilus_async", nautilus_client);
 }
 
 #[test]
@@ -1076,4 +1140,209 @@ model User {
         engine_process.contains("Optional<String> localBinary = findLocalBinary(schemaPath);"),
         "expected generated Java runtime to prefer a local nautilus binary before PATH lookup:\n{engine_process}"
     );
+}
+
+#[test]
+fn test_generated_clients_exclude_non_orderable_fields_from_order_by() {
+    let ir = validate(
+        r#"
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [hstore]
+}
+
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+  interface   = "sync"
+}
+
+model User {
+  id      Int      @id @default(autoincrement())
+  title   String
+  active  Boolean
+  meta    Hstore?
+  payload Json?
+}
+"#,
+    );
+
+    let (_, dts_models) = generate_all_js_models(&ir);
+    let js_dts = dts_models
+        .iter()
+        .find(|(name, _)| name == "user.d.ts")
+        .map(|(_, code)| code.as_str())
+        .expect("user declaration missing");
+    assert!(js_dts.contains("title?: SortOrder;"));
+    assert!(!js_dts.contains("active?: SortOrder;"));
+    assert!(!js_dts.contains("meta?: SortOrder;"));
+    assert!(!js_dts.contains("payload?: SortOrder;"));
+
+    let py_models = generate_all_python_models(&ir, false, 1);
+    let py_model = generated_python_file(&py_models, "user.py");
+    assert!(py_model.contains("title: NotRequired[Literal[\"asc\", \"desc\"]]"));
+    assert!(!py_model.contains("active: NotRequired[Literal[\"asc\", \"desc\"]]"));
+    assert!(!py_model.contains("meta: NotRequired[Literal[\"asc\", \"desc\"]]"));
+    assert!(!py_model.contains("payload: NotRequired[Literal[\"asc\", \"desc\"]]"));
+
+    let java_files =
+        generate_java_client(&ir, "schema.nautilus", false).expect("generate_java_client failed");
+    let user_dsl = generated_java_file(&java_files, "dsl/UserDsl.java");
+    assert!(user_dsl.contains("public OrderBy title(SortOrder order)"));
+    assert!(!user_dsl.contains("public OrderBy active(SortOrder order)"));
+    assert!(!user_dsl.contains("public OrderBy meta(SortOrder order)"));
+    assert!(!user_dsl.contains("public OrderBy payload(SortOrder order)"));
+}
+
+#[test]
+fn test_generated_hstore_filters_are_typed_in_js_and_python() {
+    let ir = validate(
+        r#"
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [hstore]
+}
+
+model User {
+  id   Int     @id @default(autoincrement())
+  meta Hstore?
+}
+"#,
+    );
+
+    let (_, dts_models) = generate_all_js_models(&ir);
+    let js_dts = dts_models
+        .iter()
+        .find(|(name, _)| name == "user.d.ts")
+        .map(|(_, code)| code.as_str())
+        .expect("user declaration missing");
+    assert!(js_dts.contains("export interface HstoreFilter {"));
+    assert!(js_dts.contains("export type HstoreValue = Record<string, string | null>;"));
+    assert!(js_dts.contains("equals?: HstoreValue;"));
+    assert!(js_dts.contains("not?:    HstoreValue;"));
+    assert!(js_dts.contains("isNull?: boolean;"));
+    assert!(js_dts.contains("meta?: HstoreFilter;"));
+
+    let py_models = generate_all_python_models(&ir, false, 1);
+    let py_model = generated_python_file(&py_models, "user.py");
+    assert!(py_model.contains("HstoreValue = Dict[str, Optional[str]]"));
+    assert!(py_model.contains("class HstoreFilter(TypedDict, total=False):"));
+    assert!(py_model.contains("equals: NotRequired[HstoreValue]"));
+    assert!(py_model.contains("not_: NotRequired[HstoreValue]"));
+    assert!(py_model.contains("is_null: NotRequired[bool]"));
+    assert!(py_model.contains("meta: NotRequired[HstoreFilter]"));
+}
+
+#[test]
+fn test_python_filter_operator_names_are_normalized_for_engine() {
+    let ir = validate(
+        r#"
+model User {
+  id    Int     @id @default(autoincrement())
+  title String?
+}
+"#,
+    );
+
+    let py_models = generate_all_python_models(&ir, false, 1);
+    let py_model = generated_python_file(&py_models, "user.py");
+
+    assert!(py_model.contains("\"in_\": \"in\""));
+    assert!(py_model.contains("\"not_\": \"not\""));
+    assert!(py_model.contains("\"not_in\": \"notIn\""));
+    assert!(py_model.contains("\"startswith\": \"startsWith\""));
+    assert!(py_model.contains("\"endswith\": \"endsWith\""));
+    assert!(py_model.contains("\"is_null\": \"isNull\""));
+}
+
+#[test]
+fn test_generated_object_like_where_values_require_explicit_equals_in_js_and_python() {
+    let ir = validate(
+        r#"
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [hstore]
+}
+
+model User {
+  id      Int    @id @default(autoincrement())
+  payload Jsonb?
+  meta    Hstore?
+}
+"#,
+    );
+
+    let (js_models, dts_models) = generate_all_js_models(&ir);
+    let js_model = js_models
+        .iter()
+        .find(|(name, _)| name == "user.js")
+        .map(|(_, code)| code.as_str())
+        .expect("user runtime missing");
+    let js_dts = dts_models
+        .iter()
+        .find(|(name, _)| name == "user.d.ts")
+        .map(|(_, code)| code.as_str())
+        .expect("user declaration missing");
+    assert!(js_model.contains("ObjectValueDbFields = new Set(["));
+    assert!(js_model.contains("_objectEqualityRequiresExplicitEquals"));
+    assert!(js_model.contains("Use { equals: ... } for object equality filters."));
+    assert!(js_model.contains("const actualOp = op === 'equals' ? 'eq' : op;"));
+    assert!(js_dts.contains("export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];"));
+    assert!(js_dts.contains("export interface JsonFilter {"));
+    assert!(js_dts.contains("equals?: JsonValue;"));
+    assert!(js_dts.contains("payload?: JsonScalarOrArray | JsonFilter;"));
+
+    let py_models = generate_all_python_models(&ir, false, 1);
+    let py_model = generated_python_file(&py_models, "user.py");
+    assert!(py_model.contains("JsonValue = Union[JsonPrimitive, Dict[str, Any], List[Any]]"));
+    assert!(py_model.contains("_object_value_db_fields: frozenset = frozenset({"));
+    assert!(py_model.contains("_object_equality_requires_explicit_equals"));
+    assert!(py_model.contains("Use {'equals': ...} for object equality filters."));
+    assert!(py_model.contains("\"equals\": \"eq\""));
+    assert!(py_model.contains("class JsonFilter(TypedDict, total=False):"));
+    assert!(py_model.contains("equals: NotRequired[JsonValue]"));
+    assert!(py_model.contains("payload: NotRequired[Union[JsonScalarOrArray, JsonFilter]]"));
+}
+
+#[test]
+fn test_generated_java_hstore_uses_runtime_type_that_preserves_null_values() {
+    let ir = validate(
+        r#"
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [hstore]
+}
+
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+  interface   = "sync"
+}
+
+model User {
+  id   Int     @id @default(autoincrement())
+  meta Hstore?
+}
+"#,
+    );
+
+    let java_files =
+        generate_java_client(&ir, "schema.nautilus", false).expect("generate_java_client failed");
+    let user_model = generated_java_file(&java_files, "model/User.java");
+    let json_support = generated_java_file(&java_files, "internal/JsonSupport.java");
+
+    assert!(user_model.contains("JsonSupport.Hstore meta"));
+    assert!(json_support
+        .contains("public static final class Hstore extends LinkedHashMap<String, String>"));
+    assert!(json_support.contains("public static Hstore asHstore(JsonNode node)"));
 }

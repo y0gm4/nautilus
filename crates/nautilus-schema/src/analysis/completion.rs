@@ -3,6 +3,7 @@
 use super::{analyze, span_contains, AnalysisResult};
 use crate::ast::Declaration;
 use crate::token::{Token, TokenKind};
+use crate::validator::KNOWN_POSTGRES_EXTENSIONS;
 
 /// The kind of a completion item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,8 +123,21 @@ pub fn completion_with_analysis(
         return model_attribute_completions();
     }
 
+    if let Some(completions) =
+        datasource_extension_array_item_completions(tokens, offset, provider.as_deref())
+    {
+        return completions;
+    }
+
     if let Some(key) = config_value_context_at(tokens, offset) {
         let block_kind = config_block_kind_at(tokens, offset);
+        if key == "extensions" {
+            let completions =
+                datasource_extension_value_completions(tokens, offset, provider.as_deref());
+            if !completions.is_empty() {
+                return completions;
+            }
+        }
         let completions = config_value_completions(&key, block_kind);
         if !completions.is_empty() {
             return completions;
@@ -784,6 +798,21 @@ fn scalar_type_completions(provider: Option<&str>) -> Vec<CompletionItem> {
 
     if pg {
         items.push(CompletionItem::new(
+            "Citext",
+            CompletionKind::Type,
+            Some("Case-insensitive text -> CITEXT (PostgreSQL + citext extension)".to_string()),
+        ));
+        items.push(CompletionItem::new(
+            "Hstore",
+            CompletionKind::Type,
+            Some("Key/value text map -> HSTORE (PostgreSQL + hstore extension)".to_string()),
+        ));
+        items.push(CompletionItem::new(
+            "Ltree",
+            CompletionKind::Type,
+            Some("Label tree path -> LTREE (PostgreSQL + ltree extension)".to_string()),
+        ));
+        items.push(CompletionItem::new(
             "Jsonb",
             CompletionKind::Type,
             Some("JSONB document -> JSONB (PostgreSQL only)".to_string()),
@@ -916,7 +945,180 @@ fn datasource_field_completions() -> Vec<CompletionItem> {
             CompletionKind::FieldName,
             Some("Direct admin/introspection URL".to_string()),
         ),
+        CompletionItem::new(
+            "extensions",
+            CompletionKind::FieldName,
+            Some("PostgreSQL extensions to install before DDL".to_string()),
+        ),
     ]
+}
+
+fn datasource_extension_value_completions(
+    tokens: &[Token],
+    offset: usize,
+    provider: Option<&str>,
+) -> Vec<CompletionItem> {
+    if matches!(provider, Some("mysql") | Some("sqlite")) {
+        return Vec::new();
+    }
+
+    match extensions_value_mode_at(tokens, offset) {
+        ExtensionsValueMode::StartOfValue => vec![CompletionItem::with_snippet(
+            "extensions = [..]",
+            "[${1:pg_trgm}]",
+            CompletionKind::Keyword,
+            Some("PostgreSQL-only array of extension names".to_string()),
+        )],
+        ExtensionsValueMode::InsideArray => KNOWN_POSTGRES_EXTENSIONS
+            .iter()
+            .map(|extension| {
+                CompletionItem::with_insert(
+                    *extension,
+                    render_extension_completion_insert(extension),
+                    CompletionKind::Keyword,
+                    Some("Known PostgreSQL extension".to_string()),
+                )
+            })
+            .collect(),
+        ExtensionsValueMode::None => Vec::new(),
+    }
+}
+
+fn datasource_extension_array_item_completions(
+    tokens: &[Token],
+    offset: usize,
+    provider: Option<&str>,
+) -> Option<Vec<CompletionItem>> {
+    if matches!(provider, Some("mysql") | Some("sqlite")) {
+        return None;
+    }
+
+    if extensions_value_mode_at(tokens, offset) != ExtensionsValueMode::InsideArray {
+        return None;
+    }
+
+    Some(
+        KNOWN_POSTGRES_EXTENSIONS
+            .iter()
+            .map(|extension| {
+                CompletionItem::with_insert(
+                    *extension,
+                    render_extension_completion_insert(extension),
+                    CompletionKind::Keyword,
+                    Some("Known PostgreSQL extension".to_string()),
+                )
+            })
+            .collect(),
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExtensionsValueMode {
+    None,
+    StartOfValue,
+    InsideArray,
+}
+
+fn extensions_value_mode_at(tokens: &[Token], offset: usize) -> ExtensionsValueMode {
+    let mut pending_block_kind: Option<Option<ConfigBlockKind>> = None;
+    let mut block_stack: Vec<Option<ConfigBlockKind>> = Vec::new();
+    let mut current_field_key: Option<String> = None;
+    let mut seen_equal = false;
+    let mut saw_value_token_after_equal = false;
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+
+    for token in tokens.iter().take_while(|token| token.span.end <= offset) {
+        match token.kind {
+            TokenKind::Datasource => pending_block_kind = Some(Some(ConfigBlockKind::Datasource)),
+            TokenKind::Generator => pending_block_kind = Some(Some(ConfigBlockKind::Generator)),
+            TokenKind::Model | TokenKind::Enum | TokenKind::Type => pending_block_kind = Some(None),
+            TokenKind::LBrace => {
+                block_stack.push(pending_block_kind.take().unwrap_or(None));
+                current_field_key = None;
+                seen_equal = false;
+                saw_value_token_after_equal = false;
+                paren_depth = 0;
+                bracket_depth = 0;
+            }
+            TokenKind::RBrace => {
+                block_stack.pop();
+                current_field_key = None;
+                seen_equal = false;
+                saw_value_token_after_equal = false;
+                paren_depth = 0;
+                bracket_depth = 0;
+            }
+            _ if block_stack.last() != Some(&Some(ConfigBlockKind::Datasource)) => {}
+            TokenKind::Newline => {
+                if bracket_depth == 0 && paren_depth == 0 {
+                    current_field_key = None;
+                    seen_equal = false;
+                    saw_value_token_after_equal = false;
+                }
+            }
+            TokenKind::Ident(ref name) if current_field_key.is_none() && !seen_equal => {
+                current_field_key = Some(name.clone());
+            }
+            TokenKind::Equal if current_field_key.is_some() => {
+                seen_equal = true;
+            }
+            TokenKind::LParen if seen_equal => {
+                saw_value_token_after_equal = true;
+                paren_depth += 1;
+            }
+            TokenKind::RParen if seen_equal && paren_depth > 0 => {
+                saw_value_token_after_equal = true;
+                paren_depth -= 1;
+            }
+            TokenKind::LBracket if seen_equal => {
+                saw_value_token_after_equal = true;
+                bracket_depth += 1;
+            }
+            TokenKind::RBracket if seen_equal && bracket_depth > 0 => {
+                saw_value_token_after_equal = true;
+                bracket_depth -= 1;
+            }
+            _ if seen_equal => {
+                saw_value_token_after_equal = true;
+            }
+            _ => {}
+        }
+    }
+
+    if current_field_key.as_deref() != Some("extensions") || !seen_equal {
+        return ExtensionsValueMode::None;
+    }
+
+    if bracket_depth > 0 {
+        ExtensionsValueMode::InsideArray
+    } else if !saw_value_token_after_equal {
+        ExtensionsValueMode::StartOfValue
+    } else {
+        ExtensionsValueMode::None
+    }
+}
+
+fn render_extension_completion_insert(extension: &str) -> String {
+    if is_bare_schema_identifier(extension) {
+        extension.to_string()
+    } else {
+        format!("\"{}\"", extension)
+    }
+}
+
+fn is_bare_schema_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return false;
+    }
+    matches!(TokenKind::from_ident(name), TokenKind::Ident(_))
 }
 
 fn generator_field_completions() -> Vec<CompletionItem> {

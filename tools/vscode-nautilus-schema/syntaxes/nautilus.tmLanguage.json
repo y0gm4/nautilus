@@ -77,7 +77,7 @@
     },
     "config-keys": {
       "comment": "Known config field names inside datasource/generator blocks",
-      "match": "^\\s+(provider|url|output|interface|recursive_type_depth)(?=\\s*=)",
+      "match": "^\\s+(provider|url|direct_url|extensions|output|interface|recursive_type_depth|package|group_id|artifact_id|mode)(?=\\s*=)",
       "captures": {
         "1": { "name": "support.type.property-name.nautilus" }
       }
@@ -168,7 +168,7 @@
     },
     "scalar-types": {
       "comment": "Built-in scalar field types",
-      "match": "\\b(String|Boolean|Int|BigInt|Float|Decimal|DateTime|Bytes|Json|Uuid|Jsonb|Xml|Char|VarChar)\\b",
+      "match": "\\b(String|Boolean|Int|BigInt|Float|Decimal|DateTime|Bytes|Json|Uuid|Jsonb|Xml|Char|VarChar|Citext|Hstore|Ltree)\\b",
       "name": "support.type.primitive.nautilus"
     },
     "builtin-functions": {

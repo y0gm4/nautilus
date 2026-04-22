@@ -4,6 +4,7 @@
 //! internal [`Value`] type, as well as small helpers used across the engine
 //! (e.g. case conversion, row serialisation).
 
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use uuid::Uuid;
@@ -101,6 +102,9 @@ pub fn json_to_value_field(
                 return Ok(Value::DateTime(dt));
             }
         }
+    }
+    if let ResolvedFieldType::Scalar(ScalarType::Hstore) = field_type {
+        return json_to_hstore_value(json);
     }
     json_to_value(json)
 }
@@ -236,6 +240,55 @@ fn parse_datetime_string(raw: &str) -> Option<chrono::NaiveDateTime> {
     }
 
     None
+}
+
+fn json_to_hstore_value(json: &serde_json::Value) -> Result<Value, ProtocolError> {
+    match json {
+        serde_json::Value::Null => Ok(Value::Null),
+        serde_json::Value::Object(object) => Ok(Value::Hstore(json_object_to_hstore(object)?)),
+        serde_json::Value::Array(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            for item in items {
+                values.push(match item {
+                    serde_json::Value::Null => Value::Null,
+                    serde_json::Value::Object(object) => {
+                        Value::Hstore(json_object_to_hstore(object)?)
+                    }
+                    other => {
+                        return Err(ProtocolError::InvalidParams(format!(
+                            "Hstore arrays must contain only objects or nulls, got {:?}",
+                            other
+                        )));
+                    }
+                });
+            }
+            Ok(Value::Array(values))
+        }
+        other => Err(ProtocolError::InvalidParams(format!(
+            "Hstore values must be JSON objects with string or null values, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn json_object_to_hstore(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<BTreeMap<String, Option<String>>, ProtocolError> {
+    let mut decoded = BTreeMap::new();
+    for (key, value) in object {
+        let mapped = match value {
+            serde_json::Value::String(item) => Some(item.clone()),
+            serde_json::Value::Null => None,
+            other => {
+                return Err(ProtocolError::InvalidParams(format!(
+                    "Hstore values must be strings or nulls; key {:?} received {:?}",
+                    key, other
+                )));
+            }
+        };
+        decoded.insert(key.clone(), mapped);
+    }
+    Ok(decoded)
 }
 
 fn normalize_value_with_hint(

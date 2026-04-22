@@ -77,12 +77,7 @@ pub fn serialize_live_schema_with_options(
     options: PullNamingOptions,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
-
-    parts.push(format!(
-        "datasource db {{\n  provider = \"{}\"\n  url      = \"{}\"\n}}",
-        provider.schema_provider_name(),
-        url
-    ));
+    parts.push(render_datasource_block(live, provider, url));
 
     let mut ct_names: Vec<&String> = live.composite_types.keys().collect();
     ct_names.sort();
@@ -403,6 +398,44 @@ pub fn serialize_live_schema_with_options(
     out
 }
 
+fn render_datasource_block(live: &LiveSchema, provider: DatabaseProvider, url: &str) -> String {
+    let mut fields = vec![
+        (
+            "provider".to_string(),
+            format!("\"{}\"", provider.schema_provider_name()),
+        ),
+        (
+            "url".to_string(),
+            format!("\"{}\"", escape_schema_string(url)),
+        ),
+    ];
+
+    if provider == DatabaseProvider::Postgres && !live.extensions.is_empty() {
+        let mut extensions: Vec<&str> = live.extensions.keys().map(String::as_str).collect();
+        extensions.sort_unstable();
+        fields.push((
+            "extensions".to_string(),
+            format!(
+                "[{}]",
+                extensions
+                    .iter()
+                    .map(|extension| render_extension_schema_name(extension))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
+
+    let max_key = fields.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
+    let mut lines = vec!["datasource db {".to_string()];
+    for (key, value) in fields {
+        let padding = max_key - key.len() + 1;
+        lines.push(format!("  {}{}= {}", key, " ".repeat(padding), value));
+    }
+    lines.push("}".to_string());
+    lines.join("\n")
+}
+
 /// Infer the `.nautilus` scalar type name from a normalised SQL type string.
 ///
 /// `enums` is the map of live enum type names (lower-cased) to their variants.
@@ -461,6 +494,9 @@ fn infer_nautilus_type(
 
     match t.as_str() {
         "text" | "clob" => "String".to_string(),
+        "citext" => "Citext".to_string(),
+        "hstore" => "Hstore".to_string(),
+        "ltree" => "Ltree".to_string(),
         t if t.starts_with("varchar") || t.starts_with("character varying") => "String".to_string(),
         "uuid" | "char(36)" => "Uuid".to_string(),
         t if t.starts_with("char(") && !t.starts_with("char(36") => "String".to_string(),
@@ -479,7 +515,8 @@ fn infer_nautilus_type(
         | "timestamptz"
         | "datetime" => "DateTime".to_string(),
         "bytea" | "blob" | "binary" | "varbinary" => "Bytes".to_string(),
-        "json" | "jsonb" => "Json".to_string(),
+        "json" => "Json".to_string(),
+        "jsonb" => "Jsonb".to_string(),
         _ => "String".to_string(),
     }
 }
@@ -860,6 +897,28 @@ fn choose_unique_field_name(candidates: Vec<String>, used_fields: &mut HashSet<S
 
 fn escape_schema_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn render_extension_schema_name(name: &str) -> String {
+    if is_bare_schema_identifier(name) {
+        name.to_string()
+    } else {
+        format!("\"{}\"", escape_schema_string(name))
+    }
+}
+
+fn is_bare_schema_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return false;
+    }
+    matches!(TokenKind::from_ident(name), TokenKind::Ident(_))
 }
 
 fn logical_field_name(naming: &TableNamingContext, db_column_name: &str) -> String {
@@ -1269,8 +1328,20 @@ mod tests {
             "Uuid"
         );
         assert_eq!(
+            infer_nautilus_type("citext", &no_enums, &no_composites),
+            "Citext"
+        );
+        assert_eq!(
+            infer_nautilus_type("hstore", &no_enums, &no_composites),
+            "Hstore"
+        );
+        assert_eq!(
+            infer_nautilus_type("ltree", &no_enums, &no_composites),
+            "Ltree"
+        );
+        assert_eq!(
             infer_nautilus_type("jsonb", &no_enums, &no_composites),
-            "Json"
+            "Jsonb"
         );
         assert_eq!(
             infer_nautilus_type("bytea", &no_enums, &no_composites),
@@ -1323,6 +1394,14 @@ mod tests {
         assert_eq!(
             infer_nautilus_type("uuid[]", &no_enums, &no_composites),
             "Uuid[]"
+        );
+        assert_eq!(
+            infer_nautilus_type("citext[]", &no_enums, &no_composites),
+            "Citext[]"
+        );
+        assert_eq!(
+            infer_nautilus_type("jsonb[]", &no_enums, &no_composites),
+            "Jsonb[]"
         );
     }
 

@@ -130,9 +130,9 @@ public final class {{ name }} {
     public static final class OrderBy implements WireSerializable {
         private final ObjectNode node = JsonSupport.object();
 
-{%- for field in scalar_fields %}
-        public OrderBy {{ field.name }}(SortOrder order) {
-            this.node.put("{{ field.name }}", order.wireValue());
+{%- for name in orderable_field_names %}
+        public OrderBy {{ name }}(SortOrder order) {
+            this.node.put("{{ name }}", order.wireValue());
             return this;
         }
 

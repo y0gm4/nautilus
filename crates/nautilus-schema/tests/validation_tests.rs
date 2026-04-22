@@ -993,3 +993,178 @@ model Post {
     let ir = validate_schema(ast).unwrap();
     assert_eq!(ir.models.len(), 2);
 }
+
+#[test]
+fn test_datasource_extensions_populated_in_ir() {
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [pg_trgm, pgcrypto, "uuid-ossp"]
+}
+
+model User { id Int @id }
+"#;
+    let ast = parse(source).unwrap();
+    let ir = validate_schema(ast).expect("extensions should validate");
+    let ds = ir.datasource.expect("datasource IR");
+    // Extensions are normalized to lower-case and sorted alphabetically;
+    // '_' (0x5F) sorts before 'c' (0x63), so "pg_trgm" < "pgcrypto".
+    assert_eq!(ds.extensions, vec!["pg_trgm", "pgcrypto", "uuid-ossp"]);
+}
+
+#[test]
+fn test_datasource_extensions_rejected_for_mysql() {
+    let source = r#"
+datasource db {
+  provider   = "mysql"
+  url        = "mysql://localhost/test"
+  extensions = [pg_trgm]
+}
+
+model User { id Int @id }
+"#;
+    let ast = parse(source).unwrap();
+    let err = validate_schema(ast).unwrap_err();
+    match err {
+        SchemaError::Validation(msg, _) => {
+            assert!(
+                msg.contains("'extensions' is only supported for the 'postgresql'"),
+                "got: {}",
+                msg
+            );
+        }
+        _ => panic!("Expected validation error"),
+    }
+}
+
+#[test]
+fn test_datasource_extensions_duplicate_is_error() {
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [pg_trgm, "pg_trgm"]
+}
+
+model User { id Int @id }
+"#;
+    let ast = parse(source).unwrap();
+    let err = validate_schema(ast).unwrap_err();
+    match err {
+        SchemaError::Validation(msg, _) => {
+            assert!(
+                msg.contains("Duplicate extension 'pg_trgm'"),
+                "got: {}",
+                msg
+            );
+        }
+        _ => panic!("Expected validation error"),
+    }
+}
+
+#[test]
+fn test_datasource_extensions_unknown_name_emits_warning() {
+    use nautilus_schema::analysis::analyze;
+    use nautilus_schema::Severity;
+
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [postgis]
+}
+
+model User { id Int @id }
+"#;
+    let result = analyze(source);
+    assert!(
+        result.ir.is_some(),
+        "unknown extension should still validate"
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Warning && d.message.contains("postgis")),
+        "expected warning for unknown extension, got: {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn test_datasource_extensions_must_be_array() {
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = "pg_trgm"
+}
+
+model User { id Int @id }
+"#;
+    let ast = parse(source).unwrap();
+    let err = validate_schema(ast).unwrap_err();
+    match err {
+        SchemaError::Validation(msg, _) => {
+            assert!(msg.contains("must be an array"), "got: {}", msg);
+        }
+        _ => panic!("Expected validation error"),
+    }
+}
+
+#[test]
+fn test_postgres_extension_backed_types_rejected_for_mysql() {
+    let source = r#"
+datasource db {
+  provider = "mysql"
+  url      = "mysql://localhost/test"
+}
+
+model User {
+  id    Int    @id
+  email Citext
+}
+"#;
+    let ast = parse(source).unwrap();
+    let err = validate_schema(ast).unwrap_err();
+    match err {
+        SchemaError::Validation(msg, _) => {
+            assert!(
+                msg.contains("Citext") && msg.contains("provider 'mysql'"),
+                "got: {}",
+                msg
+            );
+        }
+        _ => panic!("Expected validation error"),
+    }
+}
+
+#[test]
+fn test_postgres_extension_backed_types_emit_missing_extension_warning() {
+    use nautilus_schema::analysis::analyze;
+    use nautilus_schema::Severity;
+
+    let source = r#"
+datasource db {
+  provider = "postgresql"
+  url      = "postgres://localhost/test"
+}
+
+model User {
+  id    Int    @id
+  email Citext
+}
+"#;
+    let result = analyze(source);
+    assert!(result.ir.is_some(), "schema should still validate");
+    assert!(
+        result.diagnostics.iter().any(|d| {
+            d.severity == Severity::Warning
+                && d.message.contains("Citext")
+                && d.message.contains("extensions = [citext]")
+        }),
+        "expected missing-extension warning, got: {:?}",
+        result.diagnostics
+    );
+}

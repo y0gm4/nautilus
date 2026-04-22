@@ -215,6 +215,9 @@ pub(crate) fn bind_value<'q>(
         Value::DateTime(dt) => Ok(query.bind(dt.format("%Y-%m-%dT%H:%M:%S%.f").to_string())),
         Value::Uuid(u) => Ok(query.bind(u.to_string())),
         Value::String(s) => Ok(query.bind(s.as_str())),
+        Value::Hstore(_) => Err(Error::database_msg(
+            "HSTORE values are only supported on PostgreSQL",
+        )),
         Value::Bytes(b) => Ok(query.bind(b.as_slice())),
         Value::Json(j) => Ok(query.bind(j.to_string())),
         Value::Array(_) => Ok(query.bind(crate::utils::value_to_json(value).to_string())),

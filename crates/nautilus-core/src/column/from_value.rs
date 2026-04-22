@@ -1,5 +1,7 @@
 //! `FromValue` trait and standard scalar/collection implementations.
 
+use std::collections::BTreeMap;
+
 use crate::error::Result;
 use crate::value::Value;
 
@@ -194,6 +196,32 @@ impl FromValue for serde_json::Value {
     }
 }
 
+impl FromValue for BTreeMap<String, Option<String>> {
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::Hstore(map) => Ok(map.clone()),
+            Value::Json(serde_json::Value::Object(map)) => decode_hstore_json_object(map),
+            Value::Null => Err(crate::Error::TypeError("NULL value for Hstore".to_string())),
+            other => Err(crate::Error::TypeError(format!(
+                "expected Hstore or Json object, got {:?}",
+                other
+            ))),
+        }
+    }
+
+    fn from_value_owned(value: Value) -> Result<Self> {
+        match value {
+            Value::Hstore(map) => Ok(map),
+            Value::Json(serde_json::Value::Object(map)) => decode_hstore_json_object(&map),
+            Value::Null => Err(crate::Error::TypeError("NULL value for Hstore".to_string())),
+            other => Err(crate::Error::TypeError(format!(
+                "expected Hstore or Json object, got {:?}",
+                other
+            ))),
+        }
+    }
+}
+
 impl FromValue for Vec<u8> {
     fn from_value(value: &Value) -> Result<Self> {
         match value {
@@ -296,6 +324,7 @@ impl_vec_from_value!(rust_decimal::Decimal);
 impl_vec_from_value!(chrono::NaiveDateTime);
 impl_vec_from_value!(uuid::Uuid);
 impl_vec_from_value!(serde_json::Value);
+impl_vec_from_value!(BTreeMap<String, Option<String>>);
 
 fn decode_json_array<T, F>(json_value: &serde_json::Value, decoder: F) -> Result<Vec<T>>
 where
@@ -346,8 +375,30 @@ where
     }
 }
 
+fn decode_hstore_json_object(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<BTreeMap<String, Option<String>>> {
+    let mut decoded = BTreeMap::new();
+    for (key, value) in object {
+        let mapped = match value {
+            serde_json::Value::String(item) => Some(item.clone()),
+            serde_json::Value::Null => None,
+            other => {
+                return Err(crate::Error::TypeError(format!(
+                    "expected Hstore JSON value to be string or null for key {:?}, got {:?}",
+                    key, other
+                )));
+            }
+        };
+        decoded.insert(key.clone(), mapped);
+    }
+    Ok(decoded)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::FromValue;
     use crate::Value;
 
@@ -397,5 +448,39 @@ mod tests {
 
         assert_eq!(uuid.to_string(), "550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(decimal.to_string(), "12.34");
+    }
+
+    #[test]
+    fn hstore_scalar_accepts_native_and_json_object_values() {
+        let native = Value::Hstore(BTreeMap::from([
+            ("display_name".to_string(), Some("Bob".to_string())),
+            ("nickname".to_string(), None),
+        ]));
+        let json = Value::Json(serde_json::json!({
+            "display_name": "Bob",
+            "nickname": null
+        }));
+
+        let native_map = BTreeMap::<String, Option<String>>::from_value(&native).unwrap();
+        let json_map = BTreeMap::<String, Option<String>>::from_value(&json).unwrap();
+
+        assert_eq!(native_map, json_map);
+        assert_eq!(native_map["display_name"], Some("Bob".to_string()));
+        assert_eq!(native_map["nickname"], None);
+    }
+
+    #[test]
+    fn hstore_arrays_decode_from_json_storage() {
+        let json = Value::Json(serde_json::json!([
+            {"display_name": "Bob", "nickname": null},
+            {"display_name": "OpenAI", "nickname": "oai"}
+        ]));
+
+        let decoded: Vec<BTreeMap<String, Option<String>>> = Vec::from_value(&json).unwrap();
+
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0]["display_name"], Some("Bob".to_string()));
+        assert_eq!(decoded[0]["nickname"], None);
+        assert_eq!(decoded[1]["nickname"], Some("oai".to_string()));
     }
 }

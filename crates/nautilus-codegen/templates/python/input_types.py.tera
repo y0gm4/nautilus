@@ -8,6 +8,7 @@ class StringFilter(TypedDict, total=False):
     endswith: NotRequired[str]
     in_: NotRequired[List[str]]
     not_in: NotRequired[List[str]]
+    is_null: NotRequired[bool]
 
 
 class IntFilter(TypedDict, total=False):
@@ -20,6 +21,7 @@ class IntFilter(TypedDict, total=False):
     gte: NotRequired[int]
     in_: NotRequired[List[int]]
     not_in: NotRequired[List[int]]
+    is_null: NotRequired[bool]
 
 
 class FloatFilter(TypedDict, total=False):
@@ -32,6 +34,7 @@ class FloatFilter(TypedDict, total=False):
     gte: NotRequired[float]
     in_: NotRequired[List[float]]
     not_in: NotRequired[List[float]]
+    is_null: NotRequired[bool]
 
 
 class DecimalFilter(TypedDict, total=False):
@@ -44,6 +47,7 @@ class DecimalFilter(TypedDict, total=False):
     gte: NotRequired[Decimal]
     in_: NotRequired[List[Decimal]]
     not_in: NotRequired[List[Decimal]]
+    is_null: NotRequired[bool]
 
 
 class DateTimeFilter(TypedDict, total=False):
@@ -56,6 +60,7 @@ class DateTimeFilter(TypedDict, total=False):
     gte: NotRequired[datetime]
     in_: NotRequired[List[datetime]]
     not_in: NotRequired[List[datetime]]
+    is_null: NotRequired[bool]
 
 
 class UuidFilter(TypedDict, total=False):
@@ -64,12 +69,28 @@ class UuidFilter(TypedDict, total=False):
     not_: NotRequired[UUID]
     in_: NotRequired[List[UUID]]
     not_in: NotRequired[List[UUID]]
+    is_null: NotRequired[bool]
 
 
 class BoolFilter(TypedDict, total=False):
     """Boolean field filter operations."""
     equals: NotRequired[bool]
     not_: NotRequired[bool]
+    is_null: NotRequired[bool]
+
+
+class JsonFilter(TypedDict, total=False):
+    """JSON / JSONB field filter operations."""
+    equals: NotRequired[JsonValue]
+    not_: NotRequired[JsonValue]
+    is_null: NotRequired[bool]
+
+
+class HstoreFilter(TypedDict, total=False):
+    """Hstore field filter operations."""
+    equals: NotRequired[HstoreValue]
+    not_: NotRequired[HstoreValue]
+    is_null: NotRequired[bool]
 
 
 class {{ model_name }}WhereInput(TypedDict, total=False):
@@ -89,6 +110,10 @@ class {{ model_name }}WhereInput(TypedDict, total=False):
     {{ field.name }}: NotRequired[Union[UUID, UuidFilter]]
     {% elif field.python_type == "bool" %}
     {{ field.name }}: NotRequired[Union[bool, BoolFilter]]
+    {% elif field.python_type == "JsonValue" %}
+    {{ field.name }}: NotRequired[Union[JsonScalarOrArray, JsonFilter]]
+    {% elif field.python_type == "HstoreValue" %}
+    {{ field.name }}: NotRequired[HstoreFilter]
     {% else %}
     {{ field.name }}: NotRequired[{{ field.python_type }}]
     {% endif %}

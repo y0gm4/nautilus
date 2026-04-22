@@ -18,9 +18,11 @@ impl LanguageBackend for PythonBackend {
             ScalarType::Boolean => "bool",
             ScalarType::DateTime => "datetime",
             ScalarType::Bytes => "bytes",
-            ScalarType::Json => "Dict[str, Any]",
+            ScalarType::Json => "JsonValue",
             ScalarType::Uuid => "UUID",
-            ScalarType::Jsonb => "Dict[str, Any]",
+            ScalarType::Citext | ScalarType::Ltree => "str",
+            ScalarType::Hstore => "HstoreValue",
+            ScalarType::Jsonb => "JsonValue",
             ScalarType::Xml | ScalarType::Char { .. } | ScalarType::VarChar { .. } => "str",
         }
     }

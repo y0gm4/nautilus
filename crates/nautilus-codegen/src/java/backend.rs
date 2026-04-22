@@ -11,9 +11,12 @@ impl LanguageBackend for JavaBackend {
     fn scalar_to_type(&self, scalar: &ScalarType) -> &'static str {
         match scalar {
             ScalarType::String
+            | ScalarType::Citext
+            | ScalarType::Ltree
             | ScalarType::Xml
             | ScalarType::Char { .. }
             | ScalarType::VarChar { .. } => "String",
+            ScalarType::Hstore => "JsonSupport.Hstore",
             ScalarType::Boolean => "Boolean",
             ScalarType::Int => "Integer",
             ScalarType::BigInt => "Long",

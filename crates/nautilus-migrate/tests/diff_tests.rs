@@ -1244,3 +1244,101 @@ fn order_changes_drops_tables_in_reverse_live_dependency_order() {
 
     assert!(post_idx < user_idx, "{ordered:?}");
 }
+
+#[test]
+fn detects_new_extension_when_missing_from_live() {
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [pg_trgm]
+}
+
+model Doc { id Int @id }
+"#;
+    let target = common::parse(source).unwrap();
+    let live = LiveSchema::default();
+
+    let changes = SchemaDiff::compute(&live, &target, DatabaseProvider::Postgres);
+
+    assert!(
+        changes
+            .iter()
+            .any(|c| matches!(c, Change::CreateExtension { name } if name == "pg_trgm")),
+        "expected CreateExtension(pg_trgm): {changes:?}"
+    );
+}
+
+#[test]
+fn detects_dropped_extension_when_live_has_it_but_target_doesnt() {
+    let source = r#"
+datasource db {
+  provider = "postgresql"
+  url      = "postgres://localhost/test"
+}
+
+model Doc { id Int @id }
+"#;
+    let target = common::parse(source).unwrap();
+    let mut live = LiveSchema::default();
+    live.extensions
+        .insert("pg_trgm".to_string(), "1.6".to_string());
+
+    let changes = SchemaDiff::compute(&live, &target, DatabaseProvider::Postgres);
+
+    assert!(
+        changes
+            .iter()
+            .any(|c| matches!(c, Change::DropExtension { name } if name == "pg_trgm")),
+        "expected DropExtension(pg_trgm): {changes:?}"
+    );
+}
+
+#[test]
+fn no_changes_when_extensions_match() {
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [pg_trgm, pgcrypto]
+}
+
+model Doc { id Int @id }
+"#;
+    let target = common::parse(source).unwrap();
+    let mut live = LiveSchema::default();
+    live.extensions
+        .insert("pg_trgm".to_string(), "1.6".to_string());
+    live.extensions
+        .insert("pgcrypto".to_string(), "1.3".to_string());
+    // Stub in the live Doc table so only extension state is compared.
+    live.tables.insert(
+        "Doc".to_string(),
+        nautilus_migrate::live::LiveTable {
+            name: "Doc".to_string(),
+            columns: vec![nautilus_migrate::live::LiveColumn {
+                name: "id".to_string(),
+                col_type: "integer".to_string(),
+                nullable: false,
+                default_value: None,
+                generated_expr: None,
+                computed_kind: None,
+                check_expr: None,
+            }],
+            primary_key: vec!["id".to_string()],
+            indexes: vec![],
+            check_constraints: vec![],
+            foreign_keys: vec![],
+        },
+    );
+
+    let changes = SchemaDiff::compute(&live, &target, DatabaseProvider::Postgres);
+
+    assert!(
+        !changes.iter().any(|c| matches!(
+            c,
+            Change::CreateExtension { .. } | Change::DropExtension { .. }
+        )),
+        "unexpected extension changes: {changes:?}"
+    );
+}

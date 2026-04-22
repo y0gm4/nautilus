@@ -1,5 +1,6 @@
 //! Database value types.
 
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -31,6 +32,8 @@ pub enum Value {
     Uuid(uuid::Uuid),
     /// JSON value.
     Json(serde_json::Value),
+    /// PostgreSQL hstore key/value map.
+    Hstore(BTreeMap<String, Option<String>>),
     /// String.
     String(String),
     /// Byte array.
@@ -65,6 +68,7 @@ enum SerdeValue {
     DateTime(String),
     Uuid(String),
     Json(serde_json::Value),
+    Hstore(BTreeMap<String, Option<String>>),
     String(String),
     Bytes(String),
     Array(Vec<Value>),
@@ -96,6 +100,7 @@ impl From<&Value> for SerdeValue {
             Value::DateTime(v) => SerdeValue::DateTime(format_datetime(*v)),
             Value::Uuid(v) => SerdeValue::Uuid(v.to_string()),
             Value::Json(v) => SerdeValue::Json(v.clone()),
+            Value::Hstore(v) => SerdeValue::Hstore(v.clone()),
             Value::String(v) => SerdeValue::String(v.clone()),
             Value::Bytes(v) => {
                 use base64::Engine;
@@ -129,6 +134,7 @@ impl TryFrom<SerdeValue> for Value {
                 .map(Value::Uuid)
                 .map_err(|e| format!("invalid uuid '{}': {}", raw, e)),
             SerdeValue::Json(v) => Ok(Value::Json(v)),
+            SerdeValue::Hstore(v) => Ok(Value::Hstore(v)),
             SerdeValue::String(v) => Ok(Value::String(v)),
             SerdeValue::Bytes(raw) => {
                 use base64::Engine;
@@ -192,6 +198,12 @@ impl From<serde_json::Value> for Value {
     }
 }
 
+impl From<BTreeMap<String, Option<String>>> for Value {
+    fn from(v: BTreeMap<String, Option<String>>) -> Self {
+        Value::Hstore(v)
+    }
+}
+
 impl From<String> for Value {
     fn from(v: String) -> Self {
         Value::String(v)
@@ -241,6 +253,7 @@ impl_vec_from!(
     f64,
     bool,
     String,
+    BTreeMap<String, Option<String>>,
     rust_decimal::Decimal,
     uuid::Uuid,
     chrono::NaiveDateTime,
@@ -268,6 +281,7 @@ impl_option_from!(
     i64,
     f64,
     String,
+    BTreeMap<String, Option<String>>,
     rust_decimal::Decimal,
     uuid::Uuid,
     chrono::NaiveDateTime,
@@ -299,6 +313,19 @@ impl Value {
             Value::DateTime(v) => serde_json::Value::String(format_datetime(*v)),
             Value::Uuid(v) => serde_json::Value::String(v.to_string()),
             Value::Json(v) => v.clone(),
+            Value::Hstore(v) => serde_json::Value::Object(
+                v.iter()
+                    .map(|(key, value)| {
+                        (
+                            key.clone(),
+                            value
+                                .as_ref()
+                                .map(|item| serde_json::Value::String(item.clone()))
+                                .unwrap_or(serde_json::Value::Null),
+                        )
+                    })
+                    .collect(),
+            ),
             Value::String(v) => serde_json::Value::String(v.clone()),
             Value::Bytes(v) => {
                 use base64::Engine;
@@ -376,6 +403,7 @@ pub(crate) fn json_to_value_ref(json: &serde_json::Value) -> Value {
 #[cfg(test)]
 mod tests {
     use core::f64;
+    use std::collections::BTreeMap;
 
     use super::*;
 
@@ -407,6 +435,12 @@ mod tests {
         use serde_json::json;
         let j = json!({"key": "value"});
         assert_eq!(Value::Json(j.clone()), Value::from(j));
+
+        let hstore = BTreeMap::from([
+            ("display_name".to_string(), Some("Bob".to_string())),
+            ("nickname".to_string(), None),
+        ]);
+        assert_eq!(Value::Hstore(hstore.clone()), Value::from(hstore));
     }
 
     #[test]
@@ -481,6 +515,22 @@ mod tests {
     }
 
     #[test]
+    fn test_value_to_json_plain_hstore() {
+        let value = Value::Hstore(BTreeMap::from([
+            ("display_name".to_string(), Some("Bob".to_string())),
+            ("nickname".to_string(), None),
+        ]));
+
+        assert_eq!(
+            value.to_json_plain(),
+            serde_json::json!({
+                "display_name": "Bob",
+                "nickname": null
+            })
+        );
+    }
+
+    #[test]
     fn test_value_plain_json_array2d_roundtrip_stays_untyped_without_schema() {
         let value = Value::Array2D(vec![
             vec![Value::I32(1), Value::I32(2)],
@@ -540,6 +590,10 @@ mod tests {
             Value::Uuid(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()),
             Value::Bytes(vec![1, 2, 3, 4]),
             Value::Json(json!({"ok": true})),
+            Value::Hstore(BTreeMap::from([
+                ("display_name".to_string(), Some("Bob".to_string())),
+                ("nickname".to_string(), None),
+            ])),
             Value::String("test".to_string()),
             Value::Array(vec![Value::I32(1), Value::I32(2)]),
             Value::Array2D(vec![vec![Value::I32(1), Value::I32(2)]]),

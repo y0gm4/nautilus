@@ -1,9 +1,10 @@
 use nautilus_connector::Row;
 use nautilus_core::Value;
 use nautilus_engine::conversion::{
-    check_protocol_version, json_to_value, normalize_row_with_hints, normalize_rows_with_hints,
-    rows_to_raw_json, to_snake_case, ValueHint,
+    check_protocol_version, json_to_value, json_to_value_field, normalize_row_with_hints,
+    normalize_rows_with_hints, rows_to_raw_json, to_snake_case, ValueHint,
 };
+use nautilus_schema::ir::{ResolvedFieldType, ScalarType};
 use serde_json::json;
 
 #[test]
@@ -101,6 +102,61 @@ fn json_to_value_object() {
     let obj = json!({"key": "value"});
     let val = json_to_value(&obj).unwrap();
     assert_eq!(val, Value::Json(obj));
+}
+
+#[test]
+fn json_to_value_field_hstore_object() {
+    let val = json_to_value_field(
+        &json!({"display_name": "Bob", "nickname": null}),
+        &ResolvedFieldType::Scalar(ScalarType::Hstore),
+    )
+    .unwrap();
+    assert_eq!(
+        val,
+        Value::Hstore(std::collections::BTreeMap::from([
+            ("display_name".to_string(), Some("Bob".to_string())),
+            ("nickname".to_string(), None),
+        ]))
+    );
+}
+
+#[test]
+fn json_to_value_field_hstore_array_of_objects() {
+    let val = json_to_value_field(
+        &json!([
+            {"display_name": "Bob", "nickname": null},
+            {"display_name": "OpenAI", "nickname": "oai"}
+        ]),
+        &ResolvedFieldType::Scalar(ScalarType::Hstore),
+    )
+    .unwrap();
+    assert_eq!(
+        val,
+        Value::Array(vec![
+            Value::Hstore(std::collections::BTreeMap::from([
+                ("display_name".to_string(), Some("Bob".to_string())),
+                ("nickname".to_string(), None),
+            ])),
+            Value::Hstore(std::collections::BTreeMap::from([
+                ("display_name".to_string(), Some("OpenAI".to_string())),
+                ("nickname".to_string(), Some("oai".to_string())),
+            ])),
+        ])
+    );
+}
+
+#[test]
+fn json_to_value_field_hstore_rejects_non_string_values() {
+    let err = json_to_value_field(
+        &json!({"display_name": 42}),
+        &ResolvedFieldType::Scalar(ScalarType::Hstore),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        nautilus_protocol::ProtocolError::InvalidParams(_)
+    ));
+    assert!(err.to_string().contains("strings or nulls"));
 }
 
 #[test]

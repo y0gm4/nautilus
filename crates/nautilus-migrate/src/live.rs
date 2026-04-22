@@ -18,6 +18,14 @@ pub struct LiveSchema {
     ///
     /// Keyed on the *DB* type name (lower-case). Empty for non-Postgres providers.
     pub composite_types: HashMap<String, LiveCompositeType>,
+    /// PostgreSQL extensions currently installed in the live database.
+    ///
+    /// Keyed on the extension name (lower-case), value is the installed
+    /// version string as reported by `pg_extension.extversion`. The built-in
+    /// `plpgsql` extension is excluded because it is present in every cluster
+    /// by default and not something users declare.
+    /// Empty for non-Postgres providers.
+    pub extensions: HashMap<String, String>,
 }
 
 /// A composite type in the live database.

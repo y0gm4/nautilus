@@ -428,6 +428,29 @@ impl SchemaInspector {
             });
         }
 
+        let extension_rows = pg_query(
+            "SELECT extname, extversion \
+             FROM pg_extension \
+             WHERE extname <> 'plpgsql'",
+        )
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| {
+            MigrationError::Database(format!("failed to fetch installed extensions: {e}"))
+        })?;
+
+        for row in &extension_rows {
+            let name: String = row.try_get("extname").map_err(|e| {
+                MigrationError::Database(format!("failed to read extension name: {e}"))
+            })?;
+            let version: String = row.try_get("extversion").map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to read version for extension \"{name}\": {e}"
+                ))
+            })?;
+            live.extensions.insert(name.to_lowercase(), version);
+        }
+
         Ok(live)
     }
 }

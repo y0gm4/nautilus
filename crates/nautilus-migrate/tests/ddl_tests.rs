@@ -55,6 +55,44 @@ model User {
 }
 
 #[test]
+fn test_generate_postgres_ddl_with_extension_backed_scalar_types() {
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [citext, hstore, ltree]
+}
+
+model User {
+  id    Int    @id
+  email Citext
+  meta  Hstore
+  path  Ltree
+}
+"#;
+    let ir = common::parse(source).unwrap();
+
+    let generator = DdlGenerator::new(DatabaseProvider::Postgres);
+    let statements = generator.generate_create_tables(&ir).unwrap();
+    let table_stmt = statements
+        .iter()
+        .find(|sql| sql.contains("CREATE TABLE"))
+        .expect("missing create table statement");
+
+    assert!(
+        table_stmt.contains("\"email\" CITEXT"),
+        "sql: {}",
+        table_stmt
+    );
+    assert!(
+        table_stmt.contains("\"meta\" HSTORE"),
+        "sql: {}",
+        table_stmt
+    );
+    assert!(table_stmt.contains("\"path\" LTREE"), "sql: {}", table_stmt);
+}
+
+#[test]
 fn test_generate_sqlite_ddl() {
     let source = r#"
 model Post {
@@ -282,5 +320,60 @@ fn test_postgres_drop_live_tables_quotes_mixed_case_type_names() {
             .any(|sql| sql == "DROP TYPE IF EXISTS \"PostStatus\""),
         "expected quoted DROP TYPE for mixed-case enum: {:?}",
         statements
+    );
+}
+
+#[test]
+fn test_postgres_extensions_emitted_before_tables() {
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [pg_trgm, "uuid-ossp"]
+}
+
+model Doc {
+  id   String @id
+  body String
+}
+"#;
+    let ir = common::parse(source).unwrap();
+    let generator = DdlGenerator::new(DatabaseProvider::Postgres);
+    let statements = generator.generate_create_tables(&ir).unwrap();
+
+    let ext_trgm = statements
+        .iter()
+        .position(|s| s == "CREATE EXTENSION IF NOT EXISTS \"pg_trgm\"")
+        .expect("expected pg_trgm CREATE EXTENSION");
+    let ext_uuid = statements
+        .iter()
+        .position(|s| s == "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
+        .expect("expected uuid-ossp CREATE EXTENSION");
+    let create_table_idx = statements
+        .iter()
+        .position(|s| s.starts_with("CREATE TABLE"))
+        .expect("expected CREATE TABLE");
+
+    assert!(ext_trgm < create_table_idx, "{statements:?}");
+    assert!(ext_uuid < create_table_idx, "{statements:?}");
+}
+
+#[test]
+fn test_sqlite_ignores_extensions() {
+    let source = r#"
+datasource db {
+  provider = "sqlite"
+  url      = "file:./test.db"
+}
+
+model Doc { id Int @id body String }
+"#;
+    let ir = common::parse(source).unwrap();
+    let generator = DdlGenerator::new(DatabaseProvider::Sqlite);
+    let statements = generator.generate_create_tables(&ir).unwrap();
+
+    assert!(
+        !statements.iter().any(|s| s.contains("CREATE EXTENSION")),
+        "SQLite output must not contain CREATE EXTENSION: {statements:?}"
     );
 }

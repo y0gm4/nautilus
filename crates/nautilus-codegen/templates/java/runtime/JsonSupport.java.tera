@@ -13,7 +13,9 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
 
@@ -23,6 +25,20 @@ public final class JsonSupport {
         .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     private JsonSupport() {
+    }
+
+    /**
+     * PostgreSQL hstore map. Values may be null.
+     */
+    public static final class Hstore extends LinkedHashMap<String, String> {
+        public Hstore() {
+        }
+
+        public Hstore(Map<String, String> values) {
+            if (values != null) {
+                putAll(values);
+            }
+        }
     }
 
     public static ObjectMapper mapper() {
@@ -176,6 +192,21 @@ public final class JsonSupport {
             return null;
         }
         return node.deepCopy();
+    }
+
+    /**
+     * Convert a JSON object into an hstore map while preserving explicit null values.
+     */
+    public static Hstore asHstore(JsonNode node) {
+        if (node == null || node.isNull() || !node.isObject()) {
+            return null;
+        }
+        Hstore values = new Hstore();
+        node.fields().forEachRemaining(entry -> {
+            JsonNode value = entry.getValue();
+            values.put(entry.getKey(), value == null || value.isNull() ? null : value.asText());
+        });
+        return values;
     }
 
     public static <E extends Enum<E>> E asEnum(JsonNode node, Class<E> enumType) {

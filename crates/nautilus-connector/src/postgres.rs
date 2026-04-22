@@ -6,6 +6,7 @@ use crate::error::{ConnectorError as Error, Result};
 use crate::{Executor, PgRowStream, Row};
 use nautilus_core::Value;
 use nautilus_dialect::Sql;
+use sqlx::postgres::types::PgHstore;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 /// PostgreSQL executor using sqlx.
@@ -208,6 +209,7 @@ impl Executor for PgExecutor {
 #[derive(Debug, Clone, PartialEq)]
 enum PgArrayBinding {
     Strings(Vec<String>),
+    Hstores(Vec<PgHstore>),
     I32s(Vec<i32>),
     I64s(Vec<i64>),
     F64s(Vec<f64>),
@@ -240,6 +242,27 @@ fn bindable_pg_array(items: &[Value]) -> Result<Option<PgArrayBinding>> {
                 }
             }
             Ok(Some(PgArrayBinding::Strings(values)))
+        }
+        Value::Hstore(_) => {
+            let mut values = Vec::with_capacity(items.len());
+            for (idx, item) in items.iter().enumerate() {
+                match item {
+                    Value::Hstore(value) => values.push(PgHstore(value.clone())),
+                    Value::Null => {
+                        return Err(Error::database_msg(format!(
+                            "PostgreSQL typed array binding does not support NULL element at index {}",
+                            idx
+                        )));
+                    }
+                    other => {
+                        return Err(Error::database_msg(format!(
+                            "PostgreSQL array element at index {} has type {:?}; expected Hstore",
+                            idx, other
+                        )));
+                    }
+                }
+            }
+            Ok(Some(PgArrayBinding::Hstores(values)))
         }
         Value::I32(_) => {
             let mut values = Vec::with_capacity(items.len());
@@ -348,10 +371,12 @@ pub(crate) fn bind_value<'q>(
         Value::DateTime(dt) => Ok(query.bind(*dt)),
         Value::Uuid(u) => Ok(query.bind(*u)),
         Value::String(s) => Ok(query.bind(s.as_str())),
+        Value::Hstore(map) => Ok(query.bind(PgHstore(map.clone()))),
         Value::Bytes(b) => Ok(query.bind(b.as_slice())),
         Value::Json(j) => Ok(query.bind(j.to_string())),
         Value::Array(items) => match bindable_pg_array(items)? {
             Some(PgArrayBinding::Strings(values)) => Ok(query.bind(values)),
+            Some(PgArrayBinding::Hstores(values)) => Ok(query.bind(values)),
             Some(PgArrayBinding::I32s(values)) => Ok(query.bind(values)),
             Some(PgArrayBinding::I64s(values)) => Ok(query.bind(values)),
             Some(PgArrayBinding::F64s(values)) => Ok(query.bind(values)),
@@ -401,6 +426,35 @@ mod tests {
     fn bindable_pg_array_rejects_nulls_in_typed_arrays() {
         let err = bindable_pg_array(&[Value::I32(1), Value::Null]).unwrap_err();
         assert!(err.to_string().contains("NULL element"));
+    }
+
+    #[test]
+    fn bindable_pg_array_keeps_homogeneous_hstores() {
+        let binding = bindable_pg_array(&[
+            Value::Hstore(std::collections::BTreeMap::from([(
+                "display_name".to_string(),
+                Some("Bob".to_string()),
+            )])),
+            Value::Hstore(std::collections::BTreeMap::from([(
+                "nickname".to_string(),
+                None,
+            )])),
+        ])
+        .expect("hstore array should bind");
+
+        assert_eq!(
+            binding,
+            Some(PgArrayBinding::Hstores(vec![
+                PgHstore(std::collections::BTreeMap::from([(
+                    "display_name".to_string(),
+                    Some("Bob".to_string()),
+                )])),
+                PgHstore(std::collections::BTreeMap::from([(
+                    "nickname".to_string(),
+                    None,
+                )])),
+            ]))
+        );
     }
 
     #[test]

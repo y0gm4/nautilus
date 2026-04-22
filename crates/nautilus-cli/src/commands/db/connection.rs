@@ -313,6 +313,9 @@ pub fn change_display_name(change: &Change) -> String {
         Change::CreateEnum { name, .. }
         | Change::DropEnum { name }
         | Change::AlterEnum { name, .. } => format!("enum:{}", name),
+        Change::CreateExtension { name } | Change::DropExtension { name } => {
+            format!("ext:{}", name)
+        }
         Change::ForeignKeyAdded { table, columns, .. } => {
             format!("{} (fk:{})", table, columns.join(","))
         }

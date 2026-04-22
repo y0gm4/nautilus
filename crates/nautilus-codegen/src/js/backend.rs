@@ -18,9 +18,11 @@ impl LanguageBackend for JsBackend {
             ScalarType::Boolean => "boolean",
             ScalarType::DateTime => "Date",
             ScalarType::Bytes => "Buffer",
-            ScalarType::Json => "Record<string, unknown>",
+            ScalarType::Json => "JsonValue",
             ScalarType::Uuid => "string",
-            ScalarType::Jsonb => "Record<string, unknown>",
+            ScalarType::Citext | ScalarType::Ltree => "string",
+            ScalarType::Hstore => "HstoreValue",
+            ScalarType::Jsonb => "JsonValue",
             ScalarType::Xml | ScalarType::Char { .. } | ScalarType::VarChar { .. } => "string",
         }
     }

@@ -414,6 +414,9 @@ model Data {
   data Bytes
   metadata Json
   uuid Uuid
+  title Citext
+  tags Hstore
+  path Ltree
 }
 "#;
     let ast = parse(source).unwrap();
@@ -445,6 +448,9 @@ model Data {
     check_scalar("data", ScalarType::Bytes);
     check_scalar("metadata", ScalarType::Json);
     check_scalar("uuid", ScalarType::Uuid);
+    check_scalar("title", ScalarType::Citext);
+    check_scalar("tags", ScalarType::Hstore);
+    check_scalar("path", ScalarType::Ltree);
 }
 
 #[test]

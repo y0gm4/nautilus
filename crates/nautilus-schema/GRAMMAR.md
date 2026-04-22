@@ -46,8 +46,21 @@ ConfigField ::= Ident '=' Expr Newline*
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  extensions = [pg_trgm, "uuid-ossp"]
 }
 ```
+
+**Fields:**
+
+| Field | Required | Values | Default | Description |
+|-------|----------|--------|---------|-------------|
+| `provider` | ✓ | `"postgresql"` \| `"mysql"` \| `"sqlite"` | — | Database provider |
+| `url` | ✓ | string literal or `env("VAR")` | — | Runtime database connection URL |
+| `direct_url` | — | string literal or `env("VAR")` | — | Direct admin/introspection URL |
+| `extensions` | — | array of identifiers/string literals | `[]` | PostgreSQL-only extensions to install via `CREATE EXTENSION IF NOT EXISTS` before type/table DDL |
+
+The `extensions` field is only valid when `provider = "postgresql"`. It accepts
+both bare identifiers such as `pg_trgm` and quoted names such as `"uuid-ossp"`.
 
 ### Generator
 
@@ -199,6 +212,9 @@ ScalarType ::= 'String'
              | 'DateTime'
              | 'Bytes'
              | 'Json'
+             | 'Citext'
+             | 'Hstore'
+             | 'Ltree'
              | 'Jsonb'
              | 'Uuid'
              | 'Xml'
@@ -221,6 +237,9 @@ field6  String!       // Explicitly NOT NULL scalar
 field7  Post[]        // Array of models
 field8  Jsonb         // PostgreSQL-only JSONB
 field9  VarChar(255)  // Bounded string
+field10 Citext        // PostgreSQL citext extension
+field11 Hstore        // PostgreSQL hstore extension
+field12 Ltree         // PostgreSQL ltree extension
 ```
 
 ## Attributes
@@ -661,6 +680,7 @@ This allows multiple errors to be reported in a single parse run.
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  extensions = [pgcrypto, "uuid-ossp"]
 }
 
 generator client {

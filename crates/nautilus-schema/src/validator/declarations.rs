@@ -42,6 +42,86 @@ impl SchemaValidator {
         if let Err(err) = Self::datasource_direct_url_value(datasource) {
             self.errors.push_back(err);
         }
+
+        self.validate_datasource_extensions(datasource);
+    }
+
+    pub(super) fn validate_datasource_extensions(&mut self, datasource: &DatasourceDecl) {
+        let Some(field) = datasource.find_field("extensions") else {
+            return;
+        };
+
+        let provider_is_postgres = Self::datasource_provider_value(datasource)
+            .ok()
+            .and_then(|p| p.parse::<DatabaseProvider>().ok())
+            .is_some_and(|p| p == DatabaseProvider::Postgres);
+
+        if !provider_is_postgres {
+            self.errors.push_back(SchemaError::Validation(
+                "Datasource field 'extensions' is only supported for the \
+                 'postgresql' provider"
+                    .to_string(),
+                field.span,
+            ));
+            return;
+        }
+
+        let Expr::Array { elements, .. } = &field.value else {
+            self.errors.push_back(SchemaError::Validation(
+                "Datasource 'extensions' must be an array of identifiers or \
+                 string literals (e.g. [pg_trgm, \"uuid-ossp\"])"
+                    .to_string(),
+                field.span,
+            ));
+            return;
+        };
+
+        let mut seen: HashSet<String> = HashSet::new();
+        for element in elements {
+            let (name, span) = match element {
+                Expr::Ident(ident) => (ident.value.clone(), ident.span),
+                Expr::Literal(Literal::String(s, span)) => (s.clone(), *span),
+                other => {
+                    self.errors.push_back(SchemaError::Validation(
+                        "Extension entries must be identifiers or string \
+                         literals"
+                            .to_string(),
+                        other.span(),
+                    ));
+                    continue;
+                }
+            };
+
+            let normalized = name.to_lowercase();
+            if normalized.is_empty() {
+                self.errors.push_back(SchemaError::Validation(
+                    "Extension name must not be empty".to_string(),
+                    span,
+                ));
+                continue;
+            }
+
+            if !seen.insert(normalized.clone()) {
+                self.errors.push_back(SchemaError::Validation(
+                    format!("Duplicate extension '{}' in datasource", normalized),
+                    span,
+                ));
+                continue;
+            }
+
+            if !KNOWN_POSTGRES_EXTENSIONS.contains(&normalized.as_str()) {
+                self.warnings.push_back(SchemaError::Warning(
+                    format!(
+                        "Extension '{}' is not in Nautilus' curated list of \
+                         supported PostgreSQL extensions. It will still be \
+                         installed via CREATE EXTENSION IF NOT EXISTS, but \
+                         Nautilus has not verified its availability",
+                        normalized
+                    ),
+                    span,
+                ));
+            }
+        }
     }
 
     pub(super) fn validate_generators(&mut self) {

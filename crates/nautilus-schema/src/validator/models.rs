@@ -177,6 +177,9 @@ impl SchemaValidator {
         if let Some(prov) = provider {
             if let Ok(db_provider) = prov.parse::<DatabaseProvider>() {
                 let scalar_opt: Option<ScalarType> = match &field.field_type {
+                    FieldType::Citext => Some(ScalarType::Citext),
+                    FieldType::Hstore => Some(ScalarType::Hstore),
+                    FieldType::Ltree => Some(ScalarType::Ltree),
                     FieldType::Jsonb => Some(ScalarType::Jsonb),
                     FieldType::Xml => Some(ScalarType::Xml),
                     FieldType::Char { length } => Some(ScalarType::Char { length: *length }),
@@ -194,6 +197,40 @@ impl SchemaValidator {
                             ),
                             field.span,
                         ));
+                    }
+                }
+
+                if db_provider == DatabaseProvider::Postgres {
+                    let required_extension = match &field.field_type {
+                        FieldType::Citext => Some("citext"),
+                        FieldType::Hstore => Some("hstore"),
+                        FieldType::Ltree => Some("ltree"),
+                        _ => None,
+                    };
+
+                    if let Some(required_extension) = required_extension {
+                        let declared_extensions = self
+                            .schema
+                            .datasource()
+                            .map(Self::datasource_extensions_value)
+                            .unwrap_or_default();
+
+                        if !declared_extensions
+                            .iter()
+                            .any(|ext| ext == required_extension)
+                        {
+                            self.warnings.push_back(SchemaError::Warning(
+                                format!(
+                                    "Field '{}' in model '{}' uses type '{}' which relies on the PostgreSQL '{}' extension. Consider adding `extensions = [{}]` to the datasource for reproducible migrations.",
+                                    field.name.value,
+                                    model_name,
+                                    field.field_type,
+                                    required_extension,
+                                    required_extension
+                                ),
+                                field.span,
+                            ));
+                        }
                     }
                 }
             }

@@ -36,14 +36,42 @@ impl SchemaValidator {
         let provider = Self::datasource_provider_value(datasource)?;
         let url = Self::datasource_url_value(datasource)?;
         let direct_url = Self::datasource_direct_url_value(datasource)?;
+        let extensions = Self::datasource_extensions_value(datasource);
 
         Ok(DatasourceIr {
             name: datasource.name.value.clone(),
             provider,
             url,
             direct_url,
+            extensions,
             span: datasource.span,
         })
+    }
+
+    /// Extracts, normalises and sorts the declared extensions.
+    ///
+    /// Assumes `validate_datasource_extensions` has already flagged structural
+    /// problems: malformed entries are silently skipped here.
+    pub(super) fn datasource_extensions_value(datasource: &DatasourceDecl) -> Vec<String> {
+        let Some(field) = datasource.find_field("extensions") else {
+            return Vec::new();
+        };
+        let Expr::Array { elements, .. } = &field.value else {
+            return Vec::new();
+        };
+
+        let mut names: Vec<String> = elements
+            .iter()
+            .filter_map(|e| match e {
+                Expr::Ident(ident) => Some(ident.value.to_lowercase()),
+                Expr::Literal(Literal::String(s, _)) => Some(s.to_lowercase()),
+                _ => None,
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
     }
 
     pub(super) fn build_generator_ir(&self, generator: &GeneratorDecl) -> Result<GeneratorIr> {
@@ -398,6 +426,9 @@ impl SchemaValidator {
             FieldType::Bytes => Ok(ResolvedFieldType::Scalar(ScalarType::Bytes)),
             FieldType::Json => Ok(ResolvedFieldType::Scalar(ScalarType::Json)),
             FieldType::Uuid => Ok(ResolvedFieldType::Scalar(ScalarType::Uuid)),
+            FieldType::Citext => Ok(ResolvedFieldType::Scalar(ScalarType::Citext)),
+            FieldType::Hstore => Ok(ResolvedFieldType::Scalar(ScalarType::Hstore)),
+            FieldType::Ltree => Ok(ResolvedFieldType::Scalar(ScalarType::Ltree)),
             FieldType::Jsonb => Ok(ResolvedFieldType::Scalar(ScalarType::Jsonb)),
             FieldType::Xml => Ok(ResolvedFieldType::Scalar(ScalarType::Xml)),
             FieldType::Char { length } => Ok(ResolvedFieldType::Scalar(ScalarType::Char {

@@ -250,6 +250,9 @@ impl<'a> Parser<'a> {
             "Bytes" => FieldType::Bytes,
             "Json" => FieldType::Json,
             "Uuid" => FieldType::Uuid,
+            "Citext" => FieldType::Citext,
+            "Hstore" => FieldType::Hstore,
+            "Ltree" => FieldType::Ltree,
             "Jsonb" => FieldType::Jsonb,
             "Xml" => FieldType::Xml,
             "Char" => {

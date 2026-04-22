@@ -17,7 +17,25 @@ use crate::ir::*;
 use crate::span::Span;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-const KNOWN_DATASOURCE_FIELDS: &[&str] = &["provider", "url", "direct_url"];
+const KNOWN_DATASOURCE_FIELDS: &[&str] = &["provider", "url", "direct_url", "extensions"];
+
+/// Curated whitelist of PostgreSQL contrib extensions that Nautilus knows about.
+///
+/// Names outside this list are still accepted (the DDL pipeline will emit
+/// `CREATE EXTENSION IF NOT EXISTS <name>`), but a warning is surfaced so the
+/// user can catch typos and be aware they are leaving the supported set.
+pub(crate) const KNOWN_POSTGRES_EXTENSIONS: &[&str] = &[
+    "btree_gin",
+    "btree_gist",
+    "citext",
+    "hstore",
+    "intarray",
+    "ltree",
+    "pgcrypto",
+    "pg_trgm",
+    "unaccent",
+    "uuid-ossp",
+];
 const KNOWN_GENERATOR_FIELDS: &[&str] = &["provider", "output", "interface"];
 const PYTHON_ONLY_GENERATOR_FIELDS: &[&str] = &["recursive_type_depth"];
 const JAVA_ONLY_GENERATOR_FIELDS: &[&str] = &["package", "group_id", "artifact_id", "mode"];

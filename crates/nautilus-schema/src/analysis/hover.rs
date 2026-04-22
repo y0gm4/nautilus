@@ -209,6 +209,12 @@ pub fn config_field_hover(key: &str) -> String {
             "Use this for migrations, introspection, and schema management when `url` points at a pooled or proxied connection.  \n\n",
             "Supports the `env(\"VAR\")` helper to read from environment variables.",
         ).to_string(),
+        "extensions" => concat!(
+            "**extensions**  \n",
+            "Optional PostgreSQL-only array of extension names to ensure installed before schema DDL runs.  \n\n",
+            "Accepts bare identifiers like `pg_trgm` and string literals like `\"uuid-ossp\"`.  \n\n",
+            "Example: `extensions = [pg_trgm, pgcrypto, \"uuid-ossp\"]`",
+        ).to_string(),
         "output" => concat!(
             "**output**  \n",
             "Output directory path for generated client files.  \n\n",
@@ -663,6 +669,9 @@ fn field_type_name(ft: &FieldType) -> String {
         FieldType::Bytes => "Bytes".to_string(),
         FieldType::Json => "Json".to_string(),
         FieldType::Uuid => "Uuid".to_string(),
+        FieldType::Citext => "Citext".to_string(),
+        FieldType::Hstore => "Hstore".to_string(),
+        FieldType::Ltree => "Ltree".to_string(),
         FieldType::Jsonb => "Jsonb".to_string(),
         FieldType::Xml => "Xml".to_string(),
         FieldType::Char { length } => format!("Char({})", length),
@@ -683,6 +692,15 @@ fn field_type_description(ft: &FieldType) -> &'static str {
         FieldType::Bytes => "Raw binary data.  Maps to `BYTEA` / `BLOB`.",
         FieldType::Json => "JSON document.  Maps to `JSONB` (Postgres) or `JSON` (MySQL/SQLite).",
         FieldType::Uuid => "Universally unique identifier.  Maps to `UUID`.",
+        FieldType::Citext => {
+            "Case-insensitive text column (PostgreSQL only). Requires the `citext` extension and maps to `CITEXT`."
+        }
+        FieldType::Hstore => {
+            "Key/value text map column (PostgreSQL only). Requires the `hstore` extension and maps to `HSTORE`."
+        }
+        FieldType::Ltree => {
+            "Label tree path column (PostgreSQL only). Requires the `ltree` extension and maps to `LTREE`."
+        }
         FieldType::Jsonb => "JSONB document (PostgreSQL only).  Maps to `JSONB`.",
         FieldType::Xml => "XML document (PostgreSQL only).  Maps to `XML`.",
         FieldType::Char { .. } => {

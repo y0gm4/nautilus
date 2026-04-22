@@ -100,7 +100,7 @@ Desktop.ini
 
 benchmark/
 examples/
-# Insta snapshots — ignore all generated artifacts
+# Insta snapshots — keep generated baselines local-only
 **/snapshots/*
 !**/snapshots/.gitkeep
 **/snapshots/*.snap.new

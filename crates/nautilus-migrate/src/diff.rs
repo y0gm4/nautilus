@@ -173,6 +173,20 @@ pub enum Change {
         name: String,
     },
 
+    /// A PostgreSQL extension is declared in the target datasource but is not
+    /// currently installed in the live database.
+    CreateExtension {
+        /// Extension name (lower-cased, as it appears in `pg_extension.extname`).
+        name: String,
+    },
+
+    /// A PostgreSQL extension is installed in the live database but is no
+    /// longer declared in the target datasource.
+    DropExtension {
+        /// Extension name (lower-cased).
+        name: String,
+    },
+
     /// A PostgreSQL enum type exists in both live and target but its variant
     /// list has changed.
     AlterEnum {
@@ -255,9 +269,12 @@ pub fn change_risk(change: &Change) -> ChangeRisk {
             now_required: true, ..
         }
         | Change::DropEnum { .. }
-        | Change::DropCompositeType { .. } => ChangeRisk::Destructive,
+        | Change::DropCompositeType { .. }
+        | Change::DropExtension { .. } => ChangeRisk::Destructive,
 
-        Change::CreateEnum { .. } | Change::CreateCompositeType { .. } => ChangeRisk::Safe,
+        Change::CreateEnum { .. }
+        | Change::CreateCompositeType { .. }
+        | Change::CreateExtension { .. } => ChangeRisk::Safe,
 
         Change::AlterEnum {
             removed_variants, ..
@@ -307,7 +324,9 @@ pub fn order_changes_for_apply(changes: &[Change], live: &LiveSchema) -> Vec<Cha
 
     for change in changes {
         match change {
-            Change::CreateCompositeType { .. } | Change::CreateEnum { .. } => {
+            Change::CreateCompositeType { .. }
+            | Change::CreateEnum { .. }
+            | Change::CreateExtension { .. } => {
                 pre_type_changes.push(change.clone());
             }
             Change::AlterCompositeType {
@@ -331,7 +350,9 @@ pub fn order_changes_for_apply(changes: &[Change], live: &LiveSchema) -> Vec<Cha
             }
             Change::IndexAdded { .. } => index_adds.push(change.clone()),
             Change::ForeignKeyAdded { .. } => foreign_key_adds.push(change.clone()),
-            Change::DropCompositeType { .. } | Change::DropEnum { .. } => {
+            Change::DropCompositeType { .. }
+            | Change::DropEnum { .. }
+            | Change::DropExtension { .. } => {
                 post_type_changes.push(change.clone());
             }
             Change::AlterCompositeType { .. } | Change::AlterEnum { .. } => {
@@ -384,6 +405,31 @@ impl SchemaDiff {
         let mut post_type_changes: Vec<Change> = Vec::new();
 
         if provider == DatabaseProvider::Postgres {
+            let target_extensions: &[String] = target
+                .datasource
+                .as_ref()
+                .map(|d| d.extensions.as_slice())
+                .unwrap_or(&[]);
+            let target_extensions_set: std::collections::HashSet<&str> =
+                target_extensions.iter().map(String::as_str).collect();
+
+            for ext in target_extensions {
+                if !live.extensions.contains_key(ext) {
+                    pre_type_changes.push(Change::CreateExtension { name: ext.clone() });
+                }
+            }
+
+            let mut live_extension_names: Vec<&str> =
+                live.extensions.keys().map(String::as_str).collect();
+            live_extension_names.sort_unstable();
+            for live_ext in live_extension_names {
+                if !target_extensions_set.contains(live_ext) {
+                    post_type_changes.push(Change::DropExtension {
+                        name: live_ext.to_string(),
+                    });
+                }
+            }
+
             for ct in target.composite_types.values() {
                 let db_name = ct.logical_name.to_lowercase();
                 if !live.composite_types.contains_key(&db_name) {

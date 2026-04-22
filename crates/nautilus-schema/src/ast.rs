@@ -155,6 +155,30 @@ impl DatasourceDecl {
             _ => None,
         })
     }
+
+    /// Gets the declared PostgreSQL extensions (best-effort).
+    ///
+    /// Accepts both identifiers (`pg_trgm`) and string literals (`"uuid-ossp"`)
+    /// as array elements. Returns `None` when the `extensions` field is absent,
+    /// and an empty vec when it is present but empty or malformed. Rigorous
+    /// validation (including error reporting) happens in the validator.
+    pub fn extensions(&self) -> Option<Vec<String>> {
+        let field = self.find_field("extensions")?;
+        let elements = match &field.value {
+            Expr::Array { elements, .. } => elements,
+            _ => return Some(Vec::new()),
+        };
+        Some(
+            elements
+                .iter()
+                .filter_map(|e| match e {
+                    Expr::Ident(ident) => Some(ident.value.clone()),
+                    Expr::Literal(Literal::String(s, _)) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
 }
 
 /// A generator block declaration.
@@ -357,6 +381,12 @@ pub enum FieldType {
     Json,
     /// UUID type.
     Uuid,
+    /// Case-insensitive text type (PostgreSQL + citext extension).
+    Citext,
+    /// Key/value string map type (PostgreSQL + hstore extension).
+    Hstore,
+    /// Label tree path type (PostgreSQL + ltree extension).
+    Ltree,
     /// JSONB type (PostgreSQL only).
     Jsonb,
     /// XML type (PostgreSQL only).
@@ -390,6 +420,9 @@ impl fmt::Display for FieldType {
             FieldType::Bytes => write!(f, "Bytes"),
             FieldType::Json => write!(f, "Json"),
             FieldType::Uuid => write!(f, "Uuid"),
+            FieldType::Citext => write!(f, "Citext"),
+            FieldType::Hstore => write!(f, "Hstore"),
+            FieldType::Ltree => write!(f, "Ltree"),
             FieldType::Jsonb => write!(f, "Jsonb"),
             FieldType::Xml => write!(f, "Xml"),
             FieldType::Char { length } => write!(f, "Char({})", length),

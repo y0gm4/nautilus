@@ -300,6 +300,8 @@ pub fn generate_model(model: &ModelIr, ir: &SchemaIr, is_async: bool) -> String 
             &field.field_type,
             ResolvedFieldType::Scalar(ScalarType::Boolean)
                 | ResolvedFieldType::Scalar(ScalarType::Json)
+                | ResolvedFieldType::Scalar(ScalarType::Jsonb)
+                | ResolvedFieldType::Scalar(ScalarType::Hstore)
                 | ResolvedFieldType::Scalar(ScalarType::Bytes)
         );
         if !is_non_orderable {

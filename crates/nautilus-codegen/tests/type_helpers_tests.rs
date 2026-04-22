@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 
 use nautilus_codegen::{
+    backend::LanguageBackend,
+    java::backend::JavaBackend,
     python::type_mapper::{
         field_to_python_type, get_base_python_type, get_default_value,
         get_filter_operators_for_field, get_filter_operators_for_scalar,
@@ -184,6 +186,23 @@ fn test_rust_scalar_uuid() {
 }
 
 #[test]
+fn test_rust_extension_backed_postgres_scalars_map_to_string() {
+    for scalar in [ScalarType::Citext, ScalarType::Ltree] {
+        let f = scalar_field(scalar, true, false);
+        assert_eq!(field_to_rust_type(&f), "String");
+    }
+}
+
+#[test]
+fn test_rust_hstore_maps_to_btree_map() {
+    let f = scalar_field(ScalarType::Hstore, true, false);
+    assert_eq!(
+        field_to_rust_type(&f),
+        "std::collections::BTreeMap<String, Option<String>>"
+    );
+}
+
+#[test]
 fn test_rust_scalar_decimal() {
     let f = scalar_field(
         ScalarType::Decimal {
@@ -323,12 +342,36 @@ fn test_python_scalar_bytes() {
 
 #[test]
 fn test_python_scalar_json() {
-    assert_eq!(scalar_to_python_type(&ScalarType::Json), "Dict[str, Any]");
+    assert_eq!(scalar_to_python_type(&ScalarType::Json), "JsonValue");
+}
+
+#[test]
+fn test_python_scalar_jsonb() {
+    assert_eq!(scalar_to_python_type(&ScalarType::Jsonb), "JsonValue");
 }
 
 #[test]
 fn test_python_scalar_uuid() {
     assert_eq!(scalar_to_python_type(&ScalarType::Uuid), "UUID");
+}
+
+#[test]
+fn test_python_extension_backed_postgres_scalars_map_to_str() {
+    assert_eq!(scalar_to_python_type(&ScalarType::Citext), "str");
+    assert_eq!(scalar_to_python_type(&ScalarType::Ltree), "str");
+}
+
+#[test]
+fn test_python_hstore_maps_to_dict_of_optional_strings() {
+    assert_eq!(scalar_to_python_type(&ScalarType::Hstore), "HstoreValue");
+}
+
+#[test]
+fn test_java_hstore_uses_json_support_runtime_type() {
+    assert_eq!(
+        JavaBackend.scalar_to_type(&ScalarType::Hstore),
+        "JsonSupport.Hstore"
+    );
 }
 
 #[test]
@@ -454,6 +497,25 @@ fn test_filter_operators_for_string() {
     assert!(suffixes.contains(&"in"), "missing in: {suffixes:?}");
     assert!(suffixes.contains(&"not_in"), "missing not_in: {suffixes:?}");
     assert!(suffixes.contains(&"not"), "missing not: {suffixes:?}");
+}
+
+#[test]
+fn test_filter_operators_for_citext_match_string_shape() {
+    let ops = get_filter_operators_for_scalar(&ScalarType::Citext);
+    let suffixes: Vec<&str> = ops.iter().map(|o| o.suffix.as_str()).collect();
+    for expected in ["contains", "startswith", "endswith", "in", "not_in", "not"] {
+        assert!(
+            suffixes.contains(&expected),
+            "missing {expected}: {suffixes:?}"
+        );
+    }
+}
+
+#[test]
+fn test_filter_operators_for_hstore_only_expose_not() {
+    let ops = get_filter_operators_for_scalar(&ScalarType::Hstore);
+    let suffixes: Vec<&str> = ops.iter().map(|o| o.suffix.as_str()).collect();
+    assert_eq!(suffixes, vec!["not"]);
 }
 
 /// Int gets lt / lte / gt / gte / in / not_in / not

@@ -486,6 +486,20 @@ impl<'a> DiffApplier<'a> {
                 Ok(vec![format!("DROP TYPE IF EXISTS {}", self.type_q(name))])
             }
 
+            Change::CreateExtension { name } => {
+                if !strategy.supports_user_defined_types() {
+                    return Ok(vec![]);
+                }
+                Ok(vec![self.ddl.generate_create_extension(name)])
+            }
+
+            Change::DropExtension { name } => {
+                if !strategy.supports_user_defined_types() {
+                    return Ok(vec![]);
+                }
+                Ok(vec![self.ddl.generate_drop_extension(name)])
+            }
+
             Change::AlterEnum {
                 name,
                 added_variants,

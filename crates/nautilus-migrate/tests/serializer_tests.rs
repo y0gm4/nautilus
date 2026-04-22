@@ -54,6 +54,79 @@ fn serialises_single_table() {
 }
 
 #[test]
+fn serialises_postgres_extensions_in_datasource_block() {
+    let mut live = LiveSchema::default();
+    live.extensions
+        .insert("uuid-ossp".to_string(), "1.1".to_string());
+    live.extensions
+        .insert("pg_trgm".to_string(), "1.6".to_string());
+
+    let out = serialize_live_schema(&live, DatabaseProvider::Postgres, "postgres://localhost/db");
+    let datasource = common::parse(&out)
+        .unwrap()
+        .datasource
+        .expect("datasource IR");
+
+    assert!(
+        out.contains("extensions = [pg_trgm, \"uuid-ossp\"]"),
+        "{out}"
+    );
+    assert_eq!(datasource.extensions, vec!["pg_trgm", "uuid-ossp"]);
+}
+
+#[test]
+fn serialises_jsonb_columns_without_degrading_to_json() {
+    let live = common::make_live_schema(vec![LiveTable {
+        name: "events".to_string(),
+        columns: vec![
+            LiveColumn {
+                name: "id".to_string(),
+                col_type: "integer".to_string(),
+                nullable: false,
+                default_value: None,
+                generated_expr: None,
+                computed_kind: None,
+                check_expr: None,
+            },
+            LiveColumn {
+                name: "payload".to_string(),
+                col_type: "jsonb".to_string(),
+                nullable: false,
+                default_value: None,
+                generated_expr: None,
+                computed_kind: None,
+                check_expr: None,
+            },
+        ],
+        primary_key: vec!["id".to_string()],
+        indexes: vec![],
+        check_constraints: vec![],
+        foreign_keys: vec![],
+    }]);
+
+    let out = serialize_live_schema(&live, DatabaseProvider::Postgres, "postgres://localhost/db");
+    let schema = common::parse(&out).expect("schema should parse");
+    let field = schema
+        .models
+        .get("Events")
+        .expect("Events model missing")
+        .fields
+        .iter()
+        .find(|field| field.logical_name == "payload")
+        .expect("payload field missing");
+
+    assert!(
+        out.lines()
+            .any(|line| line.contains("payload") && line.contains("Jsonb")),
+        "{out}"
+    );
+    assert!(matches!(
+        field.field_type,
+        ResolvedFieldType::Scalar(ScalarType::Jsonb)
+    ));
+}
+
+#[test]
 fn serialises_nullable_column() {
     let live = common::make_live_schema(vec![LiveTable {
         name: "posts".to_string(),

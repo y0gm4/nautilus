@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from pydantic import BaseModel, Field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, ClassVar
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, ClassVar, Union
 {%- if needs_typeddict %}
-from typing import TypedDict, NotRequired, Literal, Union
+from typing import TypedDict, NotRequired, Literal
 from datetime import datetime
 from uuid import UUID
 from decimal import Decimal
@@ -49,6 +49,11 @@ if TYPE_CHECKING:
 {%- endfor %}
 {%- endif %}
     from .._internal.client import NautilusClient
+
+JsonPrimitive = Union[str, int, float, bool, None]
+JsonValue = Union[JsonPrimitive, Dict[str, Any], List[Any]]
+JsonScalarOrArray = Union[JsonPrimitive, List[Any]]
+HstoreValue = Dict[str, Optional[str]]
 
 
 class {{ model_name }}(BaseModel):
@@ -149,6 +154,35 @@ _{{ table_name }}_py_to_logical: Dict[str, str] = {
 {%- endif %}
 {%- endfor %}
 }
+_{{ table_name }}_object_value_db_fields: frozenset = frozenset({
+{%- for db_name in object_value_db_fields %}
+    "{{ db_name }}",
+{%- endfor %}
+})
+_FILTER_OPERATOR_KEYS: frozenset = frozenset({
+    "contains",
+    "endsWith",
+    "endswith",
+    "eq",
+    "equals",
+    "gt",
+    "gte",
+    "in",
+    "in_",
+    "isNull",
+    "isNotNull",
+    "is_not_null",
+    "is_null",
+    "like",
+    "lt",
+    "lte",
+    "not",
+    "notIn",
+    "not_",
+    "not_in",
+    "startsWith",
+    "startswith",
+})
 _MISSING = object()
 
 
@@ -166,6 +200,17 @@ def _serialize_wire_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _serialize_wire_value(v) for k, v in value.items()}
     return value
+
+
+def _looks_like_filter_operator_dict(value: Dict[str, Any]) -> bool:
+    return bool(value) and all(key in _FILTER_OPERATOR_KEYS for key in value)
+
+
+def _object_equality_requires_explicit_equals(field_name: str) -> None:
+    raise TypeError(
+        f"Field '{field_name}' stores object-like JSON/HSTORE values. "
+        "Use {'equals': ...} for object equality filters."
+    )
 
 
 def _process_create_data(data: Dict[str, Any], py_to_db: Dict[str, str]) -> Dict[str, Any]:
@@ -189,18 +234,34 @@ def _process_where_filters(where: Dict[str, Any], py_to_db: Dict[str, str]) -> D
         else:
             db_key = py_to_db.get(key, key)
             if isinstance(value, dict):
+                if (
+                    db_key in _{{ table_name }}_object_value_db_fields
+                    and not _looks_like_filter_operator_dict(value)
+                ):
+                    _object_equality_requires_explicit_equals(key)
                 # Filter object with operators – keep nested {field: {op: value}} format
                 # so the engine's parse_field_condition receives {"id": {"in": [...]}}.
                 ops = {}
                 for op, op_value in value.items():
-                    # Convert Python-safe names back (in_ -> in, not_ -> not)
-                    actual_op = op.rstrip('_') if op.endswith('_') and op[:-1] in ('in', 'not') else op
+                    # Convert Python-safe names back to the engine protocol.
+                    actual_op = {
+                        "equals": "eq",
+                        "eq": "eq",
+                        "in_": "in",
+                        "not_": "not",
+                        "notIn": "notIn",
+                        "not_in": "notIn",
+                        "startsWith": "startsWith",
+                        "startswith": "startsWith",
+                        "endsWith": "endsWith",
+                        "endswith": "endsWith",
+                        "isNull": "isNull",
+                        "isNotNull": "isNotNull",
+                        "is_not_null": "isNotNull",
+                        "is_null": "isNull",
+                    }.get(op, op)
                     coerced = _serialize_wire_value(op_value)
-                    if actual_op == 'equals':
-                        # 'equals' shorthand maps to direct equality
-                        result[db_key] = coerced
-                    else:
-                        ops[actual_op] = coerced
+                    ops[actual_op] = coerced
                 if ops:
                     result[db_key] = ops
             else:
@@ -866,6 +927,10 @@ class {{ delegate_name }}:
 __all__ = [
     "{{ model_name }}",
     "{{ delegate_name }}",
+    "JsonPrimitive",
+    "JsonValue",
+    "JsonScalarOrArray",
+    "HstoreValue",
 {%- if needs_typeddict %}
     "{{ model_name }}WhereInput",
     "{{ model_name }}CreateInput",
@@ -902,5 +967,7 @@ __all__ = [
     "DateTimeFilter",
     "UuidFilter",
     "BoolFilter",
+    "JsonFilter",
+    "HstoreFilter",
 {%- endif %}
 ]

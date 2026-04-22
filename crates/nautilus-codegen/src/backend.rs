@@ -121,7 +121,7 @@ pub trait LanguageBackend {
         let mut ops: Vec<FilterOperator> = Vec::new();
 
         match scalar {
-            ScalarType::String => {
+            ScalarType::String | ScalarType::Citext | ScalarType::Ltree => {
                 let str_t = self.scalar_to_type(&ScalarType::String);
                 let arr = self.array_type(str_t);
                 ops.push(FilterOperator {
@@ -145,6 +145,7 @@ pub trait LanguageBackend {
                     type_name: arr,
                 });
             }
+            ScalarType::Hstore => {}
             ScalarType::Int | ScalarType::BigInt => {
                 ops.extend(self.numeric_operators(self.scalar_to_type(scalar)));
             }

@@ -238,6 +238,7 @@ pub fn generate_python_model(
     let mut order_by_fields: Vec<OrderByFieldContext> = Vec::new();
     let mut numeric_fields: Vec<AggregateFieldContext> = Vec::new();
     let mut orderable_fields: Vec<AggregateFieldContext> = Vec::new();
+    let mut object_value_db_fields: Vec<String> = Vec::new();
 
     for (idx, field) in model.scalar_fields().enumerate() {
         use nautilus_schema::ir::ScalarType;
@@ -257,7 +258,7 @@ pub fn generate_python_model(
                 ScalarType::DateTime => has_datetime = true,
                 ScalarType::Uuid => has_uuid = true,
                 ScalarType::Decimal { .. } => has_decimal = true,
-                ScalarType::Json => has_dict = true,
+                ScalarType::Json | ScalarType::Jsonb | ScalarType::Hstore => has_dict = true,
                 _ => {}
             },
             _ => {}
@@ -335,6 +336,16 @@ pub fn generate_python_model(
             });
         }
 
+        if matches!(
+            field.field_type,
+            ResolvedFieldType::Scalar(nautilus_schema::ir::ScalarType::Json)
+                | ResolvedFieldType::Scalar(nautilus_schema::ir::ScalarType::Jsonb)
+                | ResolvedFieldType::Scalar(nautilus_schema::ir::ScalarType::Hstore)
+        ) && !field.is_array
+        {
+            object_value_db_fields.push(field.db_name.clone());
+        }
+
         {
             let input_base = base_python_type.clone();
             let typed = if field.is_array {
@@ -366,10 +377,6 @@ pub fn generate_python_model(
             });
         }
 
-        order_by_fields.push(OrderByFieldContext {
-            name: field.logical_name.clone(),
-        });
-
         let is_numeric = matches!(
             &field.field_type,
             ResolvedFieldType::Scalar(ScalarType::Int)
@@ -388,9 +395,14 @@ pub fn generate_python_model(
             &field.field_type,
             ResolvedFieldType::Scalar(ScalarType::Boolean)
                 | ResolvedFieldType::Scalar(ScalarType::Json)
+                | ResolvedFieldType::Scalar(ScalarType::Jsonb)
+                | ResolvedFieldType::Scalar(ScalarType::Hstore)
                 | ResolvedFieldType::Scalar(ScalarType::Bytes)
         );
         if !is_non_orderable {
+            order_by_fields.push(OrderByFieldContext {
+                name: field.logical_name.clone(),
+            });
             orderable_fields.push(AggregateFieldContext {
                 name: field.logical_name.clone(),
                 python_type: base_python_type,
@@ -545,6 +557,7 @@ pub fn generate_python_model(
     context.insert("has_includes", &!include_fields.is_empty());
     context.insert("numeric_fields", &numeric_fields);
     context.insert("orderable_fields", &orderable_fields);
+    context.insert("object_value_db_fields", &object_value_db_fields);
     context.insert("has_numeric_fields", &has_numeric_fields);
     context.insert("has_orderable_fields", &has_orderable_fields);
 
