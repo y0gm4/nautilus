@@ -86,6 +86,10 @@ fn decode_value(row: &PgRow, idx: usize, type_info: &sqlx::postgres::PgTypeInfo)
             .map(|map| Value::Hstore(map.0))
             .map_err(|e| Error::row_decode(e, "Failed to decode HSTORE")),
 
+        "VECTOR" => sqlx::Row::try_get_unchecked::<String, _>(row, idx)
+            .map_err(|e| Error::row_decode(e, "Failed to decode VECTOR"))
+            .and_then(|raw| parse_pg_vector(&raw)),
+
         "BYTEA" => row
             .try_get::<Vec<u8>, _>(idx)
             .map(Value::Bytes)
@@ -191,6 +195,39 @@ fn decode_value(row: &PgRow, idx: usize, type_info: &sqlx::postgres::PgTypeInfo)
                 })
         }
     }
+}
+
+fn parse_pg_vector(input: &str) -> Result<Value> {
+    let trimmed = input.trim();
+    let Some(inner) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) else {
+        return Err(Error::row_decode_msg(format!(
+            "Invalid vector literal: {}",
+            input
+        )));
+    };
+
+    if inner.trim().is_empty() {
+        return Ok(Value::Vector(Vec::new()));
+    }
+
+    let mut values = Vec::new();
+    for (idx, raw) in inner.split(',').enumerate() {
+        let value = raw.trim().parse::<f32>().map_err(|e| {
+            Error::row_decode_msg(format!(
+                "Invalid vector element at index {} in {:?}: {}",
+                idx, input, e
+            ))
+        })?;
+        if !value.is_finite() {
+            return Err(Error::row_decode_msg(format!(
+                "Invalid non-finite vector element at index {} in {:?}",
+                idx, input
+            )));
+        }
+        values.push(value);
+    }
+
+    Ok(Value::Vector(values))
 }
 
 /// Parse a PostgreSQL 2D array literal (e.g. `{{1,2},{3,4}}`) into `Value::Array2D`.
@@ -404,6 +441,19 @@ mod tests {
                 vec![Value::F64(3.5), Value::F64(4.5)],
             ])
         );
+    }
+
+    #[test]
+    fn parse_vector_literal() {
+        assert_eq!(
+            parse_pg_vector("[1,2.5,3.25]").unwrap(),
+            Value::Vector(vec![1.0, 2.5, 3.25])
+        );
+    }
+
+    #[test]
+    fn parse_vector_rejects_invalid_literal() {
+        assert!(parse_pg_vector("{1,2,3}").is_err());
     }
 
     #[test]

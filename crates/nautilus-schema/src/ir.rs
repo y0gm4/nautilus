@@ -11,6 +11,14 @@ use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
+pub mod index;
+
+pub use index::{
+    parse_index_type_tag, BasicIndexType, IndexIr, IndexKind, IndexTypeTag,
+    ParseBasicIndexTypeError, PgvectorIndex, PgvectorIndexOptions, PgvectorMethod, PgvectorOpClass,
+    ALL_INDEX_TYPE_NAMES,
+};
+
 /// Validated intermediate representation of a complete schema.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SchemaIr {
@@ -217,6 +225,20 @@ impl ModelIr {
             .iter()
             .filter(|f| matches!(f.field_type, ResolvedFieldType::Relation(_)))
     }
+
+    /// Returns `true` when at least one field on this model is a pgvector
+    /// `Vector(...)` column.
+    pub fn has_vector_fields(&self) -> bool {
+        self.fields.iter().any(FieldIr::is_vector)
+    }
+
+    /// Returns the logical names of every `Vector(...)` field on this model.
+    pub fn vector_field_names(&self) -> impl Iterator<Item = &str> {
+        self.fields
+            .iter()
+            .filter(|f| f.is_vector())
+            .map(|f| f.logical_name.as_str())
+    }
 }
 
 /// Validated field with resolved type.
@@ -246,6 +268,17 @@ pub struct FieldIr {
     pub check: Option<String>,
     /// Span of the field declaration.
     pub span: Span,
+}
+
+impl FieldIr {
+    /// Returns `true` when this field's resolved type is a pgvector
+    /// `Vector(dim)` scalar.
+    pub fn is_vector(&self) -> bool {
+        matches!(
+            self.field_type,
+            ResolvedFieldType::Scalar(ScalarType::Vector { .. })
+        )
+    }
 }
 
 /// Resolved field type after validation.
@@ -301,6 +334,11 @@ pub enum ScalarType {
     Hstore,
     /// Label tree path (PostgreSQL + ltree extension).
     Ltree,
+    /// Dense embedding vector (PostgreSQL + pgvector `vector` extension).
+    Vector {
+        /// Number of vector dimensions.
+        dimension: u32,
+    },
     /// JSONB value (PostgreSQL only).
     Jsonb,
     /// XML value (PostgreSQL only).
@@ -333,6 +371,7 @@ impl ScalarType {
             ScalarType::Uuid => "uuid::Uuid",
             ScalarType::Citext | ScalarType::Ltree => "String",
             ScalarType::Hstore => "std::collections::BTreeMap<String, Option<String>>",
+            ScalarType::Vector { .. } => "Vec<f32>",
             ScalarType::Jsonb => "serde_json::Value",
             ScalarType::Xml | ScalarType::Char { .. } | ScalarType::VarChar { .. } => "String",
         }
@@ -344,6 +383,7 @@ impl ScalarType {
             ScalarType::Citext
             | ScalarType::Hstore
             | ScalarType::Ltree
+            | ScalarType::Vector { .. }
             | ScalarType::Jsonb
             | ScalarType::Xml => provider == DatabaseProvider::Postgres,
             ScalarType::Char { .. } | ScalarType::VarChar { .. } => {
@@ -362,11 +402,17 @@ impl ScalarType {
             ScalarType::Citext
             | ScalarType::Hstore
             | ScalarType::Ltree
+            | ScalarType::Vector { .. }
             | ScalarType::Jsonb
             | ScalarType::Xml => "PostgreSQL only",
             ScalarType::Char { .. } | ScalarType::VarChar { .. } => "PostgreSQL and MySQL",
             _ => "all databases",
         }
+    }
+
+    /// Returns `true` when this scalar is a pgvector `Vector(dim)`.
+    pub fn is_vector(self) -> bool {
+        matches!(self, ScalarType::Vector { .. })
     }
 }
 
@@ -445,95 +491,6 @@ impl PrimaryKeyIr {
 pub struct UniqueConstraintIr {
     /// Field names (logical) that form the unique constraint.
     pub fields: Vec<String>,
-}
-
-/// Index access method / algorithm.
-///
-/// The default (when `None` is stored on [`IndexIr`]) lets the DBMS choose
-/// (BTree on every supported database).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndexType {
-    /// B-Tree (default on all databases).
-    BTree,
-    /// Hash index — PostgreSQL and MySQL 8+.
-    Hash,
-    /// Generalized Inverted Index — PostgreSQL only (arrays, JSONB, full-text).
-    Gin,
-    /// Generalized Search Tree — PostgreSQL only (geometry, range types).
-    Gist,
-    /// Block Range Index — PostgreSQL only (large ordered tables).
-    Brin,
-    /// Full-text index — MySQL only.
-    FullText,
-}
-
-/// Error returned when parsing an unknown index type string.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseIndexTypeError;
-
-impl fmt::Display for ParseIndexTypeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("unknown index type")
-    }
-}
-
-impl std::error::Error for ParseIndexTypeError {}
-
-impl FromStr for IndexType {
-    type Err = ParseIndexTypeError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "btree" => Ok(IndexType::BTree),
-            "hash" => Ok(IndexType::Hash),
-            "gin" => Ok(IndexType::Gin),
-            "gist" => Ok(IndexType::Gist),
-            "brin" => Ok(IndexType::Brin),
-            "fulltext" => Ok(IndexType::FullText),
-            _ => Err(ParseIndexTypeError),
-        }
-    }
-}
-
-impl IndexType {
-    /// Returns `true` when this index type is supported by the given database provider.
-    pub fn supported_by(self, provider: DatabaseProvider) -> bool {
-        match self {
-            IndexType::BTree => true,
-            IndexType::Hash => matches!(
-                provider,
-                DatabaseProvider::Postgres | DatabaseProvider::Mysql
-            ),
-            IndexType::Gin | IndexType::Gist | IndexType::Brin => {
-                provider == DatabaseProvider::Postgres
-            }
-            IndexType::FullText => provider == DatabaseProvider::Mysql,
-        }
-    }
-
-    /// Human-readable list of supported providers (for diagnostics).
-    pub fn supported_providers(self) -> &'static str {
-        match self {
-            IndexType::BTree => "all databases",
-            IndexType::Hash => "PostgreSQL and MySQL",
-            IndexType::Gin => "PostgreSQL only",
-            IndexType::Gist => "PostgreSQL only",
-            IndexType::Brin => "PostgreSQL only",
-            IndexType::FullText => "MySQL only",
-        }
-    }
-
-    /// The canonical display name used in schema files.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            IndexType::BTree => "BTree",
-            IndexType::Hash => "Hash",
-            IndexType::Gin => "Gin",
-            IndexType::Gist => "Gist",
-            IndexType::Brin => "Brin",
-            IndexType::FullText => "FullText",
-        }
-    }
 }
 
 /// The three datasource providers recognised by the Nautilus schema language.
@@ -678,21 +635,6 @@ impl fmt::Display for ClientProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
-}
-
-/// Index metadata.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IndexIr {
-    /// Field names (logical) that form the index.
-    pub fields: Vec<String>,
-    /// Optional index type (access method).  `None` -> let the DBMS decide
-    /// (BTree on all supported databases).
-    pub index_type: Option<IndexType>,
-    /// Logical name — for developer reference only.
-    pub name: Option<String>,
-    /// Physical DDL name.  When set this is used as the `CREATE INDEX` name
-    /// instead of the auto-generated `idx_{table}_{cols}` name.
-    pub map: Option<String>,
 }
 
 /// Validated enum type.

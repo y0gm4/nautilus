@@ -32,6 +32,16 @@ pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {
                 })
                 .collect(),
         ),
+        Value::Vector(values) => serde_json::Value::Array(
+            values
+                .iter()
+                .map(|value| {
+                    serde_json::Number::from_f64(*value as f64)
+                        .map(serde_json::Value::Number)
+                        .unwrap_or(serde_json::Value::Null)
+                })
+                .collect(),
+        ),
         Value::String(s) => serde_json::Value::String(s.clone()),
         Value::Bytes(b) => {
             serde_json::Value::String(b.iter().map(|byte| format!("{:02x}", byte)).collect())

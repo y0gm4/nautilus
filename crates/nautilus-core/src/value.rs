@@ -34,6 +34,8 @@ pub enum Value {
     Json(serde_json::Value),
     /// PostgreSQL hstore key/value map.
     Hstore(BTreeMap<String, Option<String>>),
+    /// PostgreSQL pgvector dense embedding vector.
+    Vector(Vec<f32>),
     /// String.
     String(String),
     /// Byte array.
@@ -69,6 +71,7 @@ enum SerdeValue {
     Uuid(String),
     Json(serde_json::Value),
     Hstore(BTreeMap<String, Option<String>>),
+    Vector(Vec<f32>),
     String(String),
     Bytes(String),
     Array(Vec<Value>),
@@ -101,6 +104,7 @@ impl From<&Value> for SerdeValue {
             Value::Uuid(v) => SerdeValue::Uuid(v.to_string()),
             Value::Json(v) => SerdeValue::Json(v.clone()),
             Value::Hstore(v) => SerdeValue::Hstore(v.clone()),
+            Value::Vector(v) => SerdeValue::Vector(v.clone()),
             Value::String(v) => SerdeValue::String(v.clone()),
             Value::Bytes(v) => {
                 use base64::Engine;
@@ -135,6 +139,7 @@ impl TryFrom<SerdeValue> for Value {
                 .map_err(|e| format!("invalid uuid '{}': {}", raw, e)),
             SerdeValue::Json(v) => Ok(Value::Json(v)),
             SerdeValue::Hstore(v) => Ok(Value::Hstore(v)),
+            SerdeValue::Vector(v) => Ok(Value::Vector(v)),
             SerdeValue::String(v) => Ok(Value::String(v)),
             SerdeValue::Bytes(raw) => {
                 use base64::Engine;
@@ -174,6 +179,12 @@ impl From<f64> for Value {
     }
 }
 
+impl From<f32> for Value {
+    fn from(v: f32) -> Self {
+        Value::F64(v as f64)
+    }
+}
+
 impl From<rust_decimal::Decimal> for Value {
     fn from(v: rust_decimal::Decimal) -> Self {
         Value::Decimal(v)
@@ -201,6 +212,12 @@ impl From<serde_json::Value> for Value {
 impl From<BTreeMap<String, Option<String>>> for Value {
     fn from(v: BTreeMap<String, Option<String>>) -> Self {
         Value::Hstore(v)
+    }
+}
+
+impl From<Vec<f32>> for Value {
+    fn from(v: Vec<f32>) -> Self {
+        Value::Vector(v)
     }
 }
 
@@ -281,6 +298,7 @@ impl_option_from!(
     i64,
     f64,
     String,
+    Vec<f32>,
     BTreeMap<String, Option<String>>,
     rust_decimal::Decimal,
     uuid::Uuid,
@@ -323,6 +341,15 @@ impl Value {
                                 .map(|item| serde_json::Value::String(item.clone()))
                                 .unwrap_or(serde_json::Value::Null),
                         )
+                    })
+                    .collect(),
+            ),
+            Value::Vector(v) => serde_json::Value::Array(
+                v.iter()
+                    .map(|item| {
+                        serde_json::Number::from_f64(*item as f64)
+                            .map(serde_json::Value::Number)
+                            .unwrap_or(serde_json::Value::Null)
                     })
                     .collect(),
             ),
@@ -441,6 +468,11 @@ mod tests {
             ("nickname".to_string(), None),
         ]);
         assert_eq!(Value::Hstore(hstore.clone()), Value::from(hstore));
+
+        assert_eq!(
+            Value::Vector(vec![0.1, 0.2]),
+            Value::from(vec![0.1f32, 0.2])
+        );
     }
 
     #[test]
@@ -531,6 +563,12 @@ mod tests {
     }
 
     #[test]
+    fn test_value_to_json_plain_vector() {
+        let json = Value::Vector(vec![1.0, 2.5, 3.25]).to_json_plain();
+        assert_eq!(json, serde_json::json!([1.0, 2.5, 3.25]));
+    }
+
+    #[test]
     fn test_value_plain_json_array2d_roundtrip_stays_untyped_without_schema() {
         let value = Value::Array2D(vec![
             vec![Value::I32(1), Value::I32(2)],
@@ -594,6 +632,7 @@ mod tests {
                 ("display_name".to_string(), Some("Bob".to_string())),
                 ("nickname".to_string(), None),
             ])),
+            Value::Vector(vec![1.0, 2.0, 3.5]),
             Value::String("test".to_string()),
             Value::Array(vec![Value::I32(1), Value::I32(2)]),
             Value::Array2D(vec![vec![Value::I32(1), Value::I32(2)]]),

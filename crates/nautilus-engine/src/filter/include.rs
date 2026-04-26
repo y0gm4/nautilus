@@ -141,7 +141,10 @@ pub(super) fn parse_include(
                     .and_then(|v| v.as_u64())
                     .map(|v| v as u32);
                 let order_by = if let Some(ob_val) = child_obj.get("orderBy") {
-                    let mut parsed = parse_order_by(ob_val)?;
+                    let child_field_types = child_ctx
+                        .as_ref()
+                        .map(|(_, child_field_types, _, _)| child_field_types);
+                    let mut parsed = parse_order_by(ob_val, child_field_types)?;
                     if let Some((_, _, child_logical_to_db, _)) = &child_ctx {
                         for order in &mut parsed {
                             order.column = child_logical_to_db

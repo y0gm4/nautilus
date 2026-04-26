@@ -72,6 +72,7 @@ async fn load_relation_include_value(
         cursor: None,
         backward: false,
         distinct: vec![],
+        nearest: None,
     };
 
     let child_rows = Box::pin(execute_find_many_rows(
@@ -142,6 +143,7 @@ async fn execute_find_many_rows(
         cursor,
         backward,
         distinct,
+        nearest,
     } = query_args;
 
     let logical_to_db = model_logical_to_db(model);
@@ -218,6 +220,19 @@ async fn execute_find_many_rows(
 
     if let Some(filter_expr) = combined_filter {
         builder = builder.filter(filter_expr);
+    }
+
+    if let Some(nearest) = nearest {
+        let db_col = logical_to_db
+            .get(nearest.field.as_str())
+            .cloned()
+            .unwrap_or(nearest.field);
+        let distance_expr = Expr::vector_distance(
+            nearest.metric,
+            Expr::column(format!("{}__{}", model.db_name, db_col)),
+            Expr::param(Value::Vector(nearest.query)),
+        );
+        builder = builder.order_by_expr(distance_expr, OrderDir::Asc);
     }
 
     if !distinct.is_empty() {

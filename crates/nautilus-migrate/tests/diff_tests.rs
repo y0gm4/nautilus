@@ -2,7 +2,9 @@ mod common;
 
 use std::collections::HashMap;
 
-use nautilus_migrate::live::{ComputedKind, LiveColumn, LiveForeignKey, LiveIndex, LiveTable};
+use nautilus_migrate::live::{
+    ComputedKind, LiveColumn, LiveForeignKey, LiveIndex, LiveIndexKind, LiveTable,
+};
 use nautilus_migrate::{
     change_risk, order_changes_for_apply, Change, ChangeRisk, DatabaseProvider, LiveSchema,
     SchemaDiff,
@@ -510,7 +512,7 @@ fn no_change_when_map_matches_live_name() {
         name: "custom_idx".to_string(),
         columns: vec!["id".to_string()],
         unique: false,
-        method: Some("btree".to_string()),
+        kind: LiveIndexKind::Basic(nautilus_schema::ir::BasicIndexType::BTree),
     }])]);
 
     let changes = SchemaDiff::compute(&live, &target, DatabaseProvider::Postgres);
@@ -530,7 +532,7 @@ fn detects_index_method_change() {
         name: "idx_User_id".to_string(),
         columns: vec!["id".to_string()],
         unique: false,
-        method: Some("btree".to_string()),
+        kind: LiveIndexKind::Basic(nautilus_schema::ir::BasicIndexType::BTree),
     }])]);
 
     let changes = SchemaDiff::compute(&live, &target, DatabaseProvider::Postgres);
@@ -544,11 +546,83 @@ fn detects_index_method_change() {
     assert!(
         changes.iter().any(|c| matches!(
             c,
-            Change::IndexAdded { index_type: Some(t), .. }
-                if *t == nautilus_schema::ir::IndexType::Hash
+            Change::IndexAdded { kind, .. }
+                if matches!(kind, nautilus_schema::ir::IndexKind::Basic(nautilus_schema::ir::BasicIndexType::Hash))
         )),
         "expected IndexAdded with Hash method"
     );
+}
+
+#[test]
+fn detects_pgvector_index_opclass_change() {
+    let target = common::parse(
+        r#"
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+model Embedding {
+  id        Int @id
+  embedding Vector(3)
+
+  @@index([embedding], type: Hnsw, opclass: vector_cosine_ops, m: 16)
+}
+"#,
+    )
+    .unwrap();
+    let live = common::make_live_schema(vec![LiveTable {
+        name: "Embedding".to_string(),
+        columns: vec![
+            LiveColumn {
+                name: "id".to_string(),
+                col_type: "integer".to_string(),
+                nullable: false,
+                default_value: None,
+                generated_expr: None,
+                computed_kind: None,
+                check_expr: None,
+            },
+            LiveColumn {
+                name: "embedding".to_string(),
+                col_type: "vector(3)".to_string(),
+                nullable: false,
+                default_value: None,
+                generated_expr: None,
+                computed_kind: None,
+                check_expr: None,
+            },
+        ],
+        primary_key: vec!["id".to_string()],
+        indexes: vec![LiveIndex {
+            name: "idx_Embedding_embedding".to_string(),
+            columns: vec!["embedding".to_string()],
+            unique: false,
+            kind: LiveIndexKind::Pgvector(nautilus_schema::ir::PgvectorIndex {
+                method: nautilus_schema::ir::PgvectorMethod::Hnsw,
+                opclass: Some(nautilus_schema::ir::PgvectorOpClass::L2Ops),
+                options: nautilus_schema::ir::PgvectorIndexOptions {
+                    m: Some(16),
+                    ef_construction: None,
+                    lists: None,
+                },
+            }),
+        }],
+        check_constraints: vec![],
+        foreign_keys: vec![],
+    }]);
+
+    let changes = SchemaDiff::compute(&live, &target, DatabaseProvider::Postgres);
+
+    assert!(changes
+        .iter()
+        .any(|c| matches!(c, Change::IndexDropped { .. })));
+    assert!(changes.iter().any(|c| matches!(
+        c,
+        Change::IndexAdded { kind: nautilus_schema::ir::IndexKind::Pgvector(p), .. }
+            if p.opclass == Some(nautilus_schema::ir::PgvectorOpClass::CosineOps)
+    )));
 }
 
 #[test]
@@ -558,7 +632,7 @@ fn no_false_positive_when_method_is_default_btree() {
         name: "idx_User_id".to_string(),
         columns: vec!["id".to_string()],
         unique: false,
-        method: Some("btree".to_string()),
+        kind: LiveIndexKind::Basic(nautilus_schema::ir::BasicIndexType::BTree),
     }])]);
 
     let changes = SchemaDiff::compute(&live, &target, DatabaseProvider::Postgres);
@@ -578,7 +652,7 @@ fn dropped_index_carries_live_physical_name() {
         name: "custom_legacy_idx".to_string(),
         columns: vec!["id".to_string()],
         unique: false,
-        method: None,
+        kind: LiveIndexKind::Unknown(None),
     }])]);
 
     let changes = SchemaDiff::compute(&live, &target, DatabaseProvider::Postgres);
@@ -622,7 +696,7 @@ fn unique_constraint_name_mismatch_does_not_trigger_index_churn() {
             name: "users_email_key".to_string(),
             columns: vec!["email".to_string()],
             unique: true,
-            method: Some("btree".to_string()),
+            kind: LiveIndexKind::Basic(nautilus_schema::ir::BasicIndexType::BTree),
         }],
         check_constraints: vec![],
         foreign_keys: vec![],

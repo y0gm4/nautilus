@@ -406,7 +406,8 @@ class {{ delegate_name }}:
         *,
         where: Optional[{{ model_name }}WhereInput] = None,
         order_by: Optional[{{ model_name }}OrderByInput] = None,
-        take: Optional[int] = None,
+        {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
+        {% endif %}take: Optional[int] = None,
         skip: Optional[int] = None,
         select: Optional[{{ model_name }}SelectInput] = None,
         include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
@@ -419,7 +420,8 @@ class {{ delegate_name }}:
         Args:
             where: Filter conditions (optional).
             order_by: Sorting directions, e.g. ``{"created_at": "desc"}``.
-            take: Maximum number of rows to return (LIMIT).
+            {% if has_vector_fields %}nearest: pgvector nearest-neighbor search options.
+            {% endif %}take: Maximum number of rows to return (LIMIT).
                   Positive values paginate **forward**; negative values
                   paginate **backward** from the cursor position.
             skip: Number of rows to skip (OFFSET).
@@ -448,6 +450,10 @@ class {{ delegate_name }}:
                 args["orderBy"] = order_by
             else:
                 args["orderBy"] = [{field: direction} for field, direction in order_by.items()]
+        {% if has_vector_fields %}
+        if nearest is not None:
+            args["nearest"] = nearest
+        {% endif %}
         if take is not None:
             args["take"] = take
         if skip is not None:
@@ -476,7 +482,8 @@ class {{ delegate_name }}:
         *,
         where: Optional[{{ model_name }}WhereInput] = None,
         order_by: Optional[{{ model_name }}OrderByInput] = None,
-        select: Optional[{{ model_name }}SelectInput] = None,
+        {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
+        {% endif %}select: Optional[{{ model_name }}SelectInput] = None,
         include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
     ) -> Optional[{{ model_name }}]:
         """Find the first {{ model_name }} record matching the given filters.
@@ -484,7 +491,7 @@ class {{ delegate_name }}:
         Returns:
             The first matching ``{{ model_name }}`` instance, or ``None``.
         """
-        rows = {% if is_async %}await {% endif %}self.find_many(where=where, order_by=order_by, take=1, select=select, include=include)
+        rows = {% if is_async %}await {% endif %}self.find_many(where=where, order_by=order_by,{% if has_vector_fields %} nearest=nearest,{% endif %} take=1, select=select, include=include)
         return rows[0] if rows else None
 
     {% if is_async %}async {% endif %}def find_unique(
@@ -530,7 +537,8 @@ class {{ delegate_name }}:
         *,
         where: Optional[{{ model_name }}WhereInput] = None,
         order_by: Optional[{{ model_name }}OrderByInput] = None,
-        select: Optional[{{ model_name }}SelectInput] = None,
+        {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
+        {% endif %}select: Optional[{{ model_name }}SelectInput] = None,
         include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
     ) -> {{ model_name }}:
         """Find the first {{ model_name }} record matching ``where``, or raise if not found.
@@ -542,7 +550,7 @@ class {{ delegate_name }}:
             NotFoundError: If no record matches the given filters.
         """
         from ..errors import NotFoundError
-        record = {% if is_async %}await {% endif %}self.find_first(where=where, order_by=order_by, select=select, include=include)
+        record = {% if is_async %}await {% endif %}self.find_first(where=where, order_by=order_by,{% if has_vector_fields %} nearest=nearest,{% endif %} select=select, include=include)
         if record is None:
             raise NotFoundError(
                 f"findFirstOrThrow: no {{ model_name }} record found matching the given filter"
@@ -969,5 +977,6 @@ __all__ = [
     "BoolFilter",
     "JsonFilter",
     "HstoreFilter",
+    "VectorFilter",
 {%- endif %}
 ]

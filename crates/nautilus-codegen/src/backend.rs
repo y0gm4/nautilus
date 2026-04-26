@@ -145,7 +145,7 @@ pub trait LanguageBackend {
                     type_name: arr,
                 });
             }
-            ScalarType::Hstore => {}
+            ScalarType::Hstore | ScalarType::Vector { .. } => {}
             ScalarType::Int | ScalarType::BigInt => {
                 ops.extend(self.numeric_operators(self.scalar_to_type(scalar)));
             }
@@ -194,7 +194,7 @@ pub trait LanguageBackend {
                     type_name: arr,
                 });
             }
-            // Boolean, Bytes, Json, Jsonb: only equality via the direct field value.
+            // Boolean, Bytes, Json, Jsonb, Vector: only equality via the direct field value.
             ScalarType::Boolean | ScalarType::Bytes | ScalarType::Json | ScalarType::Jsonb => {}
         }
 

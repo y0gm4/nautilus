@@ -1259,6 +1259,56 @@ model User {
 }
 
 #[test]
+fn test_vector_rejected_for_mysql() {
+    let source = r#"
+datasource db {
+  provider = "mysql"
+  url      = "mysql://localhost/test"
+}
+
+model Embedding {
+  id     Int @id
+  vector Vector(3)
+}
+"#;
+    let ast = parse(source).unwrap();
+    let err = validate_schema(ast).unwrap_err();
+    match err {
+        SchemaError::Validation(msg, _) => {
+            assert!(
+                msg.contains("Vector(3)") && msg.contains("provider 'mysql'"),
+                "got: {}",
+                msg
+            );
+        }
+        _ => panic!("Expected validation error"),
+    }
+}
+
+#[test]
+fn test_vector_dimension_must_be_positive() {
+    let source = r#"
+datasource db {
+  provider = "postgresql"
+  url      = "postgres://localhost/test"
+}
+
+model Embedding {
+  id     Int @id
+  vector Vector(0)
+}
+"#;
+    let ast = parse(source).unwrap();
+    let err = validate_schema(ast).unwrap_err();
+    match err {
+        SchemaError::Validation(msg, _) => {
+            assert!(msg.contains("Vector dimension must be greater than 0"));
+        }
+        _ => panic!("Expected validation error"),
+    }
+}
+
+#[test]
 fn test_postgres_extension_backed_types_emit_missing_extension_warning() {
     use nautilus_schema::analysis::analyze;
     use nautilus_schema::Severity;
@@ -1285,4 +1335,79 @@ model User {
         "expected missing-extension warning, got: {:?}",
         result.diagnostics
     );
+}
+
+#[test]
+fn test_vector_emits_missing_extension_warning() {
+    use nautilus_schema::analysis::analyze;
+    use nautilus_schema::Severity;
+
+    let source = r#"
+datasource db {
+  provider = "postgresql"
+  url      = "postgres://localhost/test"
+}
+
+model Embedding {
+  id     Int @id
+  vector Vector(1536)
+}
+"#;
+    let result = analyze(source);
+    assert!(result.ir.is_some(), "schema should still validate");
+    assert!(
+        result.diagnostics.iter().any(|d| {
+            d.severity == Severity::Warning
+                && d.message.contains("pgvector")
+                && d.message.contains("extensions = [vector]")
+        }),
+        "expected missing-vector-extension warning, got: {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn test_pgvector_hnsw_index_validation_ok() {
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [vector]
+}
+
+model Embedding {
+  id        Int @id
+  embedding Vector(3)
+
+  @@index([embedding], type: Hnsw, opclass: vector_cosine_ops, m: 16, ef_construction: 64)
+}
+"#;
+    let ast = parse(source).unwrap();
+    let ir = validate_schema(ast).unwrap();
+    assert_eq!(ir.models["Embedding"].indexes.len(), 1);
+}
+
+#[test]
+fn test_pgvector_index_rejects_non_vector_field() {
+    let source = r#"
+datasource db {
+  provider = "postgresql"
+  url      = "postgres://localhost/test"
+}
+
+model User {
+  id    Int    @id
+  email String
+
+  @@index([email], type: Hnsw, opclass: vector_l2_ops, m: 16)
+}
+"#;
+    let ast = parse(source).unwrap();
+    let err = validate_schema(ast).unwrap_err();
+    match err {
+        SchemaError::Validation(msg, _) => {
+            assert!(msg.contains("pgvector indexes require a Vector field"));
+        }
+        _ => panic!("Expected validation error"),
+    }
 }

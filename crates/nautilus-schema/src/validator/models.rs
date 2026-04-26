@@ -1,5 +1,24 @@
 use super::*;
 
+fn missing_extension_warning(
+    field_name: &str,
+    model_name: &str,
+    field_type: &FieldType,
+    required_extension: &str,
+) -> String {
+    if matches!(field_type, FieldType::Vector { .. }) {
+        return format!(
+            "Field '{}' in model '{}' uses type '{}' which requires the PostgreSQL pgvector extension. Add `extensions = [vector]` to the datasource for reproducible migrations.",
+            field_name, model_name, field_type
+        );
+    }
+
+    format!(
+        "Field '{}' in model '{}' uses type '{}' which relies on the PostgreSQL '{}' extension. Consider adding `extensions = [{}]` to the datasource for reproducible migrations.",
+        field_name, model_name, field_type, required_extension, required_extension
+    )
+}
+
 impl SchemaValidator {
     pub(super) fn validate_models(&mut self) {
         let models: Vec<_> = self.schema.models().cloned().collect();
@@ -42,6 +61,31 @@ impl SchemaValidator {
                             "Decimal scale ({}) cannot exceed precision ({})",
                             scale, precision
                         ),
+                        field.span,
+                    ));
+                }
+            }
+
+            if let FieldType::Vector { dimension } = field.field_type {
+                if dimension == 0 {
+                    self.errors.push_back(SchemaError::Validation(
+                        "Vector dimension must be greater than 0".to_string(),
+                        field.span,
+                    ));
+                }
+                if dimension > 16000 {
+                    self.errors.push_back(SchemaError::Validation(
+                        format!(
+                            "Vector dimension ({}) exceeds pgvector's maximum of 16000",
+                            dimension
+                        ),
+                        field.span,
+                    ));
+                }
+                if field.is_array() {
+                    self.errors.push_back(SchemaError::Validation(
+                        "Vector[] fields are not supported; use a scalar Vector(n) field"
+                            .to_string(),
                         field.span,
                     ));
                 }
@@ -106,10 +150,20 @@ impl SchemaValidator {
             }
         }
 
-        let provider = self.schema.datasource().and_then(|ds| ds.provider());
+        let provider = self
+            .schema
+            .datasource()
+            .and_then(|ds| ds.provider())
+            .and_then(|p| p.parse::<DatabaseProvider>().ok());
         for attr in &model.attributes {
             if let ModelAttribute::Index {
-                fields, index_type, ..
+                fields,
+                index_type,
+                opclass,
+                m,
+                ef_construction,
+                lists,
+                ..
             } = attr
             {
                 for field_ident in fields {
@@ -123,35 +177,30 @@ impl SchemaValidator {
                         ));
                     }
                 }
-                if let Some(type_ident) = index_type {
-                    match type_ident.value.parse::<IndexType>() {
-                        Err(_) => {
-                            self.errors.push_back(SchemaError::Validation(
-                                format!(
-                                    "Unknown index type '{}'. Valid types are: BTree, Hash, Gin, Gist, Brin, FullText",
-                                    type_ident.value
-                                ),
-                                type_ident.span,
-                            ));
-                        }
-                        Ok(idx_type) => {
-                            if let Some(prov) = provider {
-                                if let Ok(db_provider) = prov.parse::<DatabaseProvider>() {
-                                    if !idx_type.supported_by(db_provider) {
-                                        self.errors.push_back(SchemaError::Validation(
-                                            format!(
-                                                "Index type '{}' is not supported by provider '{}' (supported by: {})",
-                                                idx_type.as_str(),
-                                                prov,
-                                                idx_type.supported_providers()
-                                            ),
-                                            type_ident.span,
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
+
+                let indexed_field_type = fields
+                    .first()
+                    .and_then(|f| model.find_field(&f.value))
+                    .map(|f| &f.field_type);
+
+                let args = super::index::RawIndexArgs {
+                    fields,
+                    index_type: index_type.as_ref(),
+                    opclass: opclass.as_ref(),
+                    m: *m,
+                    ef_construction: *ef_construction,
+                    lists: *lists,
+                    model_span: model.span,
+                };
+
+                let (_kind, diagnostics) = super::index::build_index_kind(
+                    &args,
+                    provider,
+                    indexed_field_type,
+                    &model.name.value,
+                );
+                for diag in diagnostics {
+                    self.errors.push_back(diag);
                 }
             }
         }
@@ -180,6 +229,9 @@ impl SchemaValidator {
                     FieldType::Citext => Some(ScalarType::Citext),
                     FieldType::Hstore => Some(ScalarType::Hstore),
                     FieldType::Ltree => Some(ScalarType::Ltree),
+                    FieldType::Vector { dimension } => Some(ScalarType::Vector {
+                        dimension: *dimension,
+                    }),
                     FieldType::Jsonb => Some(ScalarType::Jsonb),
                     FieldType::Xml => Some(ScalarType::Xml),
                     FieldType::Char { length } => Some(ScalarType::Char { length: *length }),
@@ -205,6 +257,7 @@ impl SchemaValidator {
                         FieldType::Citext => Some("citext"),
                         FieldType::Hstore => Some("hstore"),
                         FieldType::Ltree => Some("ltree"),
+                        FieldType::Vector { .. } => Some("vector"),
                         _ => None,
                     };
 
@@ -220,13 +273,11 @@ impl SchemaValidator {
                             .any(|ext| ext.name == required_extension)
                         {
                             self.warnings.push_back(SchemaError::Warning(
-                                format!(
-                                    "Field '{}' in model '{}' uses type '{}' which relies on the PostgreSQL '{}' extension. Consider adding `extensions = [{}]` to the datasource for reproducible migrations.",
-                                    field.name.value,
+                                missing_extension_warning(
+                                    &field.name.value,
                                     model_name,
-                                    field.field_type,
+                                    &field.field_type,
                                     required_extension,
-                                    required_extension
                                 ),
                                 field.span,
                             ));

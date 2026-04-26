@@ -441,6 +441,9 @@ impl SchemaValidator {
             FieldType::Citext => Ok(ResolvedFieldType::Scalar(ScalarType::Citext)),
             FieldType::Hstore => Ok(ResolvedFieldType::Scalar(ScalarType::Hstore)),
             FieldType::Ltree => Ok(ResolvedFieldType::Scalar(ScalarType::Ltree)),
+            FieldType::Vector { dimension } => Ok(ResolvedFieldType::Scalar(ScalarType::Vector {
+                dimension: *dimension,
+            })),
             FieldType::Jsonb => Ok(ResolvedFieldType::Scalar(ScalarType::Jsonb)),
             FieldType::Xml => Ok(ResolvedFieldType::Scalar(ScalarType::Xml)),
             FieldType::Char { length } => Ok(ResolvedFieldType::Scalar(ScalarType::Char {
@@ -593,20 +596,49 @@ impl SchemaValidator {
     pub(super) fn build_indexes(&self, model: &ModelDecl) -> Vec<IndexIr> {
         let mut indexes = Vec::new();
 
+        let provider = self
+            .schema
+            .datasource()
+            .and_then(|ds| ds.provider())
+            .and_then(|p| p.parse::<DatabaseProvider>().ok());
+
         for attr in &model.attributes {
             if let ModelAttribute::Index {
                 fields,
                 index_type,
+                opclass,
+                m,
+                ef_construction,
+                lists,
                 name,
                 map,
             } = attr
             {
-                let index_type_ir = index_type
-                    .as_ref()
-                    .and_then(|t| t.value.parse::<IndexType>().ok());
+                let indexed_field_type = fields
+                    .first()
+                    .and_then(|f| model.find_field(&f.value))
+                    .map(|f| &f.field_type);
+
+                let args = super::index::RawIndexArgs {
+                    fields,
+                    index_type: index_type.as_ref(),
+                    opclass: opclass.as_ref(),
+                    m: *m,
+                    ef_construction: *ef_construction,
+                    lists: *lists,
+                    model_span: model.span,
+                };
+
+                let (kind, _diagnostics) = super::index::build_index_kind(
+                    &args,
+                    provider,
+                    indexed_field_type,
+                    &model.name.value,
+                );
+
                 indexes.push(IndexIr {
                     fields: fields.iter().map(|f| f.value.clone()).collect(),
-                    index_type: index_type_ir,
+                    kind,
                     name: name.clone(),
                     map: map.clone(),
                 });

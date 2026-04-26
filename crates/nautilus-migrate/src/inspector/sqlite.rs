@@ -3,7 +3,7 @@ use super::{
     parse_sqlite_check_constraints, parse_sqlite_generated_exprs, SchemaInspector,
 };
 use crate::error::{MigrationError, Result};
-use crate::live::{ComputedKind, LiveColumn, LiveIndex, LiveSchema, LiveTable};
+use crate::live::{ComputedKind, LiveColumn, LiveIndex, LiveIndexKind, LiveSchema, LiveTable};
 
 impl SchemaInspector {
     pub(super) async fn inspect_sqlite(&self) -> Result<LiveSchema> {
@@ -152,7 +152,7 @@ impl SchemaInspector {
                     name: idx_name,
                     columns: idx_cols.into_iter().map(|(_, col)| col).collect(),
                     unique: unique_val != 0,
-                    method: None,
+                    kind: LiveIndexKind::Unknown(None),
                 });
             }
 

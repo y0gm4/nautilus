@@ -2,8 +2,8 @@ use crate::error::{MigrationError, Result};
 use crate::provider::{CreateIndex, ProviderStrategy};
 use nautilus_schema::ast::StorageStrategy;
 use nautilus_schema::ir::{
-    CompositeFieldIr, CompositeTypeIr, ComputedKind, DefaultValue, EnumIr, FieldIr, IndexType,
-    ModelIr, PostgresExtensionIr, ResolvedFieldType, ScalarType, SchemaIr,
+    CompositeFieldIr, CompositeTypeIr, ComputedKind, DefaultValue, EnumIr, FieldIr, ModelIr,
+    PostgresExtensionIr, ResolvedFieldType, ScalarType, SchemaIr,
 };
 
 /// Generates DDL (Data Definition Language) SQL from schema IR
@@ -566,13 +566,12 @@ impl DdlGenerator {
                     .map
                     .clone()
                     .unwrap_or_else(|| format!("idx_{}_{}", model.db_name, name_parts.join("_")));
-
                 strategy.create_index_sql(CreateIndex {
                     table: &model.db_name,
                     name: &index_name,
                     columns: &columns,
                     unique: false,
-                    method: idx.index_type.map(IndexType::as_str),
+                    kind: &idx.kind,
                     if_not_exists: true,
                 })
             })
@@ -789,6 +788,9 @@ impl DdlGenerator {
                 ScalarType::Citext => "CITEXT",
                 ScalarType::Hstore => "HSTORE",
                 ScalarType::Ltree => "LTREE",
+                ScalarType::Vector { dimension } => {
+                    return Ok(format!("VECTOR({})", dimension));
+                }
                 ScalarType::Jsonb => "JSONB",
                 ScalarType::Xml => "XML",
                 ScalarType::Char { length } => {
@@ -936,6 +938,9 @@ impl DdlGenerator {
             ScalarType::Citext => "CITEXT",
             ScalarType::Hstore => "HSTORE",
             ScalarType::Ltree => "LTREE",
+            ScalarType::Vector { dimension } => {
+                return Ok(format!("VECTOR({})", dimension));
+            }
             ScalarType::Jsonb => "JSONB",
             ScalarType::Xml => "XML",
             ScalarType::Char { length } => {

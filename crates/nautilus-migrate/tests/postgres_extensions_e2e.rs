@@ -203,6 +203,208 @@ model PgExtDoc {{
 }
 
 #[tokio::test]
+#[ignore = "requires a running PostgreSQL instance with pgvector available (run `docker-compose up -d` first)"]
+async fn pgvector_round_trip_with_hnsw_index_and_destructive_drop(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let base_url = database_url();
+    let admin_pool = PgPool::connect(&base_url).await?;
+    let schema = unique_schema("nautilus_pgvector");
+    create_schema(&admin_pool, &schema).await?;
+
+    let result = async {
+        let scoped_url = schema_scoped_url(&base_url, &schema);
+        let scoped_pool = PgPool::connect(&scoped_url).await?;
+
+        // Detect whether pgvector is available on this server; gracefully skip
+        // otherwise so the test stays useful on a vanilla PostgreSQL image.
+        let probe = sqlx::query("CREATE EXTENSION IF NOT EXISTS \"vector\"")
+            .persistent(false)
+            .execute(&scoped_pool)
+            .await;
+        if let Err(err) = probe {
+            let message = err.to_string().to_lowercase();
+            if message.contains("not available") || message.contains("could not open extension") {
+                eprintln!("skipping pgvector round-trip test: {message}");
+                return Ok(());
+            }
+            return Err(Box::<dyn std::error::Error>::from(err));
+        }
+        // Drop it again so the generated DDL is responsible for creating it,
+        // mirroring the production "fresh database" flow.
+        sqlx::query("DROP EXTENSION IF EXISTS \"vector\"")
+            .persistent(false)
+            .execute(&scoped_pool)
+            .await?;
+
+        let source = format!(
+            r#"
+datasource db {{
+  provider   = "postgresql"
+  url        = "{}"
+  extensions = [vector]
+}}
+
+model Embedding {{
+  id        Int       @id
+  embedding Vector(3)
+
+  @@index([embedding], type: Hnsw, opclass: vector_cosine_ops, m: 16, ef_construction: 64)
+}}
+"#,
+            escape_schema_string(&scoped_url)
+        );
+        let target = common::parse(&source)?;
+        let ddl = DdlGenerator::new(DatabaseProvider::Postgres);
+        let statements = ddl.generate_create_tables(&target)?;
+
+        let create_ext_idx = statements
+            .iter()
+            .position(|sql| sql == "CREATE EXTENSION IF NOT EXISTS \"vector\"")
+            .expect("missing CREATE EXTENSION for vector");
+        let create_table_idx = statements
+            .iter()
+            .position(|sql| sql.starts_with("CREATE TABLE"))
+            .expect("expected CREATE TABLE");
+        assert!(
+            create_ext_idx < create_table_idx,
+            "extension DDL must run before table DDL: {statements:?}"
+        );
+        let create_index_stmt = statements
+            .iter()
+            .find(|sql| sql.to_lowercase().contains("using hnsw"))
+            .unwrap_or_else(|| panic!("expected USING HNSW index DDL: {statements:?}"));
+        assert!(
+            create_index_stmt.contains("vector_cosine_ops"),
+            "index DDL missing opclass: {create_index_stmt}"
+        );
+        assert!(
+            create_index_stmt.contains("m = 16"),
+            "index DDL missing m parameter: {create_index_stmt}"
+        );
+        assert!(
+            create_index_stmt.contains("ef_construction = 64"),
+            "index DDL missing ef_construction parameter: {create_index_stmt}"
+        );
+
+        execute_all(&scoped_pool, &statements).await?;
+
+        let live = SchemaInspector::new(DatabaseProvider::Postgres, &scoped_url)
+            .inspect()
+            .await?;
+        assert!(
+            live.extensions.contains_key("vector"),
+            "missing inspected vector extension: {:?}",
+            live.extensions
+        );
+
+        let table = live
+            .tables
+            .get("Embedding")
+            .expect("expected Embedding in inspected schema");
+        let column_type = table
+            .columns
+            .iter()
+            .find(|column| column.name == "embedding")
+            .map(|column| column.col_type.as_str())
+            .expect("missing inspected embedding column");
+        assert_eq!(column_type, "vector(3)");
+
+        let live_index = table
+            .indexes
+            .iter()
+            .find(|i| i.columns == ["embedding"])
+            .expect("missing inspected hnsw index");
+        let pgvector = live_index
+            .kind
+            .pgvector()
+            .expect("expected pgvector index kind");
+        assert_eq!(pgvector.method, nautilus_schema::ir::PgvectorMethod::Hnsw);
+        assert_eq!(
+            pgvector.opclass,
+            Some(nautilus_schema::ir::PgvectorOpClass::CosineOps)
+        );
+        assert_eq!(pgvector.options.m, Some(16));
+        assert_eq!(pgvector.options.ef_construction, Some(64));
+
+        let pulled = serialize_live_schema(&live, DatabaseProvider::Postgres, &scoped_url);
+        assert!(pulled.contains("extensions = ["), "pulled schema: {pulled}");
+        assert!(
+            pulled.contains("vector"),
+            "pulled schema should mention the vector extension: {pulled}"
+        );
+        assert!(
+            pulled.contains("Vector(3)"),
+            "pulled schema should mention the Vector(3) field: {pulled}"
+        );
+
+        // No-op diff: the live state must equal the declared target.
+        let mut live_extensions: Vec<&str> = live.extensions.keys().map(String::as_str).collect();
+        live_extensions.sort_unstable();
+        let no_op_source = format!(
+            r#"
+datasource db {{
+  provider   = "postgresql"
+  url        = "{}"
+  extensions = [{}]
+}}
+
+model Embedding {{
+  id        Int       @id
+  embedding Vector(3)
+
+  @@index([embedding], type: Hnsw, opclass: vector_cosine_ops, m: 16, ef_construction: 64)
+}}
+"#,
+            escape_schema_string(&scoped_url),
+            live_extensions
+                .iter()
+                .map(|name| render_extension_name(name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let no_op_target = common::parse(&no_op_source)?;
+        let changes = SchemaDiff::compute(&live, &no_op_target, DatabaseProvider::Postgres);
+        assert!(changes.is_empty(), "expected no-op diff, got: {changes:?}");
+
+        // Destructive drop: a target that no longer references the vector
+        // extension must produce a destructive `DropExtension`, and the
+        // generated DDL must omit `CASCADE` so the apply fails while the
+        // dependent `Embedding` table is still present.
+        let drop_target = common::parse("model Other { id Int @id }")?;
+        let drop_changes = SchemaDiff::compute(&live, &drop_target, DatabaseProvider::Postgres);
+        let drop_ext_change = drop_changes
+            .iter()
+            .find(|c| matches!(c, Change::DropExtension { name } if name == "vector"))
+            .expect("expected DropExtension { name: \"vector\" } in diff");
+        assert_eq!(change_risk(drop_ext_change), ChangeRisk::Destructive);
+
+        let applier = DiffApplier::new(DatabaseProvider::Postgres, &ddl, &drop_target, &live);
+        let drop_sql = applier.sql_for(drop_ext_change)?;
+        assert_eq!(drop_sql, vec!["DROP EXTENSION IF EXISTS \"vector\""]);
+        assert!(!drop_sql[0].contains("CASCADE"));
+
+        let err = sqlx::query(&drop_sql[0])
+            .persistent(false)
+            .execute(&scoped_pool)
+            .await
+            .expect_err(
+                "DROP EXTENSION without CASCADE should fail while Embedding still depends on it",
+            );
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("depend") || err_text.contains("dependent"),
+            "unexpected PostgreSQL error: {err}"
+        );
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    drop_schema(&admin_pool, &schema).await;
+    result
+}
+
+#[tokio::test]
 #[ignore = "requires a running PostgreSQL instance (run `docker-compose up -d` first)"]
 async fn drop_extension_fails_without_cascade_when_objects_depend_on_it(
 ) -> Result<(), Box<dyn std::error::Error>> {

@@ -22,6 +22,7 @@ impl LanguageBackend for JsBackend {
             ScalarType::Uuid => "string",
             ScalarType::Citext | ScalarType::Ltree => "string",
             ScalarType::Hstore => "HstoreValue",
+            ScalarType::Vector { .. } => "number[]",
             ScalarType::Jsonb => "JsonValue",
             ScalarType::Xml | ScalarType::Char { .. } | ScalarType::VarChar { .. } => "string",
         }

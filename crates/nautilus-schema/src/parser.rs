@@ -253,6 +253,17 @@ impl<'a> Parser<'a> {
             "Citext" => FieldType::Citext,
             "Hstore" => FieldType::Hstore,
             "Ltree" => FieldType::Ltree,
+            "Vector" => {
+                self.expect(TokenKind::LParen)?;
+                let dimension = self.parse_number()?.parse::<u32>().map_err(|_| {
+                    SchemaError::Parse(
+                        "Invalid vector dimension value".to_string(),
+                        self.current_span(),
+                    )
+                })?;
+                self.expect(TokenKind::RParen)?;
+                FieldType::Vector { dimension }
+            }
             "Jsonb" => FieldType::Jsonb,
             "Xml" => FieldType::Xml,
             "Char" => {
@@ -569,6 +580,10 @@ impl<'a> Parser<'a> {
                 self.expect(TokenKind::LParen)?;
                 let fields = self.parse_ident_array()?;
                 let mut index_type: Option<Ident> = None;
+                let mut opclass: Option<Ident> = None;
+                let mut m: Option<u32> = None;
+                let mut ef_construction: Option<u32> = None;
+                let mut lists: Option<u32> = None;
                 let mut index_name: Option<String> = None;
                 let mut index_map: Option<String> = None;
                 while self.check(TokenKind::Comma) {
@@ -581,6 +596,18 @@ impl<'a> Parser<'a> {
                     match key.value.as_str() {
                         "type" => {
                             index_type = Some(self.parse_ident()?);
+                        }
+                        "opclass" => {
+                            opclass = Some(self.parse_ident()?);
+                        }
+                        "m" => {
+                            m = Some(self.parse_u32_literal("m")?);
+                        }
+                        "ef_construction" => {
+                            ef_construction = Some(self.parse_u32_literal("ef_construction")?);
+                        }
+                        "lists" => {
+                            lists = Some(self.parse_u32_literal("lists")?);
                         }
                         "name" => {
                             index_name = Some(self.parse_string()?);
@@ -600,6 +627,10 @@ impl<'a> Parser<'a> {
                 Ok(ModelAttribute::Index {
                     fields,
                     index_type,
+                    opclass,
+                    m,
+                    ef_construction,
+                    lists,
                     name: index_name,
                     map: index_map,
                 })
@@ -840,6 +871,21 @@ impl<'a> Parser<'a> {
                 self.current_span(),
             )),
         }
+    }
+
+    /// Parses an unsigned integer literal used by index arguments.
+    fn parse_u32_literal(&mut self, argument_name: &str) -> Result<u32> {
+        let raw = self.parse_number()?;
+        let span = self.previous_span();
+        raw.parse::<u32>().map_err(|_| {
+            SchemaError::Parse(
+                format!(
+                    "Expected '{}' to be a non-negative integer literal, found '{}'",
+                    argument_name, raw
+                ),
+                span,
+            )
+        })
     }
 
     /// Checks if current token matches the given kind.

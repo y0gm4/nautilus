@@ -241,12 +241,107 @@ model Account {
 }
 ```
 
+For pgvector, declare the PostgreSQL extension as `vector` and use a sized
+`Vector(dim)` field:
+
+```prisma
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+model Embedding {
+  id     Int @id
+  vector Vector(1536)
+}
+```
+
 The extension list is declarative: if an extension is installed in the live
 database but is not listed in the datasource, `db status`/`db push` will propose
 a destructive `DROP EXTENSION IF EXISTS` without `CASCADE`.
 Set `preserve_extensions = true` when your database contains extensions managed
 by another app or platform and Nautilus should leave those extra live extensions
 alone.
+
+#### Vector indexes (HNSW / IVFFlat)
+
+`Vector(dim)` fields can be backed by an `Hnsw` or `Ivfflat` index using the
+standard `@@index` attribute. The opclass (`vector_l2_ops`, `vector_ip_ops`, or
+`vector_cosine_ops`) selects the distance metric the index is built for, and
+the build-time parameters are passed through unchanged:
+
+```prisma
+model Embedding {
+  id        Int       @id
+  embedding Vector(1536)
+
+  // HNSW (graph-based, fast queries, slower build)
+  @@index([embedding], type: Hnsw, opclass: vector_cosine_ops, m: 16, ef_construction: 64)
+}
+
+model EmbeddingIvf {
+  id        Int       @id
+  embedding Vector(1536)
+
+  // IVFFlat (list-based, faster build, requires `lists`)
+  @@index([embedding], type: Ivfflat, opclass: vector_l2_ops, lists: 100)
+}
+```
+
+Nautilus emits `CREATE INDEX … USING hnsw|ivfflat (col opclass)
+WITH (m = …, ef_construction = …, lists = …)`. The opclass and `WITH (...)`
+parameters are part of the index identity in the diff: changing any of them
+produces an `IndexDropped` + `IndexAdded` pair on `db push`, so the live and
+declared schemas always agree.
+
+#### Nearest-neighbor queries
+
+Queries on `Vector(dim)` fields support a `nearest` argument that orders
+results by distance to a query vector. The metric is explicit, `take` is
+mandatory, and `nearest` cannot be combined with `cursor`, `distinct`, or
+backward pagination.
+
+```ts
+// JavaScript / TypeScript
+const results = await db.embedding.findMany({
+  nearest: {
+    field: "embedding",
+    query: [0.12, 0.04, /* … */],
+    metric: "cosine", // "l2" | "innerProduct" | "cosine"
+  },
+  take: 10,
+});
+```
+
+```python
+# Python
+results = await db.embedding.find_many(
+    nearest={
+        "field": "embedding",
+        "query": [0.12, 0.04, ...],
+        "metric": "cosine",
+    },
+    take=10,
+)
+```
+
+```java
+// Java — the generated `Nearest` builder exposes one accessor per vector
+// field on the model, so on `Embedding { embedding Vector(1536) }` the call
+// is `n.embedding()` rather than `n.field("embedding")`.
+var results = db.embedding().findMany(args -> args
+    .nearest(n -> n
+        .embedding()
+        .query(List.of(0.12f, 0.04f /*, … */))
+        .metric(EmbeddingDsl.VectorMetric.COSINE))
+    .take(10));
+```
+
+The `metric` value maps to the pgvector distance operator used in `ORDER BY`:
+`l2` → `<->`, `innerProduct` → `<#>`, `cosine` → `<=>`. Pair the chosen metric
+with the matching opclass on the index (`vector_l2_ops`, `vector_ip_ops`,
+`vector_cosine_ops`) for the planner to pick the index up.
 
 Generated clients are local build artifacts, not registry packages. If your
 schema uses `output = "./db"`, the normal consumption path is to import that

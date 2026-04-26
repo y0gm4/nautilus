@@ -2,11 +2,14 @@
 
 mod mysql;
 mod postgres;
+mod postgres_indexes;
 mod sqlite;
+
+pub(super) use postgres_indexes::group_pg_indexes;
 
 use crate::ddl::DatabaseProvider;
 use crate::error::Result;
-use crate::live::{LiveForeignKey, LiveIndex, LiveSchema};
+use crate::live::{LiveForeignKey, LiveSchema};
 
 /// Inspects a live database and returns a snapshot of its current schema.
 pub struct SchemaInspector {
@@ -280,7 +283,12 @@ fn normalize_pg_type(
     numeric_precision: Option<i32>,
     numeric_scale: Option<i32>,
     character_maximum_length: Option<i32>,
+    formatted_type: Option<&str>,
 ) -> String {
+    if let Some(formatted) = formatted_type.and_then(normalize_pgvector_formatted_type) {
+        return formatted;
+    }
+
     match udt_name.to_lowercase().as_str() {
         "int4" => "integer".to_string(),
         "int8" => "bigint".to_string(),
@@ -307,11 +315,29 @@ fn normalize_pg_type(
                 numeric_precision,
                 numeric_scale,
                 character_maximum_length,
+                None,
             );
             format!("{base}[]")
         }
         other => other.to_string(),
     }
+}
+
+fn normalize_pgvector_formatted_type(formatted_type: &str) -> Option<String> {
+    let t = formatted_type.trim().to_lowercase();
+    let array_suffix = t.strip_suffix("[]").map(|inner| (inner, "[]"));
+    let (base, suffix) = array_suffix.unwrap_or((t.as_str(), ""));
+    let base = base.rsplit('.').next().unwrap_or(base);
+
+    if base == "vector" {
+        return Some(format!("vector{}", suffix));
+    }
+
+    if base.starts_with("vector(") && base.ends_with(')') {
+        return Some(format!("{}{}", base, suffix));
+    }
+
+    None
 }
 
 /// Normalise a `pg_catalog.format_type` output to the same canonical form that
@@ -325,6 +351,9 @@ fn normalize_pg_composite_field_type(s: &str) -> String {
     let t = s.trim().to_lowercase();
     if t == "timestamp without time zone" || t == "timestamp with time zone" {
         return "timestamp".to_string();
+    }
+    if let Some(vector) = normalize_pgvector_formatted_type(&t) {
+        return vector;
     }
     if let Some(rest) = t.strip_prefix("character varying") {
         return format!("varchar{}", rest.trim());
@@ -720,63 +749,34 @@ fn fk_auto_name(table: &str, columns: &[String]) -> String {
     format!("fk_{}_{}", table, columns.join("_"))
 }
 
-fn group_pg_indexes(rows: Vec<sqlx::postgres::PgRow>) -> Vec<LiveIndex> {
-    use sqlx::Row as _;
-
-    let mut ordered: Vec<(String, bool, String, Vec<String>)> = Vec::new();
-
-    for row in rows {
-        let index_name: String = row.try_get("index_name").unwrap_or_default();
-        let column_name: String = row.try_get("column_name").unwrap_or_default();
-        let is_unique: bool = row.try_get("is_unique").unwrap_or(false);
-        let index_method: String = row.try_get("index_method").unwrap_or_default();
-
-        if let Some(entry) = ordered.iter_mut().find(|(n, _, _, _)| n == &index_name) {
-            entry.3.push(column_name);
-        } else {
-            ordered.push((index_name, is_unique, index_method, vec![column_name]));
-        }
-    }
-
-    ordered
-        .into_iter()
-        .map(|(name, unique, method, cols)| LiveIndex {
-            name,
-            columns: cols,
-            unique,
-            method: Some(method),
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn pg_int4() {
-        assert_eq!(normalize_pg_type("int4", None, None, None), "integer");
+        assert_eq!(normalize_pg_type("int4", None, None, None, None), "integer");
     }
 
     #[test]
     fn pg_int8() {
-        assert_eq!(normalize_pg_type("int8", None, None, None), "bigint");
+        assert_eq!(normalize_pg_type("int8", None, None, None, None), "bigint");
     }
 
     #[test]
     fn pg_text() {
-        assert_eq!(normalize_pg_type("text", None, None, None), "text");
+        assert_eq!(normalize_pg_type("text", None, None, None, None), "text");
     }
 
     #[test]
     fn pg_bool() {
-        assert_eq!(normalize_pg_type("bool", None, None, None), "boolean");
+        assert_eq!(normalize_pg_type("bool", None, None, None, None), "boolean");
     }
 
     #[test]
     fn pg_float8() {
         assert_eq!(
-            normalize_pg_type("float8", None, None, None),
+            normalize_pg_type("float8", None, None, None, None),
             "double precision"
         );
     }
@@ -784,31 +784,49 @@ mod tests {
     #[test]
     fn pg_numeric_with_precision() {
         assert_eq!(
-            normalize_pg_type("numeric", Some(10), Some(2), None),
+            normalize_pg_type("numeric", Some(10), Some(2), None, None),
             "decimal(10, 2)"
         );
     }
 
     #[test]
     fn pg_numeric_without_precision() {
-        assert_eq!(normalize_pg_type("numeric", None, None, None), "decimal");
+        assert_eq!(
+            normalize_pg_type("numeric", None, None, None, None),
+            "decimal"
+        );
     }
 
     #[test]
     fn pg_array_type() {
-        assert_eq!(normalize_pg_type("_int4", None, None, None), "integer[]");
-        assert_eq!(normalize_pg_type("_text", None, None, None), "text[]");
+        assert_eq!(
+            normalize_pg_type("_int4", None, None, None, None),
+            "integer[]"
+        );
+        assert_eq!(normalize_pg_type("_text", None, None, None, None), "text[]");
     }
 
     #[test]
     fn pg_uuid() {
-        assert_eq!(normalize_pg_type("uuid", None, None, None), "uuid");
+        assert_eq!(normalize_pg_type("uuid", None, None, None, None), "uuid");
+    }
+
+    #[test]
+    fn pgvector_dimension_from_formatted_type() {
+        assert_eq!(
+            normalize_pg_type("vector", None, None, None, Some("vector(1536)")),
+            "vector(1536)"
+        );
+        assert_eq!(
+            normalize_pg_type("_vector", None, None, None, Some("vector(3)[]")),
+            "vector(3)[]"
+        );
     }
 
     #[test]
     fn pg_enum_passthrough() {
         assert_eq!(
-            normalize_pg_type("my_custom_enum", None, None, None),
+            normalize_pg_type("my_custom_enum", None, None, None, None),
             "my_custom_enum"
         );
     }
@@ -816,7 +834,7 @@ mod tests {
     #[test]
     fn pg_varchar_with_length() {
         assert_eq!(
-            normalize_pg_type("varchar", None, None, Some(30)),
+            normalize_pg_type("varchar", None, None, Some(30), None),
             "varchar(30)"
         );
     }
@@ -824,7 +842,7 @@ mod tests {
     #[test]
     fn pg_char_with_length() {
         assert_eq!(
-            normalize_pg_type("bpchar", None, None, Some(12)),
+            normalize_pg_type("bpchar", None, None, Some(12), None),
             "char(12)"
         );
     }

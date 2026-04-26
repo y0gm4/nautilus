@@ -621,7 +621,7 @@ fn is_interrupt_exit_status(status: &ExitStatus) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
-        return status.signal() == Some(2);
+        status.signal() == Some(2)
     }
 
     #[cfg(not(unix))]

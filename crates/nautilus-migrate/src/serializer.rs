@@ -5,11 +5,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::live::LiveIndexKind;
 use crate::{
     ddl::DatabaseProvider,
     live::{ComputedKind, LiveCompositeType, LiveForeignKey, LiveSchema, LiveTable},
 };
-use nautilus_schema::ir::IndexType;
+use nautilus_schema::ir::{BasicIndexType, PgvectorIndexOptions};
 use nautilus_schema::{
     bool_expr::{parse_bool_expr, BoolExpr, Operand},
     sql_expr::{parse_sql_expr, SqlExpr},
@@ -349,8 +350,20 @@ pub fn serialize_live_schema_with_options(
                 ));
             } else {
                 let mut args = Vec::new();
-                if let Some(index_type) = render_index_type(idx.method.as_deref()) {
-                    args.push(format!("type: {}", index_type));
+                match &idx.kind {
+                    LiveIndexKind::Unknown(_) => {}
+                    LiveIndexKind::Basic(b) => {
+                        if !matches!(b, BasicIndexType::BTree) {
+                            args.push(format!("type: {}", b.as_str()));
+                        }
+                    }
+                    LiveIndexKind::Pgvector(p) => {
+                        args.push(format!("type: {}", p.method.as_str()));
+                        if let Some(opclass) = p.opclass {
+                            args.push(format!("opclass: {}", opclass.as_str()));
+                        }
+                        push_pgvector_option_args(&mut args, &p.options);
+                    }
                 }
                 let default_name = default_index_name(table_name, &idx.columns);
                 if idx.name != default_name {
@@ -485,6 +498,10 @@ fn infer_nautilus_type(
         .or_else(|| parse_sized_type_length(&t, "character varying("))
     {
         return format!("VarChar({})", length);
+    }
+
+    if let Some(dimension) = parse_sized_type_length(&t, "vector(") {
+        return format!("Vector({})", dimension);
     }
 
     if let Some(length) =
@@ -1162,9 +1179,16 @@ fn render_referential_action(action: &str) -> String {
     }
 }
 
-fn render_index_type(method: Option<&str>) -> Option<&'static str> {
-    let index_type = method?.parse::<IndexType>().ok()?;
-    (index_type != IndexType::BTree).then(|| index_type.as_str())
+fn push_pgvector_option_args(args: &mut Vec<String>, options: &PgvectorIndexOptions) {
+    if let Some(value) = options.m {
+        args.push(format!("m: {}", value));
+    }
+    if let Some(value) = options.ef_construction {
+        args.push(format!("ef_construction: {}", value));
+    }
+    if let Some(value) = options.lists {
+        args.push(format!("lists: {}", value));
+    }
 }
 
 fn default_index_name(table_name: &str, columns: &[String]) -> String {
@@ -1362,6 +1386,10 @@ mod tests {
         assert_eq!(
             infer_nautilus_type("ltree", &no_enums, &no_composites),
             "Ltree"
+        );
+        assert_eq!(
+            infer_nautilus_type("vector(1536)", &no_enums, &no_composites),
+            "Vector(1536)"
         );
         assert_eq!(
             infer_nautilus_type("jsonb", &no_enums, &no_composites),

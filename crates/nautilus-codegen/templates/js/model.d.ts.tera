@@ -60,6 +60,20 @@ export interface HstoreFilter {
   isNull?: boolean;
 }
 
+export interface VectorFilter {
+  equals?: number[];
+  not?:    number[];
+  isNull?: boolean;
+}
+
+export type VectorMetric = 'l2' | 'innerProduct' | 'cosine';
+export type {{ model_name }}VectorFieldKeys = {% if has_vector_fields %}{% for name in vector_field_names %}'{{ name }}'{% if not loop.last %} | {% endif %}{% endfor %}{% else %}never{% endif %};
+export interface {{ model_name }}NearestInput {
+  field:  {{ model_name }}VectorFieldKeys;
+  query:  number[];
+  metric: VectorMetric;
+}
+
 export type SortOrder = 'asc' | 'desc';
 
 export interface {{ model_name }}Model {
@@ -73,7 +87,9 @@ export interface {{ model_name }}Model {
 
 export interface {{ model_name }}WhereInput {
 {%- for field in where_input_fields %}
-{%- if field.base_type == "string" %}
+{%- if field.is_vector %}
+  {{ field.name }}?: number[] | VectorFilter;
+{%- elif field.base_type == "string" %}
   {{ field.name }}?: string | StringFilter;
 {%- elif field.base_type == "number" %}
   {{ field.name }}?: number | NumberFilter;
@@ -203,6 +219,9 @@ export declare class {{ delegate_name }} {
   findMany(args?: {
     where?:    {{ model_name }}WhereInput;
     orderBy?:  {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
+{%- if has_vector_fields %}
+    nearest?:  {{ model_name }}NearestInput;
+{%- endif %}
     take?:     number;
     skip?:     number;
     select?:   {{ model_name }}SelectInput;
@@ -215,6 +234,9 @@ export declare class {{ delegate_name }} {
   findFirst(args?: {
     where?:   {{ model_name }}WhereInput;
     orderBy?: {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
+{%- if has_vector_fields %}
+    nearest?: {{ model_name }}NearestInput;
+{%- endif %}
     select?:  {{ model_name }}SelectInput;
     include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
   }): Promise<{{ model_name }}Model | null>;
@@ -234,6 +256,9 @@ export declare class {{ delegate_name }} {
   findFirstOrThrow(args?: {
     where?:   {{ model_name }}WhereInput;
     orderBy?: {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
+{%- if has_vector_fields %}
+    nearest?: {{ model_name }}NearestInput;
+{%- endif %}
     select?:  {{ model_name }}SelectInput;
     include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
   }): Promise<{{ model_name }}Model>;

@@ -175,6 +175,15 @@ pub(super) fn parse_field_operators(
     };
 
     for (op, value) in operators {
+        if is_vector_field(field_type)
+            && !matches!(op.as_str(), "eq" | "ne" | "not" | "isNull" | "isNotNull")
+        {
+            return Err(ProtocolError::InvalidFilter(format!(
+                "Operator '{}' is not supported for Vector fields; use equality/null filters or vector similarity search",
+                op
+            )));
+        }
+
         let condition = match op.as_str() {
             "eq" => {
                 let val = Expr::Param(convert(value)?);
@@ -284,6 +293,10 @@ pub(super) fn parse_field_operators(
     }
 
     combine_conditions(conditions, BinaryOp::And)
+}
+
+fn is_vector_field(field_type: Option<&ResolvedFieldType>) -> bool {
+    matches!(field_type, Some(ResolvedFieldType::Scalar(s)) if s.is_vector())
 }
 
 pub(super) fn parse_and_operator(

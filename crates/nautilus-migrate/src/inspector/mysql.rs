@@ -2,7 +2,8 @@ use super::{
     group_mysql_foreign_keys, normalize_mysql_check_expr, normalize_mysql_type, SchemaInspector,
 };
 use crate::error::{MigrationError, Result};
-use crate::live::{ComputedKind, LiveColumn, LiveIndex, LiveSchema, LiveTable};
+use crate::live::{ComputedKind, LiveColumn, LiveIndex, LiveIndexKind, LiveSchema, LiveTable};
+use nautilus_schema::ir::BasicIndexType;
 
 impl SchemaInspector {
     pub(super) async fn inspect_mysql(&self) -> Result<LiveSchema> {
@@ -138,14 +139,19 @@ impl SchemaInspector {
             let indexes: Vec<LiveIndex> = idx_order
                 .into_iter()
                 .filter_map(|name| {
-                    idx_map
-                        .remove(&name)
-                        .map(|(unique, method, columns)| LiveIndex {
+                    idx_map.remove(&name).map(|(unique, method, columns)| {
+                        let lower = method.to_lowercase();
+                        let kind = match lower.parse::<BasicIndexType>() {
+                            Ok(b) => LiveIndexKind::Basic(b),
+                            Err(_) => LiveIndexKind::Unknown(Some(lower)),
+                        };
+                        LiveIndex {
                             name,
                             columns,
                             unique,
-                            method: Some(method.to_lowercase()),
-                        })
+                            kind,
+                        }
+                    })
                 })
                 .collect();
 

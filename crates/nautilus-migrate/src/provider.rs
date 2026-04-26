@@ -1,13 +1,16 @@
 use crate::ddl::DatabaseProvider;
 use crate::error::{MigrationError, Result};
 use nautilus_schema::ast::StorageStrategy;
+use nautilus_schema::ir::{BasicIndexType, IndexKind};
+
+mod pgvector;
 
 pub(crate) struct CreateIndex<'a> {
     pub(crate) table: &'a str,
     pub(crate) name: &'a str,
     pub(crate) columns: &'a [String],
     pub(crate) unique: bool,
-    pub(crate) method: Option<&'a str>,
+    pub(crate) kind: &'a IndexKind,
     pub(crate) if_not_exists: bool,
 }
 
@@ -110,15 +113,31 @@ impl ProviderStrategy {
     pub(crate) fn create_index_sql(&self, index: CreateIndex<'_>) -> String {
         let q = |name: &str| self.provider.quote_identifier(name);
         let unique_kw = if index.unique { "UNIQUE " } else { "" };
+
+        let opclass_suffix = match index.kind {
+            IndexKind::Pgvector(p) => pgvector::opclass_suffix(p),
+            _ => None,
+        };
+
         let columns_sql = index
             .columns
             .iter()
-            .map(|column| q(column))
+            .enumerate()
+            .map(|(idx, column)| {
+                let mut rendered = q(column);
+                if idx == 0 {
+                    if let Some(suffix) = opclass_suffix {
+                        rendered.push(' ');
+                        rendered.push_str(suffix);
+                    }
+                }
+                rendered
+            })
             .collect::<Vec<_>>()
             .join(", ");
-        let method = index.method.map(|value| value.to_ascii_lowercase());
 
-        if self.provider == DatabaseProvider::Mysql && matches!(method.as_deref(), Some("fulltext"))
+        if self.provider == DatabaseProvider::Mysql
+            && matches!(index.kind, IndexKind::Basic(BasicIndexType::FullText))
         {
             return format!(
                 "CREATE FULLTEXT INDEX {} ON {} ({})",
@@ -128,12 +147,11 @@ impl ProviderStrategy {
             );
         }
 
-        let using_clause = match (self.provider, method.as_deref()) {
-            (_, None | Some("btree")) => String::new(),
-            (DatabaseProvider::Postgres, Some(method)) => {
-                format!(" USING {}", method.to_uppercase())
+        let using_clause = self.using_clause(index.kind);
+        let with_clause = match (self.provider, index.kind) {
+            (DatabaseProvider::Postgres, IndexKind::Pgvector(p)) => {
+                pgvector::with_clause(p.method, &p.options)
             }
-            (DatabaseProvider::Mysql, Some("hash")) => " USING HASH".to_string(),
             _ => String::new(),
         };
 
@@ -152,7 +170,7 @@ impl ProviderStrategy {
                     q(index.table),
                     using_clause,
                     columns_sql,
-                )
+                ) + &with_clause
             }
             DatabaseProvider::Mysql => format!(
                 "CREATE {}INDEX {} ON {} ({}){}",
@@ -162,6 +180,27 @@ impl ProviderStrategy {
                 columns_sql,
                 using_clause,
             ),
+        }
+    }
+
+    fn using_clause(&self, kind: &IndexKind) -> String {
+        match (self.provider, kind) {
+            // Default and BTree are emitted without an explicit USING clause
+            // (BTree is the default access method on every supported DBMS).
+            (_, IndexKind::Default) => String::new(),
+            (_, IndexKind::Basic(BasicIndexType::BTree)) => String::new(),
+            (DatabaseProvider::Postgres, IndexKind::Basic(b)) => {
+                format!(" USING {}", b.as_ddl_str().to_uppercase())
+            }
+            (DatabaseProvider::Postgres, IndexKind::Pgvector(p)) => {
+                format!(" USING {}", p.method.as_ddl_str().to_uppercase())
+            }
+            (DatabaseProvider::Mysql, IndexKind::Basic(BasicIndexType::Hash)) => {
+                " USING HASH".to_string()
+            }
+            // FullText on MySQL uses dedicated `CREATE FULLTEXT INDEX` syntax,
+            // handled by the caller.
+            _ => String::new(),
         }
     }
 
@@ -395,13 +434,14 @@ mod tests {
     fn postgres_hash_index_uses_if_not_exists_and_using_clause() {
         let strategy = ProviderStrategy::new(DatabaseProvider::Postgres);
         let columns = vec!["email".to_string()];
+        let kind = IndexKind::Basic(BasicIndexType::Hash);
 
         let sql = strategy.create_index_sql(CreateIndex {
             table: "User",
             name: "email_hash_idx",
             columns: &columns,
             unique: false,
-            method: Some("hash"),
+            kind: &kind,
             if_not_exists: true,
         });
 
@@ -415,13 +455,14 @@ mod tests {
     fn mysql_fulltext_index_uses_native_syntax() {
         let strategy = ProviderStrategy::new(DatabaseProvider::Mysql);
         let columns = vec!["body".to_string()];
+        let kind = IndexKind::Basic(BasicIndexType::FullText);
 
         let sql = strategy.create_index_sql(CreateIndex {
             table: "Post",
             name: "body_search",
             columns: &columns,
             unique: false,
-            method: Some("FullText"),
+            kind: &kind,
             if_not_exists: true,
         });
 

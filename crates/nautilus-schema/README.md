@@ -54,8 +54,9 @@ The field is PostgreSQL-only. Entries can be bare identifiers or string
 literals, are normalized to lowercase, and are deduplicated in the validated IR.
 Unknown names produce warnings rather than hard errors so custom extensions can
 still be managed. Extension-backed scalar types currently include `Citext`,
-`Hstore`, and `Ltree`; the validator warns when those types are used without the
-matching datasource extension. By default extension management is declarative:
+`Hstore`, `Ltree`, and pgvector's sized `Vector(dim)` (declared with
+`extensions = [vector]`); the validator warns when those types are used without
+the matching datasource extension. By default extension management is declarative:
 extra live extensions are diffed as destructive drops. Set
 `preserve_extensions = true` to keep live extensions that are managed outside
 Nautilus.

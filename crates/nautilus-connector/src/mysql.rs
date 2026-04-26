@@ -213,6 +213,9 @@ pub(crate) fn bind_value<'q>(
         Value::Hstore(_) => Err(Error::database_msg(
             "HSTORE values are only supported on PostgreSQL",
         )),
+        Value::Vector(_) => Err(Error::database_msg(
+            "VECTOR values are only supported on PostgreSQL",
+        )),
         Value::Bytes(b) => Ok(query.bind(b.as_slice())),
         Value::Json(j) => Ok(query.bind(j.to_string())),
         Value::Array(_) => Ok(query.bind(crate::utils::value_to_json(value).to_string())),

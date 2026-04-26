@@ -415,7 +415,7 @@ fn model_attr_hover_text(name: &str) -> String {
         "map"    => "**@@map(\"name\")** \nMaps this model to a different physical table name in the database.".to_string(),
         "id"     => "**@@id([fields])**  \nDefines a composite primary key spanning multiple fields.".to_string(),
         "unique" => "**@@unique([fields])**  \nDefines a composite unique constraint spanning multiple fields.".to_string(),
-        "index"  => "**@@index([fields], type?, name?, map?)**  \nCreates a database index on the listed fields.  \n\nOptional arguments:  \n- `type:` — index access method: `BTree` (default, all DBs), `Hash` (PG/MySQL), `Gin` / `Gist` / `Brin` (PostgreSQL only), `FullText` (MySQL only)  \n- `name:` — logical developer name (ignored in DDL)  \n- `map:` — physical DDL index name override  \n\n**Examples:**  \n```  \n@@index([email])  \n@@index([email], type: Hash)  \n@@index([content], type: Gin)  \n@@index([createdAt], type: Brin, map: \"idx_created\")  \n```".to_string(),
+        "index"  => "**@@index([fields], type?, opclass?, m?, ef_construction?, lists?, name?, map?)**  \nCreates a database index on the listed fields.  \n\nOptional arguments:  \n- `type:` — index access method: `BTree` (default, all DBs), `Hash` (PG/MySQL), `Gin` / `Gist` / `Brin` / `Hnsw` / `Ivfflat` (PostgreSQL only), `FullText` (MySQL only)  \n- `opclass:` — pgvector operator class for `Hnsw` / `Ivfflat`: `vector_l2_ops`, `vector_ip_ops`, `vector_cosine_ops`  \n- `m:` / `ef_construction:` — pgvector HNSW build parameters  \n- `lists:` — pgvector IVFFlat build parameter  \n- `name:` — logical developer name (ignored in DDL)  \n- `map:` — physical DDL index name override  \n\n**Examples:**  \n```  \n@@index([email])  \n@@index([email], type: Hash)  \n@@index([content], type: Gin)  \n@@index([embedding], type: Hnsw, opclass: vector_cosine_ops, m: 16, ef_construction: 64)  \n```".to_string(),
         "check"  => [
             "**@@check(expr)**  \n",
             "Adds a table-level SQL `CHECK` constraint.  \n\n",
@@ -607,6 +607,10 @@ fn model_hover_content(
             ModelAttribute::Index {
                 fields,
                 index_type,
+                opclass,
+                m,
+                ef_construction,
+                lists,
                 name,
                 map,
             } => {
@@ -614,6 +618,18 @@ fn model_hover_content(
                 let mut parts = vec![format!("[{}]", fs.join(", "))];
                 if let Some(t) = index_type {
                     parts.push(format!("type: {}", t.value));
+                }
+                if let Some(opclass) = opclass {
+                    parts.push(format!("opclass: {}", opclass.value));
+                }
+                if let Some(m) = m {
+                    parts.push(format!("m: {}", m));
+                }
+                if let Some(ef_construction) = ef_construction {
+                    parts.push(format!("ef_construction: {}", ef_construction));
+                }
+                if let Some(lists) = lists {
+                    parts.push(format!("lists: {}", lists));
                 }
                 if let Some(n) = name {
                     parts.push(format!("name: \"{}\"", n));
@@ -678,6 +694,7 @@ fn field_type_name(ft: &FieldType) -> String {
         FieldType::Citext => "Citext".to_string(),
         FieldType::Hstore => "Hstore".to_string(),
         FieldType::Ltree => "Ltree".to_string(),
+        FieldType::Vector { dimension } => format!("Vector({})", dimension),
         FieldType::Jsonb => "Jsonb".to_string(),
         FieldType::Xml => "Xml".to_string(),
         FieldType::Char { length } => format!("Char({})", length),
@@ -706,6 +723,9 @@ fn field_type_description(ft: &FieldType) -> &'static str {
         }
         FieldType::Ltree => {
             "Label tree path column (PostgreSQL only). Requires the `ltree` extension and maps to `LTREE`."
+        }
+        FieldType::Vector { .. } => {
+            "Dense embedding vector column (PostgreSQL only). Requires the `vector` extension and maps to `VECTOR(n)`."
         }
         FieldType::Jsonb => "JSONB document (PostgreSQL only).  Maps to `JSONB`.",
         FieldType::Xml => "XML document (PostgreSQL only).  Maps to `XML`.",

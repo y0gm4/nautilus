@@ -253,7 +253,7 @@ fn index_added_and_dropped() {
             table: "User".to_string(),
             columns: cols.clone(),
             unique: true,
-            index_type: None,
+            kind: nautilus_schema::ir::IndexKind::Default,
             index_name: None,
         })
         .unwrap();
@@ -395,7 +395,7 @@ fn index_added_with_custom_map_generates_correct_create() {
             table: "User".to_string(),
             columns: vec!["email".to_string()],
             unique: false,
-            index_type: None,
+            kind: nautilus_schema::ir::IndexKind::Default,
             index_name: Some("email_lookup".to_string()),
         })
         .unwrap();
@@ -407,7 +407,7 @@ fn index_added_with_custom_map_generates_correct_create() {
 
 #[test]
 fn index_added_with_hash_type_postgres() {
-    use nautilus_schema::ir::IndexType;
+    use nautilus_schema::ir::{BasicIndexType, IndexKind};
 
     let ir = common::parse("model User { id Int @id }").unwrap();
     let live = LiveSchema::default();
@@ -419,7 +419,7 @@ fn index_added_with_hash_type_postgres() {
             table: "User".to_string(),
             columns: vec!["email".to_string()],
             unique: false,
-            index_type: Some(IndexType::Hash),
+            kind: IndexKind::Basic(BasicIndexType::Hash),
             index_name: Some("email_hash_idx".to_string()),
         })
         .unwrap();
@@ -427,6 +427,41 @@ fn index_added_with_hash_type_postgres() {
     assert_eq!(stmts.len(), 1);
     assert!(stmts[0].contains("USING HASH"));
     assert!(stmts[0].contains("email_hash_idx"));
+}
+
+#[test]
+fn index_added_with_pgvector_hnsw_options_postgres() {
+    use nautilus_schema::ir::{
+        IndexKind, PgvectorIndex, PgvectorIndexOptions, PgvectorMethod, PgvectorOpClass,
+    };
+
+    let ir = common::parse("model User { id Int @id }").unwrap();
+    let live = LiveSchema::default();
+    let ddl = DdlGenerator::new(DatabaseProvider::Postgres);
+    let applier = DiffApplier::new(DatabaseProvider::Postgres, &ddl, &ir, &live);
+
+    let stmts = applier
+        .sql_for(&Change::IndexAdded {
+            table: "Embedding".to_string(),
+            columns: vec!["embedding".to_string()],
+            unique: false,
+            kind: IndexKind::Pgvector(PgvectorIndex {
+                method: PgvectorMethod::Hnsw,
+                opclass: Some(PgvectorOpClass::CosineOps),
+                options: PgvectorIndexOptions {
+                    m: Some(16),
+                    ef_construction: Some(64),
+                    lists: None,
+                },
+            }),
+            index_name: Some("embedding_hnsw_idx".to_string()),
+        })
+        .unwrap();
+
+    assert_eq!(stmts.len(), 1);
+    assert!(stmts[0].contains("USING HNSW"));
+    assert!(stmts[0].contains("(\"embedding\" vector_cosine_ops)"));
+    assert!(stmts[0].contains("WITH (m = 16, ef_construction = 64)"));
 }
 
 #[test]

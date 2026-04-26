@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::expr::RelationFilterOp;
-use crate::{BinaryOp, Error, Expr, FindManyArgs, IncludeRelation, OrderBy, OrderDir, Result};
+use crate::{
+    BinaryOp, Error, Expr, FindManyArgs, IncludeRelation, OrderBy, OrderDir, Result, VectorNearest,
+};
 
 /// Convert [`FindManyArgs`] into the same JSON payload shape used by thin clients.
 ///
@@ -70,6 +72,10 @@ pub fn find_many_args_to_protocol_json(args: &FindManyArgs) -> Result<JsonValue>
                     .collect(),
             ),
         );
+    }
+
+    if let Some(nearest) = &args.nearest {
+        result.insert("nearest".to_string(), nearest_to_json(nearest));
     }
 
     Ok(JsonValue::Object(result))
@@ -157,6 +163,29 @@ fn order_by_to_json(order: &OrderBy) -> Result<JsonValue> {
         }),
     );
     Ok(JsonValue::Object(result))
+}
+
+fn nearest_to_json(nearest: &VectorNearest) -> JsonValue {
+    let mut result = JsonMap::new();
+    result.insert(
+        "field".to_string(),
+        JsonValue::String(strip_column_qualifier(&nearest.field)),
+    );
+    result.insert(
+        "query".to_string(),
+        JsonValue::Array(
+            nearest
+                .query
+                .iter()
+                .map(|value| JsonValue::from(*value as f64))
+                .collect(),
+        ),
+    );
+    result.insert(
+        "metric".to_string(),
+        JsonValue::String(nearest.metric.as_str().to_string()),
+    );
+    JsonValue::Object(result)
 }
 
 fn expr_to_filter_json(expr: &Expr) -> Result<JsonValue> {
@@ -387,7 +416,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{Column, Value};
+    use crate::{Column, Value, VectorMetric, VectorNearest};
 
     #[test]
     fn find_many_args_serializes_supported_filters_and_includes() {
@@ -412,6 +441,11 @@ mod tests {
             select: HashMap::from([("id".to_string(), true), ("slug".to_string(), true)]),
             cursor: Some(HashMap::from([("id".to_string(), Value::I32(10))])),
             distinct: vec!["Entry__slug".to_string()],
+            nearest: Some(VectorNearest {
+                field: "Entry__embedding".to_string(),
+                query: vec![1.0, 2.0, 3.0],
+                metric: VectorMetric::Cosine,
+            }),
         };
 
         let json = find_many_args_to_protocol_json(&args).expect("serialization should succeed");
@@ -445,7 +479,12 @@ mod tests {
                 "cursor": {
                     "id": 10
                 },
-                "distinct": ["slug"]
+                "distinct": ["slug"],
+                "nearest": {
+                    "field": "embedding",
+                    "query": [1.0, 2.0, 3.0],
+                    "metric": "cosine"
+                }
             })
         );
     }

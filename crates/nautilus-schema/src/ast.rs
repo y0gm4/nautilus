@@ -387,6 +387,11 @@ pub enum FieldType {
     Hstore,
     /// Label tree path type (PostgreSQL + ltree extension).
     Ltree,
+    /// Dense embedding vector type (PostgreSQL + pgvector `vector` extension).
+    Vector {
+        /// Number of vector dimensions.
+        dimension: u32,
+    },
     /// JSONB type (PostgreSQL only).
     Jsonb,
     /// XML type (PostgreSQL only).
@@ -423,6 +428,7 @@ impl fmt::Display for FieldType {
             FieldType::Citext => write!(f, "Citext"),
             FieldType::Hstore => write!(f, "Hstore"),
             FieldType::Ltree => write!(f, "Ltree"),
+            FieldType::Vector { dimension } => write!(f, "Vector({})", dimension),
             FieldType::Jsonb => write!(f, "Jsonb"),
             FieldType::Xml => write!(f, "Xml"),
             FieldType::Char { length } => write!(f, "Char({})", length),
@@ -543,12 +549,20 @@ pub enum ModelAttribute {
     Id(Vec<Ident>),
     /// @@unique([field1, field2]) composite unique constraint.
     Unique(Vec<Ident>),
-    /// @@index([field1, field2], type: Hash, name: "idx_name", map: "db_idx") index.
+    /// @@index([field1, field2], type: Hash, opclass: vector_l2_ops, m: 16, ef_construction: 64, name: "idx_name", map: "db_idx") index.
     Index {
         /// Fields that form the index key.
         fields: Vec<Ident>,
         /// Optional index type (`type:` argument). `None` -> let the DBMS choose.
         index_type: Option<Ident>,
+        /// Optional pgvector operator class (`opclass:` argument).
+        opclass: Option<Ident>,
+        /// Optional pgvector HNSW parameter (`m:`).
+        m: Option<u32>,
+        /// Optional pgvector HNSW parameter (`ef_construction:`).
+        ef_construction: Option<u32>,
+        /// Optional pgvector IVFFlat parameter (`lists:`).
+        lists: Option<u32>,
         /// Optional logical name (`name:` argument).
         name: Option<String>,
         /// Optional physical DB name (`map:` argument).

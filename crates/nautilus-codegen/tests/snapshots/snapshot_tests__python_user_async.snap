@@ -225,6 +225,13 @@ class HstoreFilter(TypedDict, total=False):
     is_null: NotRequired[bool]
 
 
+class VectorFilter(TypedDict, total=False):
+    """Vector field filter operations."""
+    equals: NotRequired[List[float]]
+    not_: NotRequired[List[float]]
+    is_null: NotRequired[bool]
+
+
 class UserWhereInput(TypedDict, total=False):
     """Filter conditions for User queries."""
     
@@ -1085,4 +1092,5 @@ __all__ = [
     "BoolFilter",
     "JsonFilter",
     "HstoreFilter",
+    "VectorFilter",
 ]

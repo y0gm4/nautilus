@@ -121,6 +121,32 @@ impl FromValue for f64 {
     }
 }
 
+impl FromValue for f32 {
+    fn from_value(value: &Value) -> Result<Self> {
+        let value = match value {
+            Value::F64(v) if v.is_finite() => *v,
+            Value::I32(v) => *v as f64,
+            Value::I64(v) => *v as f64,
+            Value::Null => return Err(crate::Error::TypeError("NULL value for f32".to_string())),
+            _ => {
+                return Err(crate::Error::TypeError(format!(
+                    "expected f32-compatible number, got {:?}",
+                    value
+                )));
+            }
+        };
+
+        if value < f32::MIN as f64 || value > f32::MAX as f64 {
+            return Err(crate::Error::TypeError(format!(
+                "number {} does not fit in f32",
+                value
+            )));
+        }
+
+        Ok(value as f32)
+    }
+}
+
 impl FromValue for rust_decimal::Decimal {
     fn from_value(value: &Value) -> Result<Self> {
         match value {
@@ -242,6 +268,30 @@ impl FromValue for Vec<u8> {
                 "expected Bytes, got {:?}",
                 other
             ))),
+        }
+    }
+}
+
+impl FromValue for Vec<f32> {
+    fn from_value(value: &Value) -> Result<Self> {
+        match value {
+            Value::Vector(values) => Ok(values.clone()),
+            Value::Array(items) => items.iter().map(f32::from_value).collect(),
+            Value::Json(json_value) => decode_json_array(json_value, f32::from_value),
+            Value::Null => Err(crate::Error::TypeError(
+                "NULL value for Vec<f32>".to_string(),
+            )),
+            _ => Err(crate::Error::TypeError(format!(
+                "expected Vector, Array, or Json for Vec<f32>, got {:?}",
+                value
+            ))),
+        }
+    }
+
+    fn from_value_owned(value: Value) -> Result<Self> {
+        match value {
+            Value::Vector(values) => Ok(values),
+            other => Self::from_value(&other),
         }
     }
 }
@@ -482,5 +532,17 @@ mod tests {
         assert_eq!(decoded[0]["display_name"], Some("Bob".to_string()));
         assert_eq!(decoded[0]["nickname"], None);
         assert_eq!(decoded[1]["nickname"], Some("oai".to_string()));
+    }
+
+    #[test]
+    fn vector_decodes_from_native_and_json_values() {
+        let native = Value::Vector(vec![0.1, 0.2, 0.3]);
+        let json = Value::Json(serde_json::json!([0.1, 0.2, 0.3]));
+
+        assert_eq!(
+            Vec::<f32>::from_value(&native).unwrap(),
+            vec![0.1, 0.2, 0.3]
+        );
+        assert_eq!(Vec::<f32>::from_value(&json).unwrap(), vec![0.1, 0.2, 0.3]);
     }
 }

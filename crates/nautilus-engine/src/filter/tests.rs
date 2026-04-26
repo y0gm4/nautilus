@@ -1,5 +1,5 @@
 use super::*;
-use nautilus_core::{BinaryOp, Expr, OrderDir, Value};
+use nautilus_core::{BinaryOp, Expr, OrderDir, Value, VectorMetric};
 use nautilus_schema::validate_schema_source;
 use serde_json::json;
 
@@ -57,6 +57,150 @@ fn select_contains_column(select: &nautilus_core::Select, expected: &str) -> boo
         .filter
         .as_ref()
         .is_some_and(|filter| expr_contains_column(filter, expected))
+}
+
+#[test]
+fn vector_fields_reject_classic_order_by() {
+    let (relations, field_types, models) = user_query_context(
+        r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [vector]
+}
+
+model User {
+  id        Int @id
+  embedding Vector(3)
+}
+"#,
+    );
+    let args = json!({ "orderBy": [{ "embedding": "asc" }] });
+
+    let err =
+        match QueryArgs::parse_with_context(Some(args), &relations, &field_types, Some(&models)) {
+            Ok(_) => panic!("expected Vector orderBy to be rejected"),
+            Err(err) => err,
+        };
+    assert!(err
+        .to_string()
+        .contains("cannot be used with classic orderBy"));
+}
+
+#[test]
+fn vector_fields_reject_range_filters() {
+    let (_, field_types, _) = user_query_context(
+        r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [vector]
+}
+
+model User {
+  id        Int @id
+  embedding Vector(3)
+}
+"#,
+    );
+    let filter = json!({ "embedding": { "gt": [0.1, 0.2, 0.3] } });
+
+    let err = parse_where_filter(&filter, &RelationMap::new(), &field_types, None).unwrap_err();
+    assert!(err.to_string().contains("not supported for Vector"));
+}
+
+#[test]
+fn vector_nearest_query_parses_with_metric_and_take() {
+    let (relations, field_types, models) = user_query_context(
+        r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [vector]
+}
+
+model User {
+  id        Int @id
+  embedding Vector(3)
+}
+"#,
+    );
+    let args = json!({
+        "nearest": {
+            "field": "embedding",
+            "query": [0.1, 0.2, 0.3],
+            "metric": "cosine"
+        },
+        "take": 5
+    });
+
+    let parsed = QueryArgs::parse_with_context(Some(args), &relations, &field_types, Some(&models))
+        .expect("nearest query should parse");
+
+    let nearest = parsed.nearest.expect("nearest query missing");
+    assert_eq!(nearest.field, "embedding");
+    assert_eq!(nearest.metric, VectorMetric::Cosine);
+    assert_eq!(nearest.query, vec![0.1, 0.2, 0.3]);
+    assert_eq!(parsed.take, Some(5));
+}
+
+#[test]
+fn vector_nearest_query_requires_positive_take() {
+    let (relations, field_types, models) = user_query_context(
+        r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [vector]
+}
+
+model User {
+  id        Int @id
+  embedding Vector(3)
+}
+"#,
+    );
+    let args = json!({
+        "nearest": {
+            "field": "embedding",
+            "query": [0.1, 0.2, 0.3],
+            "metric": "l2"
+        }
+    });
+
+    let err = QueryArgs::parse_with_context(Some(args), &relations, &field_types, Some(&models))
+        .expect_err("nearest without take should fail");
+    assert!(err.to_string().contains("requires a positive 'take'"));
+}
+
+#[test]
+fn vector_nearest_query_requires_vector_field() {
+    let (relations, field_types, models) = user_query_context(
+        r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [vector]
+}
+
+model User {
+  id    Int    @id
+  email String
+}
+"#,
+    );
+    let args = json!({
+        "nearest": {
+            "field": "email",
+            "query": [0.1, 0.2, 0.3],
+            "metric": "cosine"
+        },
+        "take": 3
+    });
+
+    let err = QueryArgs::parse_with_context(Some(args), &relations, &field_types, Some(&models))
+        .expect_err("nearest on non-vector field should fail");
+    assert!(err.to_string().contains("must reference a Vector field"));
 }
 
 fn expr_contains_enum(expr: &Expr, expected_value: &str, expected_type: &str) -> bool {

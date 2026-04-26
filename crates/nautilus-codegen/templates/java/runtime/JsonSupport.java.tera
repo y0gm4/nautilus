@@ -155,6 +155,13 @@ public final class JsonSupport {
         return node.isNumber() ? node.doubleValue() : Double.valueOf(node.asText());
     }
 
+    public static Float asFloat(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return node.isNumber() ? node.floatValue() : Float.valueOf(node.asText());
+    }
+
     public static BigDecimal asBigDecimal(JsonNode node) {
         if (node == null || node.isNull()) {
             return null;
@@ -207,6 +214,10 @@ public final class JsonSupport {
             values.put(entry.getKey(), value == null || value.isNull() ? null : value.asText());
         });
         return values;
+    }
+
+    public static List<Float> asFloatList(JsonNode node) {
+        return asList(node, JsonSupport::asFloat);
     }
 
     public static <E extends Enum<E>> E asEnum(JsonNode node, Class<E> enumType) {

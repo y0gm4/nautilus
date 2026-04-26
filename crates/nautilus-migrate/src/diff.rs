@@ -2,12 +2,12 @@
 //! [`SchemaIr`] and returns a list of [`Change`]s that need to be applied.
 
 use nautilus_schema::ir::{
-    FieldIr, IndexType, ModelIr, PostgresExtensionIr, ResolvedFieldType, SchemaIr,
+    BasicIndexType, FieldIr, IndexKind, ModelIr, PostgresExtensionIr, ResolvedFieldType, SchemaIr,
 };
 use nautilus_schema::{Lexer, Span, TokenKind};
 
 use crate::ddl::{DatabaseProvider, DdlGenerator};
-use crate::live::LiveSchema;
+use crate::live::{LiveIndex, LiveIndexKind, LiveSchema};
 
 /// A single schema change between the live database and the target schema.
 #[derive(Debug, Clone)]
@@ -91,8 +91,8 @@ pub enum Change {
         columns: Vec<String>,
         /// Whether the index enforces uniqueness.
         unique: bool,
-        /// Optional index type (BTree, Hash, Gin, ...). `None` - DBMS default.
-        index_type: Option<IndexType>,
+        /// Access method + extension payload (BTree, pgvector HNSW, ...).
+        kind: IndexKind,
         /// Optional DDL name override (from `@@index(map: "...")` or `name:`).
         index_name: Option<String>,
     },
@@ -820,7 +820,7 @@ impl SchemaDiff {
             struct TargetIdx {
                 sorted_cols: Vec<String>,
                 unique: bool,
-                index_type: Option<IndexType>,
+                kind: IndexKind,
                 effective_name: String,
                 name_must_match: bool,
             }
@@ -847,7 +847,7 @@ impl SchemaDiff {
                     idxs.push(TargetIdx {
                         sorted_cols: cols,
                         unique: false,
-                        index_type: idx.index_type,
+                        kind: idx.kind.clone(),
                         effective_name: ddl_name,
                         name_must_match: idx.map.is_some(),
                     });
@@ -869,7 +869,7 @@ impl SchemaDiff {
                     idxs.push(TargetIdx {
                         sorted_cols: cols,
                         unique: true,
-                        index_type: None,
+                        kind: IndexKind::Default,
                         effective_name: ddl_name,
                         name_must_match: false,
                     });
@@ -878,47 +878,39 @@ impl SchemaDiff {
                 idxs
             };
 
-            struct LiveIdxNorm {
+            struct LiveIdxNorm<'a> {
                 sorted_cols: Vec<String>,
                 unique: bool,
-                method: Option<IndexType>,
-                name: String,
+                live: &'a LiveIndex,
             }
 
-            let live_indexes: Vec<LiveIdxNorm> = live_table
+            let live_indexes: Vec<LiveIdxNorm<'_>> = live_table
                 .indexes
                 .iter()
                 .map(|i| {
                     let mut cols = i.columns.clone();
                     cols.sort();
-                    let method = i
-                        .method
-                        .as_deref()
-                        .and_then(|m| m.parse::<IndexType>().ok());
                     LiveIdxNorm {
                         sorted_cols: cols,
                         unique: i.unique,
-                        method,
-                        name: i.name.clone(),
+                        live: i,
                     }
                 })
                 .collect();
-
-            let eff_method = |m: Option<IndexType>| m.unwrap_or(IndexType::BTree);
 
             for ti in &target_indexes {
                 let found = live_indexes.iter().any(|li| {
                     li.sorted_cols == ti.sorted_cols
                         && li.unique == ti.unique
-                        && (!ti.name_must_match || li.name == ti.effective_name)
-                        && eff_method(li.method) == eff_method(ti.index_type)
+                        && (!ti.name_must_match || li.live.name == ti.effective_name)
+                        && index_kinds_match(&ti.kind, &li.live.kind)
                 });
                 if !found {
                     changes.push(Change::IndexAdded {
                         table: table_name.clone(),
                         columns: ti.sorted_cols.clone(),
                         unique: ti.unique,
-                        index_type: ti.index_type,
+                        kind: ti.kind.clone(),
                         index_name: Some(ti.effective_name.clone()),
                     });
                 }
@@ -928,15 +920,15 @@ impl SchemaDiff {
                 let found = target_indexes.iter().any(|ti| {
                     li.sorted_cols == ti.sorted_cols
                         && li.unique == ti.unique
-                        && (!ti.name_must_match || li.name == ti.effective_name)
-                        && eff_method(li.method) == eff_method(ti.index_type)
+                        && (!ti.name_must_match || li.live.name == ti.effective_name)
+                        && index_kinds_match(&ti.kind, &li.live.kind)
                 });
                 if !found {
                     changes.push(Change::IndexDropped {
                         table: table_name.clone(),
                         columns: li.sorted_cols.clone(),
                         unique: li.unique,
-                        index_name: li.name.clone(),
+                        index_name: li.live.name.clone(),
                     });
                 }
             }
@@ -1520,6 +1512,25 @@ pub(crate) fn topo_sort_models<'a>(models: &[&'a ModelIr]) -> Vec<&'a ModelIr> {
     }
 
     result
+}
+
+/// Returns `true` when a target [`IndexKind`] and an inspected [`LiveIndexKind`]
+/// describe the same access method.
+///
+/// The interesting subtlety is that a target schema with no `type:` argument
+/// (`IndexKind::Default`) must compare equal to a live BTree index — which
+/// the database reports either as `LiveIndexKind::Basic(BTree)` (Postgres,
+/// MySQL) or `LiveIndexKind::Unknown(None)` (SQLite, which does not expose
+/// access methods at all).
+fn index_kinds_match(target: &IndexKind, live: &LiveIndexKind) -> bool {
+    match (target, live) {
+        (IndexKind::Default, LiveIndexKind::Unknown(None)) => true,
+        (IndexKind::Default, LiveIndexKind::Basic(BasicIndexType::BTree)) => true,
+        (IndexKind::Basic(BasicIndexType::BTree), LiveIndexKind::Unknown(None)) => true,
+        (IndexKind::Basic(t), LiveIndexKind::Basic(l)) => t == l,
+        (IndexKind::Pgvector(t), LiveIndexKind::Pgvector(l)) => t == l,
+        _ => false,
+    }
 }
 
 #[cfg(test)]

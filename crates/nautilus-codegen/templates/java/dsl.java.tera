@@ -140,6 +140,47 @@ public final class {{ name }} {
 {{ m::serializable_tail() }}
     }
 
+{% if vector_field_names | length > 0 %}
+    public enum VectorMetric {
+        L2("l2"),
+        INNER_PRODUCT("innerProduct"),
+        COSINE("cosine");
+
+        private final String wireValue;
+
+        VectorMetric(String wireValue) {
+            this.wireValue = wireValue;
+        }
+
+        public String wireValue() {
+            return this.wireValue;
+        }
+    }
+
+    public static final class Nearest implements WireSerializable {
+        private final ObjectNode node = JsonSupport.object();
+
+{%- for name in vector_field_names %}
+        public Nearest {{ name }}() {
+            this.node.put("field", "{{ name }}");
+            return this;
+        }
+
+{%- endfor %}
+        public Nearest query(List<Float> value) {
+            this.node.set("query", JsonSupport.toJsonNode(value));
+            return this;
+        }
+
+        public Nearest metric(VectorMetric metric) {
+            this.node.put("metric", metric.wireValue());
+            return this;
+        }
+
+{{ m::serializable_tail() }}
+    }
+
+{% endif %}
     public static final class CreateInput implements WireSerializable {
         private final ObjectNode node;
 
@@ -203,6 +244,18 @@ public final class {{ name }} {
             this.node.set("orderBy", orderBy.node());
             return this;
         }
+
+{% if vector_field_names | length > 0 %}
+        public FindManyArgs nearest(Consumer<Nearest> spec) {
+            Nearest nearest = new Nearest();
+            if (spec != null) {
+                spec.accept(nearest);
+            }
+            this.node.set("nearest", nearest.node());
+            return this;
+        }
+
+{% endif %}
 
         public FindManyArgs take(int value) {
             this.node.put("take", value);

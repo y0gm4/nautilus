@@ -282,11 +282,12 @@ fn describe_change(change: &nautilus_migrate::Change) -> (&'static str, String, 
             table,
             columns,
             unique,
-            index_type,
+            kind,
             ..
         } => ("+", format!("{} ({})", table, columns.join(", ")), {
-            let type_str = index_type
-                .map(|t| format!(" {} ", t.as_str()))
+            let type_str = kind
+                .as_type_str()
+                .map(|t| format!(" {} ", t))
                 .unwrap_or_default();
             if *unique {
                 format!("ADD UNIQUE{}INDEX (safe)", type_str)

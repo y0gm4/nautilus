@@ -97,6 +97,9 @@ pub fn imports_for_scalar(scalar: &ScalarType) -> BTreeSet<String> {
         ScalarType::Uuid => {
             imports.insert("java.util.UUID".to_string());
         }
+        ScalarType::Vector { .. } => {
+            imports.insert("java.util.List".to_string());
+        }
         _ => {}
     }
     imports
@@ -145,6 +148,7 @@ pub fn is_orderable_field(field: &FieldIr) -> bool {
             | ResolvedFieldType::Scalar(ScalarType::Json)
             | ResolvedFieldType::Scalar(ScalarType::Jsonb)
             | ResolvedFieldType::Scalar(ScalarType::Hstore)
+            | ResolvedFieldType::Scalar(ScalarType::Vector { .. })
             | ResolvedFieldType::Scalar(ScalarType::Bytes)
     )
 }

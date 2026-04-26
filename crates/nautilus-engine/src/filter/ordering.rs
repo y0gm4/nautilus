@@ -1,7 +1,10 @@
 use super::where_filter::{combine_conditions, parse_field_operators};
 use super::*;
 
-pub(super) fn parse_order_by(order_value: &JsonValue) -> Result<Vec<OrderBy>, ProtocolError> {
+pub(super) fn parse_order_by(
+    order_value: &JsonValue,
+    field_types: Option<&FieldTypeMap>,
+) -> Result<Vec<OrderBy>, ProtocolError> {
     let order_array = order_value
         .as_array()
         .ok_or_else(|| ProtocolError::InvalidFilter("orderBy must be an array".to_string()))?;
@@ -28,6 +31,21 @@ pub(super) fn parse_order_by(order_value: &JsonValue) -> Result<Vec<OrderBy>, Pr
                     )));
                 }
             };
+
+            if field_types
+                .and_then(|types| types.get(field))
+                .is_some_and(|field_type| {
+                    matches!(
+                        field_type,
+                        ResolvedFieldType::Scalar(ScalarType::Vector { .. })
+                    )
+                })
+            {
+                return Err(ProtocolError::InvalidFilter(format!(
+                    "Vector field '{}' cannot be used with classic orderBy; use a vector similarity search API instead",
+                    field
+                )));
+            }
 
             result.push(OrderBy {
                 column: field.clone(),

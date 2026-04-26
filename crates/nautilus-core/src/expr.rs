@@ -3,6 +3,13 @@
 use crate::select::Select;
 use crate::value::Value;
 
+/// Internal expression function marker rendered as pgvector `<->`.
+pub const VECTOR_L2_DISTANCE_FUNCTION: &str = "__nautilus_vector_l2_distance";
+/// Internal expression function marker rendered as pgvector `<#>`.
+pub const VECTOR_INNER_PRODUCT_FUNCTION: &str = "__nautilus_vector_inner_product";
+/// Internal expression function marker rendered as pgvector `<=>`.
+pub const VECTOR_COSINE_DISTANCE_FUNCTION: &str = "__nautilus_vector_cosine_distance";
+
 /// Relation filter operator used by generated relation helpers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelationFilterOp {
@@ -266,6 +273,16 @@ impl Expr {
             name: name.into(),
             args,
         }
+    }
+
+    /// Creates an internal vector-distance expression for pgvector ordering.
+    pub fn vector_distance(metric: crate::args::VectorMetric, left: Expr, right: Expr) -> Self {
+        let function = match metric {
+            crate::args::VectorMetric::L2 => VECTOR_L2_DISTANCE_FUNCTION,
+            crate::args::VectorMetric::InnerProduct => VECTOR_INNER_PRODUCT_FUNCTION,
+            crate::args::VectorMetric::Cosine => VECTOR_COSINE_DISTANCE_FUNCTION,
+        };
+        Expr::function_call(function, vec![left, right])
     }
 
     /// Creates a json_agg() aggregate function.

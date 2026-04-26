@@ -248,6 +248,38 @@ model User {
 }
 
 #[test]
+fn test_ir_pgvector_index_options() {
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+model Embedding {
+  id        Int @id
+  embedding Vector(3)
+
+  @@index([embedding], type: Ivfflat, opclass: vector_l2_ops, lists: 100)
+}
+"#;
+    let ast = parse(source).unwrap();
+    let ir = validate_schema(ast).unwrap();
+
+    let model = ir.models.get("Embedding").unwrap();
+    let index = model.indexes.first().expect("index missing");
+    let pgvector = match &index.kind {
+        IndexKind::Pgvector(p) => p,
+        other => panic!("expected pgvector kind, got {:?}", other),
+    };
+    assert_eq!(pgvector.method, PgvectorMethod::Ivfflat);
+    assert_eq!(pgvector.opclass, Some(PgvectorOpClass::L2Ops));
+    assert_eq!(pgvector.options.lists, Some(100));
+    assert_eq!(pgvector.options.m, None);
+    assert_eq!(pgvector.options.ef_construction, None);
+}
+
+#[test]
 fn test_ir_field_modifiers() {
     let source = r#"
 model User {
@@ -417,6 +449,7 @@ model Data {
   title Citext
   tags Hstore
   path Ltree
+  embedding Vector(1536)
 }
 "#;
     let ast = parse(source).unwrap();
@@ -451,6 +484,7 @@ model Data {
     check_scalar("title", ScalarType::Citext);
     check_scalar("tags", ScalarType::Hstore);
     check_scalar("path", ScalarType::Ltree);
+    check_scalar("embedding", ScalarType::Vector { dimension: 1536 });
 }
 
 #[test]

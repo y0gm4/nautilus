@@ -1149,7 +1149,7 @@ fn test_generated_clients_exclude_non_orderable_fields_from_order_by() {
 datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
-  extensions = [hstore]
+  extensions = [hstore, vector]
 }
 
 generator client {
@@ -1167,6 +1167,7 @@ model User {
   active  Boolean
   meta    Hstore?
   payload Json?
+  embedding Vector(3)
 }
 "#,
     );
@@ -1181,6 +1182,7 @@ model User {
     assert!(!js_dts.contains("active?: SortOrder;"));
     assert!(!js_dts.contains("meta?: SortOrder;"));
     assert!(!js_dts.contains("payload?: SortOrder;"));
+    assert!(!js_dts.contains("embedding?: SortOrder;"));
 
     let py_models = generate_all_python_models(&ir, false, 1);
     let py_model = generated_python_file(&py_models, "user.py");
@@ -1188,6 +1190,7 @@ model User {
     assert!(!py_model.contains("active: NotRequired[Literal[\"asc\", \"desc\"]]"));
     assert!(!py_model.contains("meta: NotRequired[Literal[\"asc\", \"desc\"]]"));
     assert!(!py_model.contains("payload: NotRequired[Literal[\"asc\", \"desc\"]]"));
+    assert!(!py_model.contains("embedding: NotRequired[Literal[\"asc\", \"desc\"]]"));
 
     let java_files =
         generate_java_client(&ir, "schema.nautilus", false).expect("generate_java_client failed");
@@ -1196,6 +1199,7 @@ model User {
     assert!(!user_dsl.contains("public OrderBy active(SortOrder order)"));
     assert!(!user_dsl.contains("public OrderBy meta(SortOrder order)"));
     assert!(!user_dsl.contains("public OrderBy payload(SortOrder order)"));
+    assert!(!user_dsl.contains("public OrderBy embedding(SortOrder order)"));
 }
 
 #[test]
@@ -1236,6 +1240,71 @@ model User {
     assert!(py_model.contains("not_: NotRequired[HstoreValue]"));
     assert!(py_model.contains("is_null: NotRequired[bool]"));
     assert!(py_model.contains("meta: NotRequired[HstoreFilter]"));
+}
+
+#[test]
+fn test_generated_vector_filters_are_typed_in_js_and_python() {
+    let ir = validate(
+        r#"
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./db"
+  package     = "com.example.db"
+  group_id    = "com.example"
+  artifact_id = "db"
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  embedding Vector(3)
+}
+"#,
+    );
+
+    let (_, dts_models) = generate_all_js_models(&ir);
+    let js_dts = dts_models
+        .iter()
+        .find(|(name, _)| name == "user.d.ts")
+        .map(|(_, code)| code.as_str())
+        .expect("user declaration missing");
+    assert!(js_dts.contains("export interface VectorFilter {"));
+    assert!(js_dts.contains("equals?: number[];"));
+    assert!(js_dts.contains("not?:    number[];"));
+    assert!(js_dts.contains("isNull?: boolean;"));
+    assert!(js_dts.contains("embedding?: number[] | VectorFilter;"));
+    assert!(js_dts.contains("export type VectorMetric = 'l2' | 'innerProduct' | 'cosine';"));
+    assert!(js_dts.contains("export type UserVectorFieldKeys = 'embedding';"));
+    assert!(js_dts.contains("export interface UserNearestInput {"));
+    assert!(js_dts.contains("nearest?:  UserNearestInput;"));
+
+    let py_models = generate_all_python_models(&ir, false, 1);
+    let py_model = generated_python_file(&py_models, "user.py");
+    assert!(py_model.contains("class VectorFilter(TypedDict, total=False):"));
+    assert!(py_model.contains("equals: NotRequired[List[float]]"));
+    assert!(py_model.contains("not_: NotRequired[List[float]]"));
+    assert!(py_model.contains("is_null: NotRequired[bool]"));
+    assert!(py_model.contains("embedding: NotRequired[Union[List[float], VectorFilter]]"));
+    assert!(py_model.contains("VectorMetric = Literal[\"l2\", \"innerProduct\", \"cosine\"]"));
+    assert!(py_model.contains("UserVectorFieldKeys = Literal[\"embedding\"]"));
+    assert!(py_model.contains("class UserNearestInput(TypedDict):"));
+    assert!(py_model.contains("nearest: Optional[UserNearestInput] = None"));
+
+    let java_files =
+        generate_java_client(&ir, "schema.nautilus", false).expect("java client generation");
+    let java_dsl = java_files
+        .iter()
+        .find(|(name, _)| name.ends_with("/UserDsl.java"))
+        .map(|(_, code)| code.as_str())
+        .expect("UserDsl.java missing");
+    assert!(java_dsl.contains("public enum VectorMetric {"));
+    assert!(java_dsl.contains("public Nearest embedding() {"));
+    assert!(java_dsl.contains("public FindManyArgs nearest(Consumer<Nearest> spec) {"));
 }
 
 #[test]

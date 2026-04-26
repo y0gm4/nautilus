@@ -486,15 +486,38 @@ fn format_model_attr(attr: &ModelAttribute) -> String {
         ModelAttribute::Index {
             fields,
             index_type,
+            opclass,
+            m,
+            ef_construction,
+            lists,
             name,
             map,
         } => {
             let names: Vec<_> = fields.iter().map(|i| i.value.clone()).collect();
             let mut s = format!("@@index([{}])", names.join(", "));
-            if index_type.is_some() || name.is_some() || map.is_some() {
+            if index_type.is_some()
+                || opclass.is_some()
+                || m.is_some()
+                || ef_construction.is_some()
+                || lists.is_some()
+                || name.is_some()
+                || map.is_some()
+            {
                 s.pop();
                 if let Some(t) = index_type {
                     s.push_str(&format!(", type: {}", t.value));
+                }
+                if let Some(opclass) = opclass {
+                    s.push_str(&format!(", opclass: {}", opclass.value));
+                }
+                if let Some(m) = m {
+                    s.push_str(&format!(", m: {}", m));
+                }
+                if let Some(ef_construction) = ef_construction {
+                    s.push_str(&format!(", ef_construction: {}", ef_construction));
+                }
+                if let Some(lists) = lists {
+                    s.push_str(&format!(", lists: {}", lists));
                 }
                 if let Some(n) = name {
                     s.push_str(&format!(", name: \"{}\"", n));

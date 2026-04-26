@@ -6,6 +6,7 @@
 mod composites;
 mod declarations;
 mod defaults;
+mod index;
 mod ir_builder;
 mod models;
 mod names;
@@ -41,6 +42,7 @@ pub(crate) const KNOWN_POSTGRES_EXTENSIONS: &[&str] = &[
     "pg_trgm",
     "unaccent",
     "uuid-ossp",
+    "vector",
 ];
 const KNOWN_GENERATOR_FIELDS: &[&str] = &["provider", "output", "interface"];
 const PYTHON_ONLY_GENERATOR_FIELDS: &[&str] = &["recursive_type_depth"];

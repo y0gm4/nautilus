@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value as JsonValue;
 
-use nautilus_core::{BinaryOp, Expr, OrderBy, OrderDir, Select, Value};
+use nautilus_core::{BinaryOp, Expr, OrderBy, OrderDir, Select, Value, VectorMetric};
 use nautilus_protocol::ProtocolError;
-use nautilus_schema::ir::{ModelIr, ResolvedFieldType};
+use nautilus_schema::ir::{ModelIr, ResolvedFieldType, ScalarType};
 
 mod context;
 mod include;
@@ -61,7 +61,19 @@ pub struct IncludeNode {
     pub order_by: Vec<OrderBy>,
 }
 
+/// pgvector nearest-neighbor search specification parsed from query args.
+#[derive(Debug, Clone)]
+pub struct VectorNearestQuery {
+    /// Logical field name of the vector field.
+    pub field: String,
+    /// Query embedding.
+    pub query: Vec<f32>,
+    /// Distance metric used for ordering.
+    pub metric: VectorMetric,
+}
+
 /// Parse query arguments from JSON into query components.
+#[derive(Debug)]
 pub struct QueryArgs {
     pub filter: Option<Expr>,
     pub order_by: Vec<OrderBy>,
@@ -79,6 +91,8 @@ pub struct QueryArgs {
     pub backward: bool,
     /// Columns to deduplicate on (maps to SELECT DISTINCT / DISTINCT ON).
     pub distinct: Vec<String>,
+    /// Optional pgvector nearest-neighbor ordering.
+    pub nearest: Option<VectorNearestQuery>,
 }
 
 impl QueryArgs {
@@ -134,6 +148,7 @@ impl QueryArgs {
                     cursor: None,
                     backward: false,
                     distinct: vec![],
+                    nearest: None,
                 });
             }
         };
@@ -150,7 +165,7 @@ impl QueryArgs {
         };
 
         let order_by = if let Some(order_value) = args.get("orderBy") {
-            parse_order_by(order_value)?
+            parse_order_by(order_value, Some(field_types))?
         } else {
             vec![]
         };
@@ -224,6 +239,35 @@ impl QueryArgs {
             vec![]
         };
 
+        let nearest = if let Some(nearest_value) = args.get("nearest") {
+            Some(parse_nearest_query(nearest_value, field_types)?)
+        } else {
+            None
+        };
+
+        if nearest.is_some() {
+            if !matches!(take, Some(value) if value > 0) {
+                return Err(ProtocolError::InvalidParams(
+                    "'nearest' requires a positive 'take' limit".to_string(),
+                ));
+            }
+            if backward {
+                return Err(ProtocolError::InvalidParams(
+                    "'nearest' does not support backward pagination".to_string(),
+                ));
+            }
+            if cursor.is_some() {
+                return Err(ProtocolError::InvalidParams(
+                    "'nearest' cannot be combined with 'cursor'".to_string(),
+                ));
+            }
+            if !distinct.is_empty() {
+                return Err(ProtocolError::InvalidParams(
+                    "'nearest' cannot be combined with 'distinct'".to_string(),
+                ));
+            }
+        }
+
         Ok(QueryArgs {
             filter,
             order_by,
@@ -234,6 +278,73 @@ impl QueryArgs {
             cursor,
             backward,
             distinct,
+            nearest,
         })
     }
+}
+
+fn parse_nearest_query(
+    value: &JsonValue,
+    field_types: &FieldTypeMap,
+) -> Result<VectorNearestQuery, ProtocolError> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| ProtocolError::InvalidParams("'nearest' must be an object".to_string()))?;
+
+    let field = obj
+        .get("field")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| {
+            ProtocolError::InvalidParams("'nearest.field' must be a string".to_string())
+        })?
+        .to_string();
+
+    let field_type = field_types.get(&field).ok_or_else(|| {
+        ProtocolError::InvalidParams(format!(
+            "'nearest.field' references unknown field '{}'",
+            field
+        ))
+    })?;
+
+    let ResolvedFieldType::Scalar(ScalarType::Vector { .. }) = field_type else {
+        return Err(ProtocolError::InvalidParams(format!(
+            "'nearest.field' must reference a Vector field, got '{}'",
+            field
+        )));
+    };
+
+    let query_json = obj
+        .get("query")
+        .ok_or_else(|| ProtocolError::InvalidParams("'nearest.query' is required".to_string()))?;
+    let query = match json_to_value_field(query_json, field_type)? {
+        Value::Vector(values) => values,
+        _ => {
+            return Err(ProtocolError::InvalidParams(
+                "'nearest.query' must be a vector".to_string(),
+            ));
+        }
+    };
+
+    let metric = match obj.get("metric").and_then(JsonValue::as_str) {
+        Some("l2") => VectorMetric::L2,
+        Some("innerProduct") => VectorMetric::InnerProduct,
+        Some("cosine") => VectorMetric::Cosine,
+        Some(other) => {
+            return Err(ProtocolError::InvalidParams(format!(
+                "Unsupported nearest metric '{}'; expected one of: l2, innerProduct, cosine",
+                other
+            )));
+        }
+        None => {
+            return Err(ProtocolError::InvalidParams(
+                "'nearest.metric' is required".to_string(),
+            ));
+        }
+    };
+
+    Ok(VectorNearestQuery {
+        field,
+        query,
+        metric,
+    })
 }

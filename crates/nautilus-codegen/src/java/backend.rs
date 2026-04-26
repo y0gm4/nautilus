@@ -17,6 +17,7 @@ impl LanguageBackend for JavaBackend {
             | ScalarType::Char { .. }
             | ScalarType::VarChar { .. } => "String",
             ScalarType::Hstore => "JsonSupport.Hstore",
+            ScalarType::Vector { .. } => "List<Float>",
             ScalarType::Boolean => "Boolean",
             ScalarType::Int => "Integer",
             ScalarType::BigInt => "Long",

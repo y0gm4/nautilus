@@ -99,6 +99,48 @@ model Post {
 }
 
 #[test]
+fn test_parse_pgvector_index_options() {
+    let source = r#"
+model Embedding {
+  id        Int @id
+  embedding Vector(3)
+
+  @@index([embedding], type: Hnsw, opclass: vector_cosine_ops, m: 16, ef_construction: 64)
+}
+"#;
+
+    let schema = parse(source).unwrap();
+    let model = schema.models().next().unwrap();
+
+    match &model.attributes[0] {
+        ModelAttribute::Index {
+            fields,
+            index_type,
+            opclass,
+            m,
+            ef_construction,
+            lists,
+            ..
+        } => {
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].value, "embedding");
+            assert_eq!(
+                index_type.as_ref().map(|value| value.value.as_str()),
+                Some("Hnsw")
+            );
+            assert_eq!(
+                opclass.as_ref().map(|value| value.value.as_str()),
+                Some("vector_cosine_ops")
+            );
+            assert_eq!(*m, Some(16));
+            assert_eq!(*ef_construction, Some(64));
+            assert_eq!(*lists, None);
+        }
+        _ => panic!("Expected @@index attribute"),
+    }
+}
+
+#[test]
 fn test_parse_all_scalar_types() {
     let source = r#"
 model AllTypes {
@@ -115,12 +157,13 @@ model AllTypes {
   citext   Citext
   hstore   Hstore
   ltree    Ltree
+  vector   Vector(1536)
 }
 "#;
 
     let schema = parse(source).unwrap();
     let model = schema.models().next().unwrap();
-    assert_eq!(model.fields.len(), 13);
+    assert_eq!(model.fields.len(), 14);
 
     assert!(matches!(model.fields[0].field_type, FieldType::String));
     assert!(matches!(model.fields[1].field_type, FieldType::Boolean));
@@ -141,6 +184,10 @@ model AllTypes {
     assert!(matches!(model.fields[10].field_type, FieldType::Citext));
     assert!(matches!(model.fields[11].field_type, FieldType::Hstore));
     assert!(matches!(model.fields[12].field_type, FieldType::Ltree));
+    assert!(matches!(
+        model.fields[13].field_type,
+        FieldType::Vector { dimension: 1536 }
+    ));
 }
 
 #[test]

@@ -106,6 +106,9 @@ pub fn json_to_value_field(
     if let ResolvedFieldType::Scalar(ScalarType::Hstore) = field_type {
         return json_to_hstore_value(json);
     }
+    if let ResolvedFieldType::Scalar(ScalarType::Vector { dimension }) = field_type {
+        return json_to_vector_value(json, *dimension);
+    }
     json_to_value(json)
 }
 
@@ -289,6 +292,42 @@ fn json_object_to_hstore(
         decoded.insert(key.clone(), mapped);
     }
     Ok(decoded)
+}
+
+fn json_to_vector_value(json: &serde_json::Value, dimension: u32) -> Result<Value, ProtocolError> {
+    match json {
+        serde_json::Value::Null => Ok(Value::Null),
+        serde_json::Value::Array(items) => {
+            if items.len() != dimension as usize {
+                return Err(ProtocolError::InvalidParams(format!(
+                    "Vector value has {} dimensions but schema requires {}",
+                    items.len(),
+                    dimension
+                )));
+            }
+            let mut values = Vec::with_capacity(items.len());
+            for (idx, item) in items.iter().enumerate() {
+                let Some(value) = item.as_f64() else {
+                    return Err(ProtocolError::InvalidParams(format!(
+                        "Vector values must be arrays of finite numbers; element {} was {:?}",
+                        idx, item
+                    )));
+                };
+                if !value.is_finite() || value < f32::MIN as f64 || value > f32::MAX as f64 {
+                    return Err(ProtocolError::InvalidParams(format!(
+                        "Vector element {} is outside the finite f32 range: {}",
+                        idx, value
+                    )));
+                }
+                values.push(value as f32);
+            }
+            Ok(Value::Vector(values))
+        }
+        other => Err(ProtocolError::InvalidParams(format!(
+            "Vector values must be arrays of finite numbers, got {:?}",
+            other
+        ))),
+    }
 }
 
 fn normalize_value_with_hint(

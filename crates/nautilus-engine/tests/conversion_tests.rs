@@ -160,6 +160,26 @@ fn json_to_value_field_hstore_rejects_non_string_values() {
 }
 
 #[test]
+fn json_to_value_field_vector_array() {
+    let val = json_to_value_field(
+        &json!([0.1, 0.2, 0.3]),
+        &ResolvedFieldType::Scalar(ScalarType::Vector { dimension: 3 }),
+    )
+    .unwrap();
+    assert_eq!(val, Value::Vector(vec![0.1, 0.2, 0.3]));
+}
+
+#[test]
+fn json_to_value_field_vector_rejects_wrong_dimension() {
+    let err = json_to_value_field(
+        &json!([0.1, 0.2]),
+        &ResolvedFieldType::Scalar(ScalarType::Vector { dimension: 3 }),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("schema requires 3"));
+}
+
+#[test]
 fn rows_to_raw_json_empty() {
     let raw = rows_to_raw_json(&[]).unwrap();
     let parsed: Vec<serde_json::Value> = serde_json::from_str(raw.get()).unwrap();

@@ -367,6 +367,16 @@ fn test_python_hstore_maps_to_dict_of_optional_strings() {
 }
 
 #[test]
+fn test_vector_type_mappings() {
+    let scalar = ScalarType::Vector { dimension: 1536 };
+    let f = scalar_field(scalar, true, false);
+
+    assert_eq!(field_to_rust_type(&f), "Vec<f32>");
+    assert_eq!(scalar_to_python_type(&scalar), "List[float]");
+    assert_eq!(JavaBackend.scalar_to_type(&scalar), "List<Float>");
+}
+
+#[test]
 fn test_java_hstore_uses_json_support_runtime_type() {
     assert_eq!(
         JavaBackend.scalar_to_type(&ScalarType::Hstore),
@@ -514,6 +524,13 @@ fn test_filter_operators_for_citext_match_string_shape() {
 #[test]
 fn test_filter_operators_for_hstore_only_expose_not() {
     let ops = get_filter_operators_for_scalar(&ScalarType::Hstore);
+    let suffixes: Vec<&str> = ops.iter().map(|o| o.suffix.as_str()).collect();
+    assert_eq!(suffixes, vec!["not"]);
+}
+
+#[test]
+fn test_filter_operators_for_vector_only_expose_not() {
+    let ops = get_filter_operators_for_scalar(&ScalarType::Vector { dimension: 1536 });
     let suffixes: Vec<&str> = ops.iter().map(|o| o.suffix.as_str()).collect();
     assert_eq!(suffixes, vec!["not"]);
 }

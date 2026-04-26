@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use nautilus_schema::ir::{BasicIndexType, IndexKind, PgvectorIndex};
 pub use nautilus_schema::ComputedKind;
 
 /// A snapshot of the tables currently present in the live database.
@@ -127,7 +128,58 @@ pub struct LiveIndex {
     pub columns: Vec<String>,
     /// Whether the index enforces uniqueness.
     pub unique: bool,
-    /// Access method reported by the database (e.g. `"btree"`, `"hash"`, `"gin"`).
-    /// `None` when the provider does not expose this information (e.g. SQLite).
-    pub method: Option<String>,
+    /// Resolved access method + extension payload.
+    pub kind: LiveIndexKind,
+}
+
+/// Resolved access method for a live index.
+///
+/// Mirrors [`nautilus_schema::ir::IndexKind`] but admits an `Unknown(...)`
+/// arm for cases where the inspector cannot map the database-reported access
+/// method onto a known [`BasicIndexType`] (e.g. SQLite, which does not
+/// expose access methods, or a Postgres method we don't handle yet).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiveIndexKind {
+    /// The provider did not report a recognised access method.
+    /// The wrapped string carries the raw `am.amname` (when present) for
+    /// diagnostics and round-tripping.
+    Unknown(Option<String>),
+    /// A built-in access method (`btree`, `hash`, ...).
+    Basic(BasicIndexType),
+    /// A pgvector index. The payload contains the method, opclass, and
+    /// `WITH (...)` parameters parsed from the database.
+    Pgvector(PgvectorIndex),
+}
+
+impl LiveIndexKind {
+    /// Returns the raw access-method string the database reported, if any.
+    /// Used for stable diagnostics.
+    pub fn method_str(&self) -> Option<&str> {
+        match self {
+            LiveIndexKind::Unknown(s) => s.as_deref(),
+            LiveIndexKind::Basic(b) => Some(b.as_ddl_str()),
+            LiveIndexKind::Pgvector(p) => Some(p.method.as_ddl_str()),
+        }
+    }
+
+    /// Returns `Some(&PgvectorIndex)` when this is a pgvector index.
+    pub fn pgvector(&self) -> Option<&PgvectorIndex> {
+        match self {
+            LiveIndexKind::Pgvector(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Lossy conversion to a target-side [`IndexKind`].
+    ///
+    /// `Unknown(...)` collapses to [`IndexKind::Default`] because the
+    /// information needed to round-trip an unrecognised method (the raw
+    /// access-method string) is not part of the target IR vocabulary.
+    pub fn to_index_kind(&self) -> IndexKind {
+        match self {
+            LiveIndexKind::Unknown(_) => IndexKind::Default,
+            LiveIndexKind::Basic(b) => IndexKind::Basic(*b),
+            LiveIndexKind::Pgvector(p) => IndexKind::Pgvector(p.clone()),
+        }
+    }
 }

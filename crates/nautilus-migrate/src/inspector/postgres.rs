@@ -65,15 +65,21 @@ impl SchemaInspector {
             let col_rows = pg_query(
                 "SELECT column_name, \
                         udt_name, \
+                        pg_catalog.format_type(a.atttypid, a.atttypmod) AS formatted_type, \
                         is_nullable, \
                         column_default, \
                         character_maximum_length, \
                         numeric_precision, \
                         numeric_scale, \
                         generation_expression \
-                 FROM information_schema.columns \
-                 WHERE table_schema = $1 \
-                   AND table_name = $2 \
+                 FROM information_schema.columns c \
+                 JOIN pg_namespace n ON n.nspname = c.table_schema \
+                 JOIN pg_class cls ON cls.relnamespace = n.oid AND cls.relname = c.table_name \
+                 JOIN pg_attribute a ON a.attrelid = cls.oid AND a.attname = c.column_name \
+                 WHERE c.table_schema = $1 \
+                   AND c.table_name = $2 \
+                   AND a.attnum > 0 \
+                   AND NOT a.attisdropped \
                  ORDER BY ordinal_position",
             )
             .bind(&schema_name)
@@ -107,6 +113,11 @@ impl SchemaInspector {
                             "failed to read nullability for column \"{col_name}\" in table \"{table_name}\": {e}"
                         ))
                     })?;
+                let formatted_type: String = row.try_get("formatted_type").map_err(|e| {
+                    MigrationError::Database(format!(
+                        "failed to read formatted_type for column \"{col_name}\" in table \"{table_name}\": {e}"
+                    ))
+                })?;
                 let column_default: Option<String> = row
                     .try_get("column_default")
                     .map_err(|e| {
@@ -148,6 +159,7 @@ impl SchemaInspector {
                     numeric_precision,
                     numeric_scale,
                     character_maximum_length,
+                    Some(&formatted_type),
                 );
                 let nullable = is_nullable.eq_ignore_ascii_case("YES");
                 let default_value = column_default.map(|d| normalize_pg_default(&d));
@@ -198,25 +210,35 @@ impl SchemaInspector {
                     ))
                 })?;
 
+            // `ix.indkey` and `ix.indclass` are `int2vector`/`oidvector`; cast \
+            // to plain arrays so we can `unnest` them with ordinality and join \
+            // each indexed column to its operator class. We surface the opclass \
+            // name only for pgvector (`vector_*`) so the diff treats it as part \
+            // of the index identity for HNSW/IVFFlat indexes.
             let idx_rows = pg_query(
                 "SELECT \
                      idx.relname                                           AS index_name, \
                      attr.attname                                          AS column_name, \
                      ix.indisunique                                        AS is_unique, \
-                     am.amname                                             AS index_method \
+                     am.amname                                             AS index_method, \
+                     CASE WHEN op.opcname LIKE 'vector_%' THEN op.opcname END AS opclass, \
+                     idx.reloptions                                         AS index_options, \
+                     k.ord                                                  AS column_position \
                  FROM pg_class       tbl \
                  JOIN pg_namespace   ns   ON ns.oid            = tbl.relnamespace \
                  JOIN pg_index       ix   ON tbl.oid           = ix.indrelid \
                  JOIN pg_class       idx  ON idx.oid           = ix.indexrelid \
                  JOIN pg_am          am   ON am.oid            = idx.relam \
+                 JOIN unnest(ix.indkey::int[], ix.indclass::oid[]) \
+                      WITH ORDINALITY AS k(attnum, opclass_oid, ord) ON true \
                  JOIN pg_attribute   attr ON attr.attrelid      = tbl.oid \
-                                         AND attr.attnum        = ANY(ix.indkey) \
+                                         AND attr.attnum        = k.attnum \
+                 LEFT JOIN pg_opclass op  ON op.oid             = k.opclass_oid \
                  WHERE ns.nspname = $1 \
                    AND tbl.relname = $2 \
                    AND tbl.relkind = 'r' \
                    AND ix.indisprimary = false \
-                 ORDER BY idx.relname, \
-                          array_position(ix.indkey, attr.attnum)",
+                 ORDER BY idx.relname, k.ord",
             )
             .bind(&schema_name)
             .bind(&table_name)

@@ -93,6 +93,72 @@ model User {
 }
 
 #[test]
+fn test_generate_postgres_ddl_with_pgvector_type() {
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [vector]
+}
+
+model Embedding {
+  id     Int @id
+  vector Vector(1536)
+}
+"#;
+    let ir = common::parse(source).unwrap();
+
+    let generator = DdlGenerator::new(DatabaseProvider::Postgres);
+    let statements = generator.generate_create_tables(&ir).unwrap();
+    let table_stmt = statements
+        .iter()
+        .find(|sql| sql.contains("CREATE TABLE"))
+        .expect("missing create table statement");
+
+    assert!(
+        statements
+            .iter()
+            .any(|sql| sql == "CREATE EXTENSION IF NOT EXISTS \"vector\""),
+        "statements: {:?}",
+        statements
+    );
+    assert!(
+        table_stmt.contains("\"vector\" VECTOR(1536)"),
+        "sql: {}",
+        table_stmt
+    );
+}
+
+#[test]
+fn test_generate_postgres_ddl_with_pgvector_hnsw_index() {
+    let source = r#"
+datasource db {
+  provider   = "postgresql"
+  url        = "postgres://localhost/test"
+  extensions = [vector]
+}
+
+model Embedding {
+  id        Int @id
+  embedding Vector(3)
+
+  @@index([embedding], type: Hnsw, opclass: vector_cosine_ops, m: 16, ef_construction: 64)
+}
+"#;
+    let ir = common::parse(source).unwrap();
+
+    let generator = DdlGenerator::new(DatabaseProvider::Postgres);
+    let statements = generator.generate_create_tables(&ir).unwrap();
+    let index_stmt = statements
+        .iter()
+        .find(|sql| sql.contains("USING HNSW"))
+        .expect("missing create index statement");
+
+    assert!(index_stmt.contains("(\"embedding\" vector_cosine_ops)"));
+    assert!(index_stmt.contains("WITH (m = 16, ef_construction = 64)"));
+}
+
+#[test]
 fn test_generate_sqlite_ddl() {
     let source = r#"
 model Post {

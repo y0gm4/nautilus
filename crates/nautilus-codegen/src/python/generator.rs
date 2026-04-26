@@ -147,6 +147,7 @@ struct FilterOperatorContext {
 struct WhereInputFieldContext {
     name: String,
     python_type: String,
+    is_vector: bool,
     operators: Vec<FilterOperatorContext>,
 }
 
@@ -239,6 +240,7 @@ pub fn generate_python_model(
     let mut numeric_fields: Vec<AggregateFieldContext> = Vec::new();
     let mut orderable_fields: Vec<AggregateFieldContext> = Vec::new();
     let mut object_value_db_fields: Vec<String> = Vec::new();
+    let mut vector_field_names: Vec<String> = Vec::new();
 
     for (idx, field) in model.scalar_fields().enumerate() {
         use nautilus_schema::ir::ScalarType;
@@ -323,9 +325,14 @@ pub fn generate_python_model(
 
         if !matches!(field.field_type, ResolvedFieldType::Relation(_)) {
             let operators = get_filter_operators_for_field(field, &ir.enums);
+            let is_vector = field.is_vector();
+            if is_vector {
+                vector_field_names.push(field.logical_name.clone());
+            }
             where_input_fields.push(WhereInputFieldContext {
                 name: field.logical_name.clone(),
                 python_type: base_python_type.clone(),
+                is_vector,
                 operators: operators
                     .into_iter()
                     .map(|op| FilterOperatorContext {
@@ -397,6 +404,7 @@ pub fn generate_python_model(
                 | ResolvedFieldType::Scalar(ScalarType::Json)
                 | ResolvedFieldType::Scalar(ScalarType::Jsonb)
                 | ResolvedFieldType::Scalar(ScalarType::Hstore)
+                | ResolvedFieldType::Scalar(ScalarType::Vector { .. })
                 | ResolvedFieldType::Scalar(ScalarType::Bytes)
         );
         if !is_non_orderable {
@@ -560,6 +568,8 @@ pub fn generate_python_model(
     context.insert("object_value_db_fields", &object_value_db_fields);
     context.insert("has_numeric_fields", &has_numeric_fields);
     context.insert("has_orderable_fields", &has_orderable_fields);
+    context.insert("has_vector_fields", &!vector_field_names.is_empty());
+    context.insert("vector_field_names", &vector_field_names);
 
     context.insert("scalar_fields", &scalar_fields);
     context.insert("relation_fields", &relation_fields);

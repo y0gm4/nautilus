@@ -240,7 +240,7 @@ impl<'a> DiffApplier<'a> {
                 table,
                 columns,
                 unique,
-                index_type,
+                kind,
                 index_name,
             } => {
                 let idx_name = index_name
@@ -252,7 +252,7 @@ impl<'a> DiffApplier<'a> {
                     name: &idx_name,
                     columns,
                     unique: *unique,
-                    method: index_type.map(|index_type| index_type.as_str()),
+                    kind,
                     if_not_exists: true,
                 })])
             }

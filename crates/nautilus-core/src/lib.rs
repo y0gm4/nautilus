@@ -26,7 +26,7 @@ pub mod update;
 /// Database value representation.
 pub mod value;
 
-pub use args::{FindManyArgs, FindUniqueArgs, IncludeRelation};
+pub use args::{FindManyArgs, FindUniqueArgs, IncludeRelation, VectorMetric, VectorNearest};
 pub use column::{Column, ColumnMarker, FromValue, RowAccess, SelectColumns};
 pub use cursor::build_cursor_predicate;
 pub use delete::{Delete, DeleteBuilder};

@@ -675,7 +675,7 @@ fn top_level_completions() -> Vec<CompletionItem> {
 ///
 /// All DB types:   BTree (default, always shown)
 /// PG + MySQL:     Hash
-/// PG only:        Gin, Gist, Brin
+/// PG only:        Gin, Gist, Brin, Hnsw, Ivfflat
 /// MySQL only:     FullText
 fn index_argument_completions(provider: Option<&str>) -> Vec<CompletionItem> {
     struct TypeEntry {
@@ -710,6 +710,16 @@ fn index_argument_completions(provider: Option<&str>) -> Vec<CompletionItem> {
             providers: &["postgresql"],
         },
         TypeEntry {
+            label: "type: Hnsw",
+            desc: "pgvector HNSW index — PostgreSQL only",
+            providers: &["postgresql"],
+        },
+        TypeEntry {
+            label: "type: Ivfflat",
+            desc: "pgvector IVFFlat index — PostgreSQL only",
+            providers: &["postgresql"],
+        },
+        TypeEntry {
             label: "type: FullText",
             desc: "FULLTEXT index — MySQL only",
             providers: &["mysql"],
@@ -730,6 +740,28 @@ fn index_argument_completions(provider: Option<&str>) -> Vec<CompletionItem> {
         CompletionKind::FieldName,
         Some("Logical developer name for this index".to_string()),
     ));
+    if matches!(provider, Some("postgresql") | None) {
+        items.push(CompletionItem::new(
+            "opclass: vector_l2_ops",
+            CompletionKind::Keyword,
+            Some("pgvector operator class for Hnsw/Ivfflat indexes".to_string()),
+        ));
+        items.push(CompletionItem::new(
+            "m: 16",
+            CompletionKind::Keyword,
+            Some("pgvector HNSW graph connectivity parameter".to_string()),
+        ));
+        items.push(CompletionItem::new(
+            "ef_construction: 64",
+            CompletionKind::Keyword,
+            Some("pgvector HNSW build parameter".to_string()),
+        ));
+        items.push(CompletionItem::new(
+            "lists: 100",
+            CompletionKind::Keyword,
+            Some("pgvector IVFFlat inverted-list count".to_string()),
+        ));
+    }
     items.push(CompletionItem::new(
         "map: \"\"",
         CompletionKind::FieldName,
@@ -811,6 +843,15 @@ fn scalar_type_completions(provider: Option<&str>) -> Vec<CompletionItem> {
             "Ltree",
             CompletionKind::Type,
             Some("Label tree path -> LTREE (PostgreSQL + ltree extension)".to_string()),
+        ));
+        items.push(CompletionItem::with_snippet(
+            "Vector(dim)",
+            "Vector(${1:1536})",
+            CompletionKind::Type,
+            Some(
+                "Dense embedding vector -> VECTOR(dim) (PostgreSQL + pgvector extension)"
+                    .to_string(),
+            ),
         ));
         items.push(CompletionItem::new(
             "Jsonb",

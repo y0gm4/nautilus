@@ -248,6 +248,7 @@ struct DslTemplateContext {
     relation_fields: Vec<DslRelationFieldCtx>,
     numeric_field_names: Vec<String>,
     orderable_field_names: Vec<String>,
+    vector_field_names: Vec<String>,
     all_scalar_field_names: Vec<String>,
 }
 
@@ -735,6 +736,7 @@ fn generate_dsl_file(
     let mut update_fields: Vec<DslWritableFieldCtx> = Vec::new();
     let mut numeric_field_names: Vec<String> = Vec::new();
     let mut orderable_field_names: Vec<String> = Vec::new();
+    let mut vector_field_names: Vec<String> = Vec::new();
     let mut all_scalar_field_names: Vec<String> = Vec::new();
 
     for field in model.scalar_fields() {
@@ -760,6 +762,9 @@ fn generate_dsl_file(
 
         if is_numeric_field(field) {
             numeric_field_names.push(field.logical_name.clone());
+        }
+        if field.is_vector() {
+            vector_field_names.push(field.logical_name.clone());
         }
         if is_orderable_field(field) {
             orderable_field_names.push(field.logical_name.clone());
@@ -810,6 +815,7 @@ fn generate_dsl_file(
         relation_fields,
         numeric_field_names,
         orderable_field_names,
+        vector_field_names,
         all_scalar_field_names,
     })
     .expect("Java DSL context should serialize");
@@ -998,6 +1004,7 @@ fn base_java_type_name(field_type: &ResolvedFieldType) -> &'static str {
         | ResolvedFieldType::Scalar(ScalarType::Char { .. })
         | ResolvedFieldType::Scalar(ScalarType::VarChar { .. }) => "String",
         ResolvedFieldType::Scalar(ScalarType::Hstore) => "JsonSupport.Hstore",
+        ResolvedFieldType::Scalar(ScalarType::Vector { .. }) => "List<Float>",
         ResolvedFieldType::Scalar(ScalarType::Boolean) => "Boolean",
         ResolvedFieldType::Scalar(ScalarType::Int) => "Integer",
         ResolvedFieldType::Scalar(ScalarType::BigInt) => "Long",
@@ -1021,6 +1028,7 @@ fn scalar_reader_for_type(scalar: &ScalarType) -> &'static str {
         | ScalarType::Char { .. }
         | ScalarType::VarChar { .. } => "asString",
         ScalarType::Hstore => "asHstore",
+        ScalarType::Vector { .. } => "asFloatList",
         ScalarType::Boolean => "asBoolean",
         ScalarType::Int => "asInteger",
         ScalarType::BigInt => "asLong",
@@ -1042,6 +1050,7 @@ fn array_reader_for_scalar(scalar: &ScalarType) -> &'static str {
         | ScalarType::Char { .. }
         | ScalarType::VarChar { .. } => "JsonSupport::asString",
         ScalarType::Hstore => "JsonSupport::asHstore",
+        ScalarType::Vector { .. } => "JsonSupport::asFloatList",
         ScalarType::Boolean => "JsonSupport::asBoolean",
         ScalarType::Int => "JsonSupport::asInteger",
         ScalarType::BigInt => "JsonSupport::asLong",

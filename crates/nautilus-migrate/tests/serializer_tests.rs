@@ -2,13 +2,16 @@ mod common;
 
 use nautilus_migrate::live::{
     ComputedKind, LiveColumn, LiveCompositeField, LiveCompositeType, LiveExtension, LiveForeignKey,
-    LiveIndex, LiveSchema, LiveTable,
+    LiveIndex, LiveIndexKind, LiveSchema, LiveTable,
 };
 use nautilus_migrate::{
     serialize_live_schema, serialize_live_schema_with_options, DatabaseProvider, PullNameCase,
     PullNamingOptions,
 };
-use nautilus_schema::ir::{DefaultValue, ResolvedFieldType, ScalarType};
+use nautilus_schema::ir::{
+    BasicIndexType, DefaultValue, PgvectorIndex, PgvectorIndexOptions, PgvectorMethod,
+    PgvectorOpClass, ResolvedFieldType, ScalarType,
+};
 
 #[test]
 fn serialises_single_table() {
@@ -138,6 +141,58 @@ fn serialises_jsonb_columns_without_degrading_to_json() {
     assert!(matches!(
         field.field_type,
         ResolvedFieldType::Scalar(ScalarType::Jsonb)
+    ));
+}
+
+#[test]
+fn serialises_pgvector_columns_with_dimension() {
+    let live = common::make_live_schema(vec![LiveTable {
+        name: "embeddings".to_string(),
+        columns: vec![
+            LiveColumn {
+                name: "id".to_string(),
+                col_type: "integer".to_string(),
+                nullable: false,
+                default_value: None,
+                generated_expr: None,
+                computed_kind: None,
+                check_expr: None,
+            },
+            LiveColumn {
+                name: "vector".to_string(),
+                col_type: "vector(1536)".to_string(),
+                nullable: false,
+                default_value: None,
+                generated_expr: None,
+                computed_kind: None,
+                check_expr: None,
+            },
+        ],
+        primary_key: vec!["id".to_string()],
+        indexes: vec![],
+        check_constraints: vec![],
+        foreign_keys: vec![],
+    }]);
+
+    let out = serialize_live_schema(&live, DatabaseProvider::Postgres, "postgres://localhost/db");
+    let schema = common::parse(&out).expect("schema should parse");
+    let field = schema
+        .models
+        .get("Embeddings")
+        .expect("Embeddings model missing")
+        .fields
+        .iter()
+        .find(|field| field.logical_name == "vector")
+        .expect("vector field missing");
+
+    assert!(
+        out.lines()
+            .any(|line| line.contains("vector") && line.contains("Vector(1536)")),
+        "{out}"
+    );
+    assert!(matches!(
+        field.field_type,
+        ResolvedFieldType::Scalar(ScalarType::Vector { dimension: 1536 })
     ));
 }
 
@@ -272,13 +327,13 @@ fn serialises_indexes() {
                 name: "idx_users_email".to_string(),
                 columns: vec!["email".to_string()],
                 unique: true,
-                method: None,
+                kind: LiveIndexKind::Unknown(None),
             },
             LiveIndex {
                 name: "idx_users_name".to_string(),
                 columns: vec!["name".to_string()],
                 unique: false,
-                method: None,
+                kind: LiveIndexKind::Unknown(None),
             },
         ],
         check_constraints: vec![],
@@ -320,7 +375,7 @@ fn serialises_index_type_and_map() {
             name: "idx_users_created".to_string(),
             columns: vec!["created_at".to_string()],
             unique: false,
-            method: Some("brin".to_string()),
+            kind: LiveIndexKind::Basic(BasicIndexType::Brin),
         }],
         check_constraints: vec![],
         foreign_keys: vec![],
@@ -329,6 +384,60 @@ fn serialises_index_type_and_map() {
     let out = serialize_live_schema(&live, DatabaseProvider::Postgres, "postgres://localhost/db");
 
     assert!(out.contains("@@index([created_at], type: Brin, map: \"idx_users_created\")"));
+}
+
+#[test]
+fn serialises_pgvector_index_options() {
+    let live = common::make_live_schema(vec![LiveTable {
+        name: "embeddings".to_string(),
+        columns: vec![
+            LiveColumn {
+                name: "id".to_string(),
+                col_type: "integer".to_string(),
+                nullable: false,
+                default_value: None,
+                generated_expr: None,
+                computed_kind: None,
+                check_expr: None,
+            },
+            LiveColumn {
+                name: "embedding".to_string(),
+                col_type: "vector(3)".to_string(),
+                nullable: false,
+                default_value: None,
+                generated_expr: None,
+                computed_kind: None,
+                check_expr: None,
+            },
+        ],
+        primary_key: vec!["id".to_string()],
+        indexes: vec![LiveIndex {
+            name: "idx_embeddings_embedding".to_string(),
+            columns: vec!["embedding".to_string()],
+            unique: false,
+            kind: LiveIndexKind::Pgvector(PgvectorIndex {
+                method: PgvectorMethod::Hnsw,
+                opclass: Some(PgvectorOpClass::CosineOps),
+                options: PgvectorIndexOptions {
+                    m: Some(16),
+                    ef_construction: Some(64),
+                    lists: None,
+                },
+            }),
+        }],
+        check_constraints: vec![],
+        foreign_keys: vec![],
+    }]);
+
+    let out = serialize_live_schema(&live, DatabaseProvider::Postgres, "postgres://localhost/db");
+
+    assert!(
+        out.contains(
+            "@@index([embedding], type: Hnsw, opclass: vector_cosine_ops, m: 16, ef_construction: 64)"
+        ),
+        "actual output:\n{}",
+        out
+    );
 }
 
 #[test]
@@ -887,7 +996,7 @@ fn serialises_one_to_one_back_reference_as_optional_scalar() {
                 name: "idx_profiles_user_id".to_string(),
                 columns: vec!["user_id".to_string()],
                 unique: true,
-                method: Some("btree".to_string()),
+                kind: LiveIndexKind::Basic(BasicIndexType::BTree),
             }],
             check_constraints: vec![],
             foreign_keys: vec![LiveForeignKey {
@@ -994,7 +1103,7 @@ fn serialises_ambiguous_relations_with_explicit_names() {
                 name: "idx_App_current_version_id".to_string(),
                 columns: vec!["current_version_id".to_string()],
                 unique: true,
-                method: Some("btree".to_string()),
+                kind: LiveIndexKind::Basic(BasicIndexType::BTree),
             }],
             check_constraints: vec![],
             foreign_keys: vec![LiveForeignKey {

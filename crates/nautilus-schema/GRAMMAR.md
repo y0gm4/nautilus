@@ -220,6 +220,7 @@ ScalarType ::= 'String'
              | 'Citext'
              | 'Hstore'
              | 'Ltree'
+             | 'Vector' '(' Number ')'
              | 'Jsonb'
              | 'Uuid'
              | 'Xml'
@@ -245,6 +246,7 @@ field9  VarChar(255)  // Bounded string
 field10 Citext        // PostgreSQL citext extension
 field11 Hstore        // PostgreSQL hstore extension
 field12 Ltree         // PostgreSQL ltree extension
+field13 Vector(1536)  // PostgreSQL pgvector extension
 ```
 
 ## Attributes

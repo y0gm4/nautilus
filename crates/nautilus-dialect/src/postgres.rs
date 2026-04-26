@@ -91,6 +91,8 @@ fn render_expr(ctx: &mut RenderContext, expr: &Expr) {
                     ctx.sql.push_str("::uuid");
                 } else if matches!(value, Value::Json(_)) {
                     ctx.sql.push_str("::json");
+                } else if matches!(value, Value::Vector(_)) {
+                    ctx.sql.push_str("::vector");
                 } else if let Value::Enum { type_name, .. } = value {
                     ctx.sql.push_str("::");
                     ctx.sql.push_str(type_name);
@@ -130,6 +132,24 @@ fn render_expr(ctx: &mut RenderContext, expr: &Expr) {
             }
         }
         Expr::FunctionCall { name, args } => {
+            if args.len() == 2 {
+                let op = match name.as_str() {
+                    nautilus_core::expr::VECTOR_L2_DISTANCE_FUNCTION => Some("<->"),
+                    nautilus_core::expr::VECTOR_INNER_PRODUCT_FUNCTION => Some("<#>"),
+                    nautilus_core::expr::VECTOR_COSINE_DISTANCE_FUNCTION => Some("<=>"),
+                    _ => None,
+                };
+                if let Some(op) = op {
+                    ctx.sql.push('(');
+                    render_expr(ctx, &args[0]);
+                    ctx.sql.push(' ');
+                    ctx.sql.push_str(op);
+                    ctx.sql.push(' ');
+                    render_expr(ctx, &args[1]);
+                    ctx.sql.push(')');
+                    return;
+                }
+            }
             ctx.sql.push_str(name);
             ctx.sql.push('(');
             for (i, arg) in args.iter().enumerate() {
@@ -272,5 +292,48 @@ mod tests {
             }
             _ => panic!("Expected Array value"),
         }
+    }
+
+    #[test]
+    fn vector_params_are_cast_to_pgvector_type() {
+        let dialect = PostgresDialect;
+        let select = Select::from_table("embeddings")
+            .filter(
+                Expr::column("embeddings__vector")
+                    .eq(Expr::param(Value::Vector(vec![1.0, 2.0, 3.0]))),
+            )
+            .build()
+            .unwrap();
+        let sql = dialect.render_select(&select).unwrap();
+
+        assert_eq!(
+            sql.text,
+            "SELECT * FROM \"embeddings\" WHERE (\"embeddings\".\"vector\" = $1::vector)"
+        );
+        assert_eq!(sql.params, vec![Value::Vector(vec![1.0, 2.0, 3.0])]);
+    }
+
+    #[test]
+    fn vector_distance_ordering_uses_pgvector_operator() {
+        let dialect = PostgresDialect;
+        let select = Select::from_table("embeddings")
+            .order_by_expr(
+                Expr::vector_distance(
+                    nautilus_core::VectorMetric::Cosine,
+                    Expr::column("embeddings__vector"),
+                    Expr::param(Value::Vector(vec![1.0, 2.0, 3.0])),
+                ),
+                nautilus_core::OrderDir::Asc,
+            )
+            .take(5)
+            .build()
+            .unwrap();
+        let sql = dialect.render_select(&select).unwrap();
+
+        assert_eq!(
+            sql.text,
+            "SELECT * FROM \"embeddings\" ORDER BY (\"embeddings\".\"vector\" <=> $1::vector) ASC LIMIT 5"
+        );
+        assert_eq!(sql.params, vec![Value::Vector(vec![1.0, 2.0, 3.0])]);
     }
 }

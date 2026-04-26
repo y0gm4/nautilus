@@ -95,6 +95,7 @@ struct JsWhereInputFieldContext {
     /// Base TS type used by the template to pick the right filter interface.
     base_type: String,
     ts_type: String,
+    is_vector: bool,
     operators: Vec<JsFilterOperatorContext>,
 }
 
@@ -157,6 +158,7 @@ pub fn generate_js_model(model: &ModelIr, ir: &SchemaIr) -> ((String, String), (
     let mut numeric_fields: Vec<JsAggregateFieldContext> = Vec::new();
     let mut orderable_fields: Vec<JsAggregateFieldContext> = Vec::new();
     let mut object_value_db_fields: Vec<String> = Vec::new();
+    let mut vector_field_names: Vec<String> = Vec::new();
 
     for (idx, field) in model.scalar_fields().enumerate() {
         match &field.field_type {
@@ -197,10 +199,15 @@ pub fn generate_js_model(model: &ModelIr, ir: &SchemaIr) -> ((String, String), (
 
         if !matches!(field.field_type, ResolvedFieldType::Relation(_)) {
             let operators = get_filter_operators_for_field(field, &ir.enums);
+            let is_vector = field.is_vector();
+            if is_vector {
+                vector_field_names.push(field.logical_name.clone());
+            }
             where_input_fields.push(JsWhereInputFieldContext {
                 name: field.logical_name.clone(),
                 base_type: base_type.clone(),
                 ts_type: ts_type.clone(),
+                is_vector,
                 operators: operators
                     .into_iter()
                     .map(|op| JsFilterOperatorContext {
@@ -282,6 +289,7 @@ pub fn generate_js_model(model: &ModelIr, ir: &SchemaIr) -> ((String, String), (
                 | ResolvedFieldType::Scalar(ScalarType::Json)
                 | ResolvedFieldType::Scalar(ScalarType::Jsonb)
                 | ResolvedFieldType::Scalar(ScalarType::Hstore)
+                | ResolvedFieldType::Scalar(ScalarType::Vector { .. })
                 | ResolvedFieldType::Scalar(ScalarType::Bytes)
         );
         if !is_non_orderable {
@@ -368,6 +376,8 @@ pub fn generate_js_model(model: &ModelIr, ir: &SchemaIr) -> ((String, String), (
     context.insert("orderable_fields", &orderable_fields);
     context.insert("object_value_db_fields", &object_value_db_fields);
     context.insert("has_numeric_fields", &has_numeric_fields);
+    context.insert("has_vector_fields", &!vector_field_names.is_empty());
+    context.insert("vector_field_names", &vector_field_names);
     context.insert("has_enums", &has_enums);
     context.insert(
         "enum_imports",

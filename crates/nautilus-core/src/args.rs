@@ -4,6 +4,39 @@ use std::collections::HashMap;
 
 use crate::{Expr, OrderBy, Value};
 
+/// Similarity metric used for pgvector nearest-neighbor queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VectorMetric {
+    /// Euclidean / L2 distance (`<->`, `vector_l2_ops`).
+    L2,
+    /// Maximum inner product (`<#>`, `vector_ip_ops`).
+    InnerProduct,
+    /// Cosine distance (`<=>`, `vector_cosine_ops`).
+    Cosine,
+}
+
+impl VectorMetric {
+    /// Wire-format string used by the engine JSON protocol.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::L2 => "l2",
+            Self::InnerProduct => "innerProduct",
+            Self::Cosine => "cosine",
+        }
+    }
+}
+
+/// Nearest-neighbor search specification for a pgvector field.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VectorNearest {
+    /// Logical field name of the vector column to search against.
+    pub field: String,
+    /// Query embedding to compare against the stored vectors.
+    pub query: Vec<f32>,
+    /// Distance metric to use for ordering.
+    pub metric: VectorMetric,
+}
+
 /// Arguments for eagerly loading a single relation in a query.
 ///
 /// ```text
@@ -190,6 +223,12 @@ pub struct FindManyArgs {
     ///
     /// When empty (the default), no deduplication is applied.
     pub distinct: Vec<String>,
+    /// Optional pgvector nearest-neighbor search.
+    ///
+    /// When set, the engine orders the result set by vector distance on the
+    /// specified field. Callers must also provide a positive `take` so the
+    /// query remains bounded.
+    pub nearest: Option<VectorNearest>,
 }
 
 #[cfg(test)]
@@ -223,5 +262,12 @@ mod tests {
 
         assert!(args.select.is_empty());
         assert!(args.include.is_empty());
+    }
+
+    #[test]
+    fn vector_metric_strings_match_protocol_shape() {
+        assert_eq!(VectorMetric::L2.as_str(), "l2");
+        assert_eq!(VectorMetric::InnerProduct.as_str(), "innerProduct");
+        assert_eq!(VectorMetric::Cosine.as_str(), "cosine");
     }
 }

@@ -42,7 +42,7 @@ Starting from the schema IR, `DdlGenerator` emits SQL to create every table from
 datasource db {
   provider            = "postgresql"
   url                 = env("DATABASE_URL")
-  extensions          = [citext, hstore]
+  extensions          = [citext, hstore, vector]
   preserve_extensions = true
 }
 
@@ -51,6 +51,7 @@ model User {
   email     String   @unique
   role      Role     @default(USER)
   createdAt DateTime @default(now()) @map("created_at")
+  embedding Vector(1536)?
   posts     Post[]
   @@map("users")
 }

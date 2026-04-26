@@ -482,12 +482,13 @@ impl MigrationExecutor {
         index: &LiveIndex,
         provider: DatabaseProvider,
     ) -> String {
+        let kind = index.kind.to_index_kind();
         ProviderStrategy::new(provider).create_index_sql(CreateIndex {
             table: table_name,
             name: &index.name,
             columns: &index.columns,
             unique: index.unique,
-            method: index.method.as_deref(),
+            kind: &kind,
             if_not_exists: true,
         })
     }
@@ -674,7 +675,9 @@ mod tests {
                     name: "email_hash_idx".to_string(),
                     columns: vec!["email".to_string()],
                     unique: false,
-                    method: Some("hash".to_string()),
+                    kind: crate::live::LiveIndexKind::Basic(
+                        nautilus_schema::ir::BasicIndexType::Hash,
+                    ),
                 },
             ),
             DatabaseProvider::Postgres,
@@ -705,7 +708,9 @@ mod tests {
                     name: "body_search".to_string(),
                     columns: vec!["body".to_string()],
                     unique: false,
-                    method: Some("fulltext".to_string()),
+                    kind: crate::live::LiveIndexKind::Basic(
+                        nautilus_schema::ir::BasicIndexType::FullText,
+                    ),
                 },
             ),
             DatabaseProvider::Mysql,

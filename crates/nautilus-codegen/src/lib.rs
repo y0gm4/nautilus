@@ -15,6 +15,7 @@ pub mod js;
 pub mod python;
 pub(crate) mod template;
 pub mod type_helpers;
+pub mod vector_meta;
 pub mod writer;
 
 use anyhow::{Context, Result};

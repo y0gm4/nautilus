@@ -372,6 +372,7 @@ pub(crate) fn bind_value<'q>(
         Value::Uuid(u) => Ok(query.bind(*u)),
         Value::String(s) => Ok(query.bind(s.as_str())),
         Value::Hstore(map) => Ok(query.bind(PgHstore(map.clone()))),
+        Value::Vector(values) => Ok(query.bind(format_pg_vector(values)?)),
         Value::Bytes(b) => Ok(query.bind(b.as_slice())),
         Value::Json(j) => Ok(query.bind(j.to_string())),
         Value::Array(items) => match bindable_pg_array(items)? {
@@ -399,6 +400,25 @@ pub(crate) fn bind_value<'q>(
         // we only need to bind the underlying string value here.
         Value::Enum { value, .. } => Ok(query.bind(value.as_str())),
     }
+}
+
+fn format_pg_vector(values: &[f32]) -> Result<String> {
+    let mut out = String::with_capacity(values.len().saturating_mul(8) + 2);
+    out.push('[');
+    for (idx, value) in values.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(Error::database_msg(format!(
+                "PostgreSQL vector element at index {} is not finite",
+                idx
+            )));
+        }
+        if idx > 0 {
+            out.push(',');
+        }
+        out.push_str(&value.to_string());
+    }
+    out.push(']');
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -469,5 +489,16 @@ mod tests {
         let binding = bindable_pg_array(&[Value::Decimal(rust_decimal::Decimal::new(123, 2))])
             .expect("unsupported arrays should fall back");
         assert_eq!(binding, None);
+    }
+
+    #[test]
+    fn format_pg_vector_uses_pgvector_text_literal() {
+        assert_eq!(format_pg_vector(&[1.0, 2.5, 3.25]).unwrap(), "[1,2.5,3.25]");
+    }
+
+    #[test]
+    fn format_pg_vector_rejects_non_finite_values() {
+        let err = format_pg_vector(&[1.0, f32::NAN]).unwrap_err();
+        assert!(err.to_string().contains("not finite"));
     }
 }

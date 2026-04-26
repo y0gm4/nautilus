@@ -168,7 +168,7 @@
     },
     "scalar-types": {
       "comment": "Built-in scalar field types",
-      "match": "\\b(String|Boolean|Int|BigInt|Float|Decimal|DateTime|Bytes|Json|Uuid|Jsonb|Xml|Char|VarChar|Citext|Hstore|Ltree)\\b",
+      "match": "\\b(String|Boolean|Int|BigInt|Float|Decimal|DateTime|Bytes|Json|Uuid|Jsonb|Xml|Char|VarChar|Citext|Hstore|Ltree|Vector)\\b",
       "name": "support.type.primitive.nautilus"
     },
     "builtin-functions": {
