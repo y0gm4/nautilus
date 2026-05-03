@@ -2,9 +2,12 @@
 //!
 //! These tests use an in-memory SQLite database — no external server required.
 
+use std::time::Duration;
+
 use futures::stream::StreamExt;
 use nautilus_connector::{
-    execute_all, normalize_rows_with_hints, Executor, SqliteExecutor, ValueHint,
+    execute_all, normalize_rows_with_hints, Client, ConnectorPoolOptions, Executor, SqliteExecutor,
+    ValueHint,
 };
 use nautilus_core::{BinaryOp, Expr, OrderDir, Select, Value};
 use nautilus_dialect::{Dialect, Sql, SqliteDialect};
@@ -592,14 +595,46 @@ async fn test_delete_returning() {
 
 #[tokio::test]
 async fn test_client_sqlite_constructor() {
-    use nautilus_connector::Client;
-
     let client = Client::sqlite("sqlite::memory:").await;
     assert!(
         client.is_ok(),
         "Failed to create SQLite client: {:?}",
         client.err()
     );
+}
+
+#[tokio::test]
+async fn test_sqlite_executor_constructor_with_pool_options() {
+    let executor = SqliteExecutor::new_with_options(
+        "sqlite::memory:",
+        ConnectorPoolOptions::new()
+            .max_connections(1)
+            .min_connections(1)
+            .acquire_timeout(Duration::from_secs(3))
+            .idle_timeout(None)
+            .test_before_acquire(false),
+    )
+    .await
+    .expect("Failed to create SQLite executor with custom pool options");
+
+    let options = executor.pool().options();
+    assert_eq!(options.get_max_connections(), 1);
+    assert_eq!(options.get_min_connections(), 1);
+    assert_eq!(options.get_acquire_timeout(), Duration::from_secs(3));
+    assert_eq!(options.get_idle_timeout(), None);
+    assert!(!options.get_test_before_acquire());
+}
+
+#[tokio::test]
+async fn test_client_sqlite_constructor_with_pool_options() {
+    let client = Client::sqlite_with_options(
+        "sqlite::memory:",
+        ConnectorPoolOptions::new().max_connections(1),
+    )
+    .await
+    .expect("Failed to create SQLite client with custom pool options");
+
+    assert_eq!(client.executor().pool().options().get_max_connections(), 1);
 }
 
 #[tokio::test]

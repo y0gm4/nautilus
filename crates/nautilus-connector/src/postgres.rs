@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use crate::error::{ConnectorError as Error, Result};
-use crate::{Executor, PgRowStream, Row};
+use crate::{ConnectorPoolOptions, Executor, PgRowStream, Row};
 use nautilus_core::Value;
 use nautilus_dialect::Sql;
 use sqlx::postgres::types::PgHstore;
@@ -41,12 +41,22 @@ impl PgExecutor {
     /// Returns `ConnectorError::Connection` if the pool cannot be created or if
     /// an initial connection test fails.
     pub async fn new(url: &str) -> Result<Self> {
-        let pool = PgPoolOptions::new()
-            .max_connections(10)
-            .min_connections(1)
-            .acquire_timeout(Duration::from_secs(10))
-            .idle_timeout(Duration::from_secs(300))
-            .test_before_acquire(true)
+        Self::new_with_options(url, ConnectorPoolOptions::default()).await
+    }
+
+    /// Create a new PostgreSQL executor with explicit pool overrides.
+    ///
+    /// Any override not provided keeps the same default used by [`Self::new`].
+    pub async fn new_with_options(url: &str, pool_options: ConnectorPoolOptions) -> Result<Self> {
+        let pool = pool_options
+            .apply_to(
+                PgPoolOptions::new()
+                    .max_connections(10)
+                    .min_connections(1)
+                    .acquire_timeout(Duration::from_secs(10))
+                    .idle_timeout(Duration::from_secs(300))
+                    .test_before_acquire(true),
+            )
             .connect(url)
             .await
             .map_err(|e| Error::connection(e, "Failed to connect to database"))?;

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::error::{ConnectorError as Error, Result};
 use crate::transaction::TransactionOptions;
+use crate::ConnectorPoolOptions;
 use nautilus_dialect::Dialect;
 
 use crate::Executor;
@@ -168,10 +169,18 @@ impl Client<crate::postgres::PgExecutor> {
     /// # }
     /// ```
     pub async fn postgres(url: &str) -> Result<Self> {
+        Self::postgres_with_options(url, ConnectorPoolOptions::default()).await
+    }
+
+    /// Creates a new PostgreSQL client with explicit pool overrides.
+    pub async fn postgres_with_options(
+        url: &str,
+        pool_options: ConnectorPoolOptions,
+    ) -> Result<Self> {
         use crate::postgres::PgExecutor;
         use nautilus_dialect::PostgresDialect;
 
-        let executor = PgExecutor::new(url).await?;
+        let executor = PgExecutor::new_with_options(url, pool_options).await?;
         let dialect = PostgresDialect;
         Ok(Self::new(dialect, executor))
     }
@@ -242,10 +251,15 @@ impl Client<crate::mysql::MysqlExecutor> {
     /// # }
     /// ```
     pub async fn mysql(url: &str) -> Result<Self> {
+        Self::mysql_with_options(url, ConnectorPoolOptions::default()).await
+    }
+
+    /// Creates a new MySQL client with explicit pool overrides.
+    pub async fn mysql_with_options(url: &str, pool_options: ConnectorPoolOptions) -> Result<Self> {
         use crate::mysql::MysqlExecutor;
         use nautilus_dialect::MysqlDialect;
 
-        let executor = MysqlExecutor::new(url).await?;
+        let executor = MysqlExecutor::new_with_options(url, pool_options).await?;
         let dialect = MysqlDialect;
         Ok(Self::new(dialect, executor))
     }
@@ -292,10 +306,18 @@ impl Client<crate::sqlite::SqliteExecutor> {
     /// # }
     /// ```
     pub async fn sqlite(url: &str) -> Result<Self> {
+        Self::sqlite_with_options(url, ConnectorPoolOptions::default()).await
+    }
+
+    /// Creates a new SQLite client with explicit pool overrides.
+    pub async fn sqlite_with_options(
+        url: &str,
+        pool_options: ConnectorPoolOptions,
+    ) -> Result<Self> {
         use crate::sqlite::SqliteExecutor;
         use nautilus_dialect::SqliteDialect;
 
-        let executor = SqliteExecutor::new(url).await?;
+        let executor = SqliteExecutor::new_with_options(url, pool_options).await?;
         let dialect = SqliteDialect;
         Ok(Self::new(dialect, executor))
     }

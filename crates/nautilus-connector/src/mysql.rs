@@ -1,7 +1,7 @@
 //! MySQL executor implementation.
 
 use crate::error::{ConnectorError as Error, Result};
-use crate::{Executor, MysqlRowStream, Row};
+use crate::{ConnectorPoolOptions, Executor, MysqlRowStream, Row};
 use nautilus_core::Value;
 use nautilus_dialect::Sql;
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions};
@@ -37,8 +37,15 @@ impl MysqlExecutor {
     ///
     /// Returns `ConnectorError::Connection` if the pool cannot be created.
     pub async fn new(url: &str) -> Result<Self> {
-        let pool = MySqlPoolOptions::new()
-            .max_connections(5)
+        Self::new_with_options(url, ConnectorPoolOptions::default()).await
+    }
+
+    /// Create a new MySQL executor with explicit pool overrides.
+    ///
+    /// Any override not provided keeps the same default used by [`Self::new`].
+    pub async fn new_with_options(url: &str, pool_options: ConnectorPoolOptions) -> Result<Self> {
+        let pool = pool_options
+            .apply_to(MySqlPoolOptions::new().max_connections(5))
             .connect(url)
             .await
             .map_err(|e| Error::connection(e, "Failed to connect to MySQL"))?;

@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use nautilus_connector::{
-    execute_all, Client, MysqlExecutor, PgExecutor, Row, SqliteExecutor, SqlxErrorKind,
-    TransactionExecutor,
+    execute_all, Client, ConnectorPoolOptions, MysqlExecutor, PgExecutor, Row, SqliteExecutor,
+    SqlxErrorKind, TransactionExecutor,
 };
 use nautilus_dialect::{Dialect, MysqlDialect, PostgresDialect, Sql, SqliteDialect};
 use nautilus_migrate::DatabaseProvider;
@@ -120,21 +120,22 @@ impl EngineState {
     async fn build_client(
         provider: DatabaseProvider,
         url: &str,
+        pool_options: ConnectorPoolOptions,
     ) -> Result<(Arc<dyn Dialect + Send + Sync>, DatabaseClient), Box<dyn std::error::Error>> {
         match provider {
             DatabaseProvider::Postgres => {
-                let pg_client = Client::postgres(url).await?;
+                let pg_client = Client::postgres_with_options(url, pool_options).await?;
                 Ok((
                     Arc::new(PostgresDialect),
                     DatabaseClient::Postgres(pg_client),
                 ))
             }
             DatabaseProvider::Mysql => {
-                let mysql_client = Client::mysql(url).await?;
+                let mysql_client = Client::mysql_with_options(url, pool_options).await?;
                 Ok((Arc::new(MysqlDialect), DatabaseClient::Mysql(mysql_client)))
             }
             DatabaseProvider::Sqlite => {
-                let sqlite_client = Client::sqlite(url).await?;
+                let sqlite_client = Client::sqlite_with_options(url, pool_options).await?;
                 Ok((
                     Arc::new(SqliteDialect),
                     DatabaseClient::Sqlite(sqlite_client),
@@ -152,6 +153,25 @@ impl EngineState {
         database_url: String,
         direct_url: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_with_pool_options(
+            schema,
+            database_url,
+            direct_url,
+            ConnectorPoolOptions::default(),
+        )
+        .await
+    }
+
+    /// Create a new engine state by connecting to the database with explicit pool overrides.
+    ///
+    /// `direct_url`, when provided, opens a second connection that bypasses
+    /// poolers (e.g. PgBouncer). Raw SQL queries prefer this connection.
+    pub async fn new_with_pool_options(
+        schema: SchemaIr,
+        database_url: String,
+        direct_url: Option<String>,
+        pool_options: ConnectorPoolOptions,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let models = schema.models.clone();
 
         let datasource = schema
@@ -163,11 +183,11 @@ impl EngineState {
             .ok_or_else(|| format!("Unsupported database provider: {}", datasource.provider))?;
 
         let resolved_url = resolve_database_url(&database_url)?;
-        let (dialect, client) = Self::build_client(provider, &resolved_url).await?;
+        let (dialect, client) = Self::build_client(provider, &resolved_url, pool_options).await?;
 
         let direct_client = if let Some(raw_direct) = direct_url {
             let resolved_direct = resolve_database_url(&raw_direct)?;
-            let (_, dc) = Self::build_client(provider, &resolved_direct).await?;
+            let (_, dc) = Self::build_client(provider, &resolved_direct, pool_options).await?;
             Some(dc)
         } else {
             None

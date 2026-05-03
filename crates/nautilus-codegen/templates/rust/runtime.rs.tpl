@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use crate::ConnectorPoolOptions;
 use nautilus_connector::{
     Client as ConnectorClient, Executor, MysqlExecutor, PgExecutor, SqliteExecutor,
     TransactionExecutor, TransactionOptions,
@@ -22,6 +23,7 @@ pub struct Client<E: Executor> {
     inner: ConnectorClient<E>,
     database_url: Arc<String>,
     engine_state: Arc<OnceCell<Arc<EngineState>>>,
+    pool_options: ConnectorPoolOptions,
     engine_reads_enabled: bool,
     transaction_id: Option<String>,
 }
@@ -35,6 +37,7 @@ where
             inner: self.inner.clone(),
             database_url: Arc::clone(&self.database_url),
             engine_state: Arc::clone(&self.engine_state),
+            pool_options: self.pool_options,
             engine_reads_enabled: self.engine_reads_enabled,
             transaction_id: self.transaction_id.clone(),
         }
@@ -53,6 +56,7 @@ where
             inner: ConnectorClient::new(dialect, executor),
             database_url: Arc::new(String::new()),
             engine_state: Arc::new(OnceCell::new()),
+            pool_options: ConnectorPoolOptions::default(),
             engine_reads_enabled: false,
             transaction_id: None,
         }
@@ -62,6 +66,7 @@ where
         inner: ConnectorClient<E>,
         database_url: Arc<String>,
         engine_state: Arc<OnceCell<Arc<EngineState>>>,
+        pool_options: ConnectorPoolOptions,
         engine_reads_enabled: bool,
         transaction_id: Option<String>,
     ) -> Self {
@@ -69,6 +74,7 @@ where
             inner,
             database_url,
             engine_state,
+            pool_options,
             engine_reads_enabled,
             transaction_id,
         }
@@ -88,11 +94,17 @@ where
         }
 
         let database_url = Arc::clone(&self.database_url);
+        let pool_options = self.pool_options;
         let state = self
             .engine_state
             .get_or_try_init(|| async move {
                 let schema = parse_generated_schema()?;
-                EngineState::new(schema, (*database_url).clone(), None)
+                EngineState::new_with_pool_options(
+                    schema,
+                    (*database_url).clone(),
+                    None,
+                    pool_options,
+                )
                     .await
                     .map(Arc::new)
                     .map_err(|e| {
@@ -111,11 +123,19 @@ where
 
 impl Client<PgExecutor> {
     pub async fn postgres(url: &str) -> nautilus_connector::ConnectorResult<Self> {
-        let inner = ConnectorClient::postgres(url).await?;
+        Self::postgres_with_options(url, ConnectorPoolOptions::default()).await
+    }
+
+    pub async fn postgres_with_options(
+        url: &str,
+        pool_options: ConnectorPoolOptions,
+    ) -> nautilus_connector::ConnectorResult<Self> {
+        let inner = ConnectorClient::postgres_with_options(url, pool_options).await?;
         Ok(Self::from_connector(
             inner,
             Arc::new(url.to_string()),
             Arc::new(OnceCell::new()),
+            pool_options,
             true,
             None,
         ))
@@ -133,6 +153,7 @@ impl Client<PgExecutor> {
     {
         let database_url = Arc::clone(&self.database_url);
         let engine_state = Arc::clone(&self.engine_state);
+        let pool_options = self.pool_options;
         let embedded_state = self
             .engine_state()
             .await
@@ -162,6 +183,7 @@ impl Client<PgExecutor> {
                         tx,
                         database_url,
                         engine_state,
+                        pool_options,
                         embedded_state.is_some(),
                         tx_id,
                     );
@@ -180,11 +202,19 @@ impl Client<PgExecutor> {
 
 impl Client<MysqlExecutor> {
     pub async fn mysql(url: &str) -> nautilus_connector::ConnectorResult<Self> {
-        let inner = ConnectorClient::mysql(url).await?;
+        Self::mysql_with_options(url, ConnectorPoolOptions::default()).await
+    }
+
+    pub async fn mysql_with_options(
+        url: &str,
+        pool_options: ConnectorPoolOptions,
+    ) -> nautilus_connector::ConnectorResult<Self> {
+        let inner = ConnectorClient::mysql_with_options(url, pool_options).await?;
         Ok(Self::from_connector(
             inner,
             Arc::new(url.to_string()),
             Arc::new(OnceCell::new()),
+            pool_options,
             true,
             None,
         ))
@@ -202,6 +232,7 @@ impl Client<MysqlExecutor> {
     {
         let database_url = Arc::clone(&self.database_url);
         let engine_state = Arc::clone(&self.engine_state);
+        let pool_options = self.pool_options;
         let embedded_state = self
             .engine_state()
             .await
@@ -231,6 +262,7 @@ impl Client<MysqlExecutor> {
                         tx,
                         database_url,
                         engine_state,
+                        pool_options,
                         embedded_state.is_some(),
                         tx_id,
                     );
@@ -249,11 +281,19 @@ impl Client<MysqlExecutor> {
 
 impl Client<SqliteExecutor> {
     pub async fn sqlite(url: &str) -> nautilus_connector::ConnectorResult<Self> {
-        let inner = ConnectorClient::sqlite(url).await?;
+        Self::sqlite_with_options(url, ConnectorPoolOptions::default()).await
+    }
+
+    pub async fn sqlite_with_options(
+        url: &str,
+        pool_options: ConnectorPoolOptions,
+    ) -> nautilus_connector::ConnectorResult<Self> {
+        let inner = ConnectorClient::sqlite_with_options(url, pool_options).await?;
         Ok(Self::from_connector(
             inner,
             Arc::new(url.to_string()),
             Arc::new(OnceCell::new()),
+            pool_options,
             true,
             None,
         ))
@@ -271,6 +311,7 @@ impl Client<SqliteExecutor> {
     {
         let database_url = Arc::clone(&self.database_url);
         let engine_state = Arc::clone(&self.engine_state);
+        let pool_options = self.pool_options;
         let embedded_state = self
             .engine_state()
             .await
@@ -300,6 +341,7 @@ impl Client<SqliteExecutor> {
                         tx,
                         database_url,
                         engine_state,
+                        pool_options,
                         embedded_state.is_some(),
                         tx_id,
                     );

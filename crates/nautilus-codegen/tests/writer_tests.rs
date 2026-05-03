@@ -210,6 +210,10 @@ fn test_write_rust_code_lib_rs_contains_template_exports() {
         "lib.rs should re-export enums:\n{lib_content}"
     );
     assert!(
+        lib_content.contains("pub use nautilus_connector::ConnectorPoolOptions;"),
+        "lib.rs should re-export ConnectorPoolOptions for runtime tuning:\n{lib_content}"
+    );
+    assert!(
         lib_content.contains("pub use user::*;"),
         "lib.rs should re-export models:\n{lib_content}"
     );
@@ -226,6 +230,41 @@ fn test_write_rust_code_lib_rs_contains_template_exports() {
     assert!(
         types_idx < enums_idx && enums_idx < user_idx,
         "lib.rs module declarations should be ordered types -> enums -> models:\n{lib_content}"
+    );
+}
+
+#[test]
+fn test_write_rust_code_runtime_exposes_pool_options_for_embedded_and_direct_paths() {
+    let ir = validate(SIMPLE_SCHEMA);
+    let models = generate_all_models(&ir, false);
+    let tmp = tempfile::TempDir::new().expect("failed to create temp dir");
+    let path = tmp.path().to_str().unwrap();
+
+    write_rust_code(path, &models, None, None, &[], SIMPLE_SCHEMA, false)
+        .expect("write_rust_code failed");
+
+    let runtime_content = std::fs::read_to_string(tmp.path().join("src").join("runtime.rs"))
+        .expect("missing runtime.rs");
+
+    assert!(
+        runtime_content.contains("pub async fn postgres_with_options("),
+        "runtime.rs should expose a Postgres constructor with pool options:\n{runtime_content}"
+    );
+    assert!(
+        runtime_content.contains("pub async fn mysql_with_options("),
+        "runtime.rs should expose a MySQL constructor with pool options:\n{runtime_content}"
+    );
+    assert!(
+        runtime_content.contains("pub async fn sqlite_with_options("),
+        "runtime.rs should expose a SQLite constructor with pool options:\n{runtime_content}"
+    );
+    assert!(
+        runtime_content.contains("EngineState::new_with_pool_options("),
+        "runtime.rs should propagate pool options into the embedded engine path:\n{runtime_content}"
+    );
+    assert!(
+        runtime_content.contains("pool_options: ConnectorPoolOptions"),
+        "runtime.rs should store pool options on the generated client:\n{runtime_content}"
     );
 }
 
