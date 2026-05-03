@@ -5,6 +5,7 @@
 
 pub use nautilus_connector::{Executor, FromRow, Row};
 pub use nautilus_connector::ConnectorPoolOptions;
+pub use nautilus_connector::{execute_all, execute_one, execute_optional};
 pub use nautilus_connector::{ValueHint, decode_row_with_hints, normalize_row_with_hints, normalize_rows_with_hints};
 pub use nautilus_connector::{IsolationLevel, TransactionOptions};
 pub use nautilus_connector::TransactionExecutor;

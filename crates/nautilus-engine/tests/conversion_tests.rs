@@ -330,6 +330,24 @@ fn normalize_rows_with_hints_rejects_invalid_json() {
 }
 
 #[test]
+fn normalize_row_with_hints_returns_original_row_when_all_hints_are_none() {
+    let row = Row::new(vec![
+        ("id".to_string(), Value::I64(1)),
+        ("payload".to_string(), Value::Bytes(vec![1, 2, 3])),
+    ]);
+    let original_columns_ptr = row.columns().as_ptr();
+
+    let normalized = normalize_row_with_hints(row, &[None, None]).unwrap();
+
+    assert_eq!(normalized.columns().as_ptr(), original_columns_ptr);
+    assert_eq!(normalized.get("id"), Some(&Value::I64(1)));
+    assert_eq!(
+        normalized.get("payload"),
+        Some(&Value::Bytes(vec![1, 2, 3]))
+    );
+}
+
+#[test]
 fn protocol_version_ok() {
     assert!(check_protocol_version(nautilus_protocol::PROTOCOL_VERSION).is_ok());
 }

@@ -95,7 +95,7 @@ mod value_hint;
 
 pub use client::Client;
 pub use error::{ConnectorError, Result as ConnectorResult, SqlxErrorKind};
-pub use executor::{execute_all, Executor};
+pub use executor::{execute_all, execute_one, execute_optional, Executor};
 pub use from_row::FromRow;
 pub use mysql::MysqlExecutor;
 pub use mysql_stream::MysqlRowStream;

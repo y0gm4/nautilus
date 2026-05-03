@@ -45,16 +45,21 @@ pub fn normalize_row_with_hints(row: Row, hints: &[Option<ValueHint>]) -> Result
         )));
     }
 
+    if hints.iter().all(Option::is_none) {
+        return Ok(row);
+    }
+
     let columns = row
-        .columns()
-        .iter()
+        .into_columns()
+        .into_iter()
+        .zip(hints.iter().copied())
         .enumerate()
-        .map(|(idx, (name, value))| {
-            let normalized = match hints[idx] {
-                Some(hint) => normalize_value_with_hint(name, idx, value.clone(), hint)?,
-                None => value.clone(),
+        .map(|(idx, ((name, value), hint))| {
+            let normalized = match hint {
+                Some(hint) => normalize_value_with_hint(&name, idx, value, hint)?,
+                None => value,
             };
-            Ok::<(String, Value), crate::ConnectorError>((name.clone(), normalized))
+            Ok::<(String, Value), crate::ConnectorError>((name, normalized))
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -311,5 +316,59 @@ mod tests {
 
         assert_eq!(decoded.0, 1);
         assert_eq!(decoded.1, vec!["orm".to_string(), "sqlite".to_string()]);
+    }
+
+    #[test]
+    fn normalize_row_with_hints_returns_original_row_when_all_hints_are_none() {
+        let row = Row::new(vec![
+            ("id".to_string(), Value::I64(1)),
+            ("payload".to_string(), Value::Bytes(vec![1, 2, 3])),
+        ]);
+        let original_columns_ptr = row.columns().as_ptr();
+
+        let normalized = normalize_row_with_hints(row, &[None, None]).unwrap();
+
+        assert_eq!(normalized.columns().as_ptr(), original_columns_ptr);
+        assert_eq!(normalized.get("id"), Some(&Value::I64(1)));
+        assert_eq!(
+            normalized.get("payload"),
+            Some(&Value::Bytes(vec![1, 2, 3]))
+        );
+    }
+
+    #[test]
+    fn normalize_row_with_hints_moves_column_names_and_values_when_normalizing() {
+        let raw_geometry = "POINT(1 2)".to_string();
+        let payload = vec![7u8, 8, 9];
+
+        let row = Row::new(vec![
+            ("shape".to_string(), Value::String(raw_geometry)),
+            ("payload".to_string(), Value::Bytes(payload)),
+        ]);
+
+        let shape_name_ptr = row.columns()[0].0.as_ptr();
+        let shape_value_ptr = match &row.columns()[0].1 {
+            Value::String(raw) => raw.as_ptr(),
+            other => panic!("expected string value, got {other:?}"),
+        };
+        let payload_name_ptr = row.columns()[1].0.as_ptr();
+        let payload_value_ptr = match &row.columns()[1].1 {
+            Value::Bytes(bytes) => bytes.as_ptr(),
+            other => panic!("expected bytes value, got {other:?}"),
+        };
+
+        let normalized = normalize_row_with_hints(row, &[Some(ValueHint::Geometry), None]).unwrap();
+
+        assert_eq!(normalized.columns()[0].0.as_ptr(), shape_name_ptr);
+        assert_eq!(normalized.columns()[1].0.as_ptr(), payload_name_ptr);
+
+        match &normalized.columns()[0].1 {
+            Value::Geometry(raw) => assert_eq!(raw.as_ptr(), shape_value_ptr),
+            other => panic!("expected geometry value, got {other:?}"),
+        }
+        match &normalized.columns()[1].1 {
+            Value::Bytes(bytes) => assert_eq!(bytes.as_ptr(), payload_value_ptr),
+            other => panic!("expected bytes value, got {other:?}"),
+        }
     }
 }

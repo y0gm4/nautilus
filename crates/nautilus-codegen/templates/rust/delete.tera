@@ -38,7 +38,7 @@ where
     /// (e.g. MySQL).
     pub(crate) async fn exec(self) -> nautilus_core::Result<Vec<{{ model_name }}>> {
         use nautilus_core::*;
-        use futures::StreamExt;
+        use std::convert::Into;
 
         if self.require_filter && self.filter.is_none() {
             return Err(Error::InvalidQuery(
@@ -64,12 +64,13 @@ where
         let delete = builder.build()?;
         let sql = self.client.dialect().render_delete(&delete)?;
 
-        let stream = self.client.executor().execute(&sql);
-        futures::pin_mut!(stream);
+        let rows = crate::execute_all(self.client.executor(), &sql)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?;
 
-        let mut results = Vec::new();
-        while let Some(result) = stream.next().await {
-            let row: crate::Row = result.map_err(|e| Error::Other(e.to_string()))?.into();
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let row: crate::Row = row.into();
             results.push(decode_model_row_with_hints(row, all_scalar_value_hints())?);
         }
 

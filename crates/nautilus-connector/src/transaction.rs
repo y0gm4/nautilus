@@ -18,6 +18,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::future::BoxFuture;
+use nautilus_core::Value;
 use tokio::sync::Mutex;
 
 use nautilus_dialect::Sql;
@@ -82,6 +84,8 @@ enum TransactionInner {
     Sqlite(Arc<Mutex<Option<sqlx::Transaction<'static, sqlx::Sqlite>>>>),
 }
 
+type TxHandle<DB> = Arc<Mutex<Option<sqlx::Transaction<'static, DB>>>>;
+
 /// An executor that runs queries inside a live database transaction.
 ///
 /// This single type works with PostgreSQL, MySQL, and SQLite, replacing the
@@ -132,35 +136,195 @@ impl TransactionExecutor {
         }
     }
 
+    async fn take_transaction<DB>(tx_arc: &TxHandle<DB>) -> Result<sqlx::Transaction<'static, DB>>
+    where
+        DB: sqlx::Database,
+    {
+        tx_arc
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| Error::database_msg("Transaction already closed"))
+    }
+
+    async fn transaction_is_open<DB>(tx_arc: &TxHandle<DB>) -> bool
+    where
+        DB: sqlx::Database,
+    {
+        tx_arc.lock().await.is_some()
+    }
+
+    fn row_stream_from_rows_future(future: BoxFuture<'static, Result<Vec<Row>>>) -> RowStream {
+        let stream = async_stream::stream! {
+            match future.await {
+                Ok(rows) => {
+                    for row in rows {
+                        yield Ok(row);
+                    }
+                }
+                Err(e) => yield Err(e),
+            }
+        };
+
+        RowStream::new_from_stream(Box::pin(stream))
+    }
+
+    fn execute_affected_on<DB, Bind, RowsAffected>(
+        tx_arc: TxHandle<DB>,
+        sql_text: String,
+        params: Vec<Value>,
+        bind: Bind,
+        rows_affected: RowsAffected,
+    ) -> BoxFuture<'static, Result<usize>>
+    where
+        DB: sqlx::Database + Send + 'static,
+        for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+        for<'q> <DB as sqlx::Database>::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+        for<'q> Bind: Fn(
+                sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>,
+                &'q Value,
+            )
+                -> Result<sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>>
+            + Copy
+            + Send
+            + 'static,
+        RowsAffected: Fn(<DB as sqlx::Database>::QueryResult) -> u64 + Copy + Send + 'static,
+    {
+        Box::pin(async move {
+            let mut guard = tx_arc.lock().await;
+            let tx = guard
+                .as_mut()
+                .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
+            let mut query = sqlx::query(&sql_text);
+            for param in &params {
+                query = bind(query, param)?;
+            }
+
+            use sqlx::Executor as _;
+            let result = (&mut **tx)
+                .execute(query)
+                .await
+                .map_err(|e| Error::database(e, "Mutation failed"))?;
+            Ok(rows_affected(result) as usize)
+        })
+    }
+
+    fn execute_collect_on<DB, Bind, Decode>(
+        tx_arc: TxHandle<DB>,
+        sql_text: String,
+        params: Vec<Value>,
+        bind: Bind,
+        decode: Decode,
+        query_context: &'static str,
+    ) -> BoxFuture<'static, Result<Vec<Row>>>
+    where
+        DB: sqlx::Database + Send + 'static,
+        for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+        for<'q> <DB as sqlx::Database>::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+        for<'q> Bind: Fn(
+                sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>,
+                &'q Value,
+            )
+                -> Result<sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>>
+            + Copy
+            + Send
+            + 'static,
+        Decode: Fn(<DB as sqlx::Database>::Row) -> Result<Row> + Copy + Send + 'static,
+    {
+        Box::pin(async move {
+            let mut guard = tx_arc.lock().await;
+            let tx = guard
+                .as_mut()
+                .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
+
+            let mut query = sqlx::query(&sql_text);
+            for param in &params {
+                query = bind(query, param)?;
+            }
+
+            use sqlx::Executor as _;
+            let rows = (&mut **tx)
+                .fetch_all(query)
+                .await
+                .map_err(|e| Error::database(e, query_context))?;
+            drop(guard);
+
+            rows.into_iter().map(decode).collect()
+        })
+    }
+
+    fn execute_and_fetch_collect_on<DB, Bind, Decode>(
+        tx_arc: TxHandle<DB>,
+        mutation_text: String,
+        mutation_params: Vec<Value>,
+        fetch_text: String,
+        fetch_params: Vec<Value>,
+        bind: Bind,
+        decode: Decode,
+    ) -> BoxFuture<'static, Result<Vec<Row>>>
+    where
+        DB: sqlx::Database + Send + 'static,
+        for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+        for<'q> <DB as sqlx::Database>::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+        for<'q> Bind: Fn(
+                sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>,
+                &'q Value,
+            )
+                -> Result<sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>>
+            + Copy
+            + Send
+            + 'static,
+        Decode: Fn(<DB as sqlx::Database>::Row) -> Result<Row> + Copy + Send + 'static,
+    {
+        Box::pin(async move {
+            let mut guard = tx_arc.lock().await;
+            let tx = guard
+                .as_mut()
+                .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
+
+            let mut mutation_query = sqlx::query(&mutation_text);
+            for param in &mutation_params {
+                mutation_query = bind(mutation_query, param)?;
+            }
+
+            use sqlx::Executor as _;
+            (&mut **tx)
+                .execute(mutation_query)
+                .await
+                .map_err(|e| Error::database(e, "Mutation failed"))?;
+
+            let mut fetch_query = sqlx::query(&fetch_text);
+            for param in &fetch_params {
+                fetch_query = bind(fetch_query, param)?;
+            }
+
+            let rows = (&mut **tx)
+                .fetch_all(fetch_query)
+                .await
+                .map_err(|e| Error::database(e, "Fetch failed"))?;
+            drop(guard);
+
+            rows.into_iter().map(decode).collect()
+        })
+    }
+
     /// Commit the transaction. After this, further queries will return an error.
     pub async fn commit(&self) -> Result<()> {
         match &self.inner {
             TransactionInner::Postgres(mx) => {
-                let tx = mx
-                    .lock()
-                    .await
-                    .take()
-                    .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
+                let tx = Self::take_transaction(mx).await?;
                 tx.commit()
                     .await
                     .map_err(|e| Error::database(e, "Commit failed"))
             }
             TransactionInner::Mysql(mx) => {
-                let tx = mx
-                    .lock()
-                    .await
-                    .take()
-                    .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
+                let tx = Self::take_transaction(mx).await?;
                 tx.commit()
                     .await
                     .map_err(|e| Error::database(e, "Commit failed"))
             }
             TransactionInner::Sqlite(mx) => {
-                let tx = mx
-                    .lock()
-                    .await
-                    .take()
-                    .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
+                let tx = Self::take_transaction(mx).await?;
                 tx.commit()
                     .await
                     .map_err(|e| Error::database(e, "Commit failed"))
@@ -172,31 +336,19 @@ impl TransactionExecutor {
     pub async fn rollback(&self) -> Result<()> {
         match &self.inner {
             TransactionInner::Postgres(mx) => {
-                let tx = mx
-                    .lock()
-                    .await
-                    .take()
-                    .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
+                let tx = Self::take_transaction(mx).await?;
                 tx.rollback()
                     .await
                     .map_err(|e| Error::database(e, "Rollback failed"))
             }
             TransactionInner::Mysql(mx) => {
-                let tx = mx
-                    .lock()
-                    .await
-                    .take()
-                    .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
+                let tx = Self::take_transaction(mx).await?;
                 tx.rollback()
                     .await
                     .map_err(|e| Error::database(e, "Rollback failed"))
             }
             TransactionInner::Sqlite(mx) => {
-                let tx = mx
-                    .lock()
-                    .await
-                    .take()
-                    .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
+                let tx = Self::take_transaction(mx).await?;
                 tx.rollback()
                     .await
                     .map_err(|e| Error::database(e, "Rollback failed"))
@@ -207,9 +359,9 @@ impl TransactionExecutor {
     /// Returns `true` if the transaction has not yet been committed or rolled back.
     pub async fn is_open(&self) -> bool {
         match &self.inner {
-            TransactionInner::Postgres(mx) => mx.lock().await.is_some(),
-            TransactionInner::Mysql(mx) => mx.lock().await.is_some(),
-            TransactionInner::Sqlite(mx) => mx.lock().await.is_some(),
+            TransactionInner::Postgres(mx) => Self::transaction_is_open(mx).await,
+            TransactionInner::Mysql(mx) => Self::transaction_is_open(mx).await,
+            TransactionInner::Sqlite(mx) => Self::transaction_is_open(mx).await,
         }
     }
 
@@ -221,52 +373,34 @@ impl TransactionExecutor {
     pub async fn execute_affected(&self, sql: &Sql) -> Result<usize> {
         match &self.inner {
             TransactionInner::Postgres(tx_arc) => {
-                let mut guard = tx_arc.lock().await;
-                let tx = guard
-                    .as_mut()
-                    .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
-                let mut query = sqlx::query(&sql.text);
-                for param in &sql.params {
-                    query = crate::postgres::bind_value(query, param)?;
-                }
-                use sqlx::Executor as _;
-                let result = (&mut **tx)
-                    .execute(query)
-                    .await
-                    .map_err(|e| Error::database(e, "Mutation failed"))?;
-                Ok(result.rows_affected() as usize)
+                Self::execute_affected_on(
+                    Arc::clone(tx_arc),
+                    sql.text.clone(),
+                    sql.params.clone(),
+                    crate::postgres::bind_value,
+                    |result: sqlx::postgres::PgQueryResult| result.rows_affected(),
+                )
+                .await
             }
             TransactionInner::Mysql(tx_arc) => {
-                let mut guard = tx_arc.lock().await;
-                let tx = guard
-                    .as_mut()
-                    .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
-                let mut query = sqlx::query(&sql.text);
-                for param in &sql.params {
-                    query = crate::mysql::bind_value(query, param)?;
-                }
-                use sqlx::Executor as _;
-                let result = (&mut **tx)
-                    .execute(query)
-                    .await
-                    .map_err(|e| Error::database(e, "Mutation failed"))?;
-                Ok(result.rows_affected() as usize)
+                Self::execute_affected_on(
+                    Arc::clone(tx_arc),
+                    sql.text.clone(),
+                    sql.params.clone(),
+                    crate::mysql::bind_value,
+                    |result: sqlx::mysql::MySqlQueryResult| result.rows_affected(),
+                )
+                .await
             }
             TransactionInner::Sqlite(tx_arc) => {
-                let mut guard = tx_arc.lock().await;
-                let tx = guard
-                    .as_mut()
-                    .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
-                let mut query = sqlx::query(&sql.text);
-                for param in &sql.params {
-                    query = crate::sqlite::bind_value(query, param)?;
-                }
-                use sqlx::Executor as _;
-                let result = (&mut **tx)
-                    .execute(query)
-                    .await
-                    .map_err(|e| Error::database(e, "Mutation failed"))?;
-                Ok(result.rows_affected() as usize)
+                Self::execute_affected_on(
+                    Arc::clone(tx_arc),
+                    sql.text.clone(),
+                    sql.params.clone(),
+                    crate::sqlite::bind_value,
+                    |result: sqlx::sqlite::SqliteQueryResult| result.rows_affected(),
+                )
+                .await
             }
         }
     }
@@ -283,99 +417,36 @@ impl Executor for TransactionExecutor {
         Self: 'conn;
 
     fn execute<'conn>(&'conn self, sql: &'conn Sql) -> Self::RowStream<'conn> {
-        let sql_text = sql.text.clone();
-        let params = sql.params.clone();
-
         match &self.inner {
             TransactionInner::Postgres(tx_arc) => {
-                let tx_arc = Arc::clone(tx_arc);
-                let stream = async_stream::stream! {
-                    let mut guard = tx_arc.lock().await;
-                    let tx = match guard.as_mut() {
-                        Some(tx) => tx,
-                        None => { yield Err(Error::database_msg("Transaction already closed")); return; }
-                    };
-                    let mut query = sqlx::query(&sql_text);
-                    for param in &params {
-                        query = match crate::postgres::bind_value(query, param) {
-                            Ok(q) => q,
-                            Err(e) => { yield Err(e); return; }
-                        };
-                    }
-                    use sqlx::Executor as _;
-                    let rows = match (&mut **tx).fetch_all(query).await {
-                        Ok(rows) => rows,
-                        Err(e) => { yield Err(Error::database(e, "Query failed")); return; }
-                    };
-                    drop(guard);
-                    for row in rows {
-                        match crate::postgres_stream::decode_row_internal(row) {
-                            Ok(r) => yield Ok(r),
-                            Err(e) => yield Err(e),
-                        }
-                    }
-                };
-                RowStream::new_from_stream(Box::pin(stream))
+                Self::row_stream_from_rows_future(Self::execute_collect_on(
+                    Arc::clone(tx_arc),
+                    sql.text.clone(),
+                    sql.params.clone(),
+                    crate::postgres::bind_value,
+                    crate::postgres_stream::decode_row_internal,
+                    "Query failed",
+                ))
             }
             TransactionInner::Mysql(tx_arc) => {
-                let tx_arc = Arc::clone(tx_arc);
-                let stream = async_stream::stream! {
-                    let mut guard = tx_arc.lock().await;
-                    let tx = match guard.as_mut() {
-                        Some(tx) => tx,
-                        None => { yield Err(Error::database_msg("Transaction already closed")); return; }
-                    };
-                    let mut query = sqlx::query(&sql_text);
-                    for param in &params {
-                        query = match crate::mysql::bind_value(query, param) {
-                            Ok(q) => q,
-                            Err(e) => { yield Err(e); return; }
-                        };
-                    }
-                    use sqlx::Executor as _;
-                    let rows = match (&mut **tx).fetch_all(query).await {
-                        Ok(rows) => rows,
-                        Err(e) => { yield Err(Error::database(e, "Query failed")); return; }
-                    };
-                    drop(guard);
-                    for row in rows {
-                        match crate::mysql_stream::decode_row_internal(row) {
-                            Ok(r) => yield Ok(r),
-                            Err(e) => yield Err(e),
-                        }
-                    }
-                };
-                RowStream::new_from_stream(Box::pin(stream))
+                Self::row_stream_from_rows_future(Self::execute_collect_on(
+                    Arc::clone(tx_arc),
+                    sql.text.clone(),
+                    sql.params.clone(),
+                    crate::mysql::bind_value,
+                    crate::mysql_stream::decode_row_internal,
+                    "Query failed",
+                ))
             }
             TransactionInner::Sqlite(tx_arc) => {
-                let tx_arc = Arc::clone(tx_arc);
-                let stream = async_stream::stream! {
-                    let mut guard = tx_arc.lock().await;
-                    let tx = match guard.as_mut() {
-                        Some(tx) => tx,
-                        None => { yield Err(Error::database_msg("Transaction already closed")); return; }
-                    };
-                    let mut query = sqlx::query(&sql_text);
-                    for param in &params {
-                        query = match crate::sqlite::bind_value(query, param) {
-                            Ok(q) => q,
-                            Err(e) => { yield Err(e); return; }
-                        };
-                    }
-                    use sqlx::Executor as _;
-                    let rows = match (&mut **tx).fetch_all(query).await {
-                        Ok(rows) => rows,
-                        Err(e) => { yield Err(Error::database(e, "Query failed")); return; }
-                    };
-                    drop(guard);
-                    for row in rows {
-                        match crate::sqlite_stream::decode_row_internal(row) {
-                            Ok(r) => yield Ok(r),
-                            Err(e) => yield Err(e),
-                        }
-                    }
-                };
-                RowStream::new_from_stream(Box::pin(stream))
+                Self::row_stream_from_rows_future(Self::execute_collect_on(
+                    Arc::clone(tx_arc),
+                    sql.text.clone(),
+                    sql.params.clone(),
+                    crate::sqlite::bind_value,
+                    crate::sqlite_stream::decode_row_internal,
+                    "Query failed",
+                ))
             }
         }
     }
@@ -385,132 +456,75 @@ impl Executor for TransactionExecutor {
         mutation: &'conn Sql,
         fetch: &'conn Sql,
     ) -> Self::RowStream<'conn> {
-        let mutation_text = mutation.text.clone();
-        let mutation_params = mutation.params.clone();
-        let fetch_text = fetch.text.clone();
-        let fetch_params = fetch.params.clone();
-
         match &self.inner {
             TransactionInner::Postgres(tx_arc) => {
-                let tx_arc = Arc::clone(tx_arc);
-                let stream = async_stream::stream! {
-                    let mut guard = tx_arc.lock().await;
-                    let tx = match guard.as_mut() {
-                        Some(tx) => tx,
-                        None => { yield Err(Error::database_msg("Transaction already closed")); return; }
-                    };
-                    let mut mq = sqlx::query(&mutation_text);
-                    for param in &mutation_params {
-                        mq = match crate::postgres::bind_value(mq, param) {
-                            Ok(q) => q,
-                            Err(e) => { yield Err(e); return; }
-                        };
-                    }
-                    use sqlx::Executor as _;
-                    if let Err(e) = (&mut **tx).execute(mq).await {
-                        yield Err(Error::database(e, "Mutation failed")); return;
-                    }
-                    let mut fq = sqlx::query(&fetch_text);
-                    for param in &fetch_params {
-                        fq = match crate::postgres::bind_value(fq, param) {
-                            Ok(q) => q,
-                            Err(e) => { yield Err(e); return; }
-                        };
-                    }
-                    let rows = match (&mut **tx).fetch_all(fq).await {
-                        Ok(rows) => rows,
-                        Err(e) => { yield Err(Error::database(e, "Fetch failed")); return; }
-                    };
-                    drop(guard);
-                    for row in rows {
-                        match crate::postgres_stream::decode_row_internal(row) {
-                            Ok(r) => yield Ok(r),
-                            Err(e) => yield Err(e),
-                        }
-                    }
-                };
-                RowStream::new_from_stream(Box::pin(stream))
+                Self::row_stream_from_rows_future(Self::execute_and_fetch_collect_on(
+                    Arc::clone(tx_arc),
+                    mutation.text.clone(),
+                    mutation.params.clone(),
+                    fetch.text.clone(),
+                    fetch.params.clone(),
+                    crate::postgres::bind_value,
+                    crate::postgres_stream::decode_row_internal,
+                ))
             }
             TransactionInner::Mysql(tx_arc) => {
-                let tx_arc = Arc::clone(tx_arc);
-                let stream = async_stream::stream! {
-                    let mut guard = tx_arc.lock().await;
-                    let tx = match guard.as_mut() {
-                        Some(tx) => tx,
-                        None => { yield Err(Error::database_msg("Transaction already closed")); return; }
-                    };
-                    let mut mq = sqlx::query(&mutation_text);
-                    for param in &mutation_params {
-                        mq = match crate::mysql::bind_value(mq, param) {
-                            Ok(q) => q,
-                            Err(e) => { yield Err(e); return; }
-                        };
-                    }
-                    use sqlx::Executor as _;
-                    if let Err(e) = (&mut **tx).execute(mq).await {
-                        yield Err(Error::database(e, "Mutation failed")); return;
-                    }
-                    let mut fq = sqlx::query(&fetch_text);
-                    for param in &fetch_params {
-                        fq = match crate::mysql::bind_value(fq, param) {
-                            Ok(q) => q,
-                            Err(e) => { yield Err(e); return; }
-                        };
-                    }
-                    let rows = match (&mut **tx).fetch_all(fq).await {
-                        Ok(rows) => rows,
-                        Err(e) => { yield Err(Error::database(e, "Fetch failed")); return; }
-                    };
-                    drop(guard);
-                    for row in rows {
-                        match crate::mysql_stream::decode_row_internal(row) {
-                            Ok(r) => yield Ok(r),
-                            Err(e) => yield Err(e),
-                        }
-                    }
-                };
-                RowStream::new_from_stream(Box::pin(stream))
+                Self::row_stream_from_rows_future(Self::execute_and_fetch_collect_on(
+                    Arc::clone(tx_arc),
+                    mutation.text.clone(),
+                    mutation.params.clone(),
+                    fetch.text.clone(),
+                    fetch.params.clone(),
+                    crate::mysql::bind_value,
+                    crate::mysql_stream::decode_row_internal,
+                ))
             }
             TransactionInner::Sqlite(tx_arc) => {
-                let tx_arc = Arc::clone(tx_arc);
-                let stream = async_stream::stream! {
-                    let mut guard = tx_arc.lock().await;
-                    let tx = match guard.as_mut() {
-                        Some(tx) => tx,
-                        None => { yield Err(Error::database_msg("Transaction already closed")); return; }
-                    };
-                    let mut mq = sqlx::query(&mutation_text);
-                    for param in &mutation_params {
-                        mq = match crate::sqlite::bind_value(mq, param) {
-                            Ok(q) => q,
-                            Err(e) => { yield Err(e); return; }
-                        };
-                    }
-                    use sqlx::Executor as _;
-                    if let Err(e) = (&mut **tx).execute(mq).await {
-                        yield Err(Error::database(e, "Mutation failed")); return;
-                    }
-                    let mut fq = sqlx::query(&fetch_text);
-                    for param in &fetch_params {
-                        fq = match crate::sqlite::bind_value(fq, param) {
-                            Ok(q) => q,
-                            Err(e) => { yield Err(e); return; }
-                        };
-                    }
-                    let rows = match (&mut **tx).fetch_all(fq).await {
-                        Ok(rows) => rows,
-                        Err(e) => { yield Err(Error::database(e, "Fetch failed")); return; }
-                    };
-                    drop(guard);
-                    for row in rows {
-                        match crate::sqlite_stream::decode_row_internal(row) {
-                            Ok(r) => yield Ok(r),
-                            Err(e) => yield Err(e),
-                        }
-                    }
-                };
-                RowStream::new_from_stream(Box::pin(stream))
+                Self::row_stream_from_rows_future(Self::execute_and_fetch_collect_on(
+                    Arc::clone(tx_arc),
+                    mutation.text.clone(),
+                    mutation.params.clone(),
+                    fetch.text.clone(),
+                    fetch.params.clone(),
+                    crate::sqlite::bind_value,
+                    crate::sqlite_stream::decode_row_internal,
+                ))
             }
+        }
+    }
+
+    fn execute_collect<'conn>(
+        &'conn self,
+        sql: &'conn Sql,
+    ) -> BoxFuture<'conn, Result<Vec<Self::Row<'conn>>>>
+    where
+        Self: 'conn,
+    {
+        match &self.inner {
+            TransactionInner::Postgres(tx_arc) => Self::execute_collect_on(
+                Arc::clone(tx_arc),
+                sql.text.clone(),
+                sql.params.clone(),
+                crate::postgres::bind_value,
+                crate::postgres_stream::decode_row_internal,
+                "Query failed",
+            ),
+            TransactionInner::Mysql(tx_arc) => Self::execute_collect_on(
+                Arc::clone(tx_arc),
+                sql.text.clone(),
+                sql.params.clone(),
+                crate::mysql::bind_value,
+                crate::mysql_stream::decode_row_internal,
+                "Query failed",
+            ),
+            TransactionInner::Sqlite(tx_arc) => Self::execute_collect_on(
+                Arc::clone(tx_arc),
+                sql.text.clone(),
+                sql.params.clone(),
+                crate::sqlite::bind_value,
+                crate::sqlite_stream::decode_row_internal,
+                "Query failed",
+            ),
         }
     }
 }

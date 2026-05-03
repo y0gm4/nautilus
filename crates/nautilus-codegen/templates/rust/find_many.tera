@@ -111,6 +111,7 @@ where
     /// Execute the query and return all rows.
     pub(crate) async fn exec(self) -> nautilus_core::Result<Vec<{{ model_name }}>> {
         use nautilus_core::*;
+        use std::convert::Into;
 
         let client = self.client;
         let mut builder = Select::from_table("{{ table_name }}");
@@ -217,12 +218,13 @@ where
         let select = builder.build()?;
         let sql = client.dialect().render_select(&select)?;
 
-        let stream = client.executor().execute(&sql);
-        futures::pin_mut!(stream);
+        let rows = crate::execute_all(client.executor(), &sql)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?;
 
-        let mut results = Vec::new();
-        while let Some(result) = stream.next().await {
-            let row: crate::Row = result.map_err(|e| Error::Other(e.to_string()))?.into();
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let row: crate::Row = row.into();
             let decoded = decode_model_row_with_hints(row, &row_hints)?;
             results.push(decoded);
         }

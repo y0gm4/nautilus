@@ -214,6 +214,11 @@ fn test_write_rust_code_lib_rs_contains_template_exports() {
         "lib.rs should re-export ConnectorPoolOptions for runtime tuning:\n{lib_content}"
     );
     assert!(
+        lib_content
+            .contains("pub use nautilus_connector::{execute_all, execute_one, execute_optional};"),
+        "lib.rs should re-export execute helpers for generated fast paths:\n{lib_content}"
+    );
+    assert!(
         lib_content.contains("pub use user::*;"),
         "lib.rs should re-export models:\n{lib_content}"
     );
@@ -265,6 +270,29 @@ fn test_write_rust_code_runtime_exposes_pool_options_for_embedded_and_direct_pat
     assert!(
         runtime_content.contains("pool_options: ConnectorPoolOptions"),
         "runtime.rs should store pool options on the generated client:\n{runtime_content}"
+    );
+}
+
+#[test]
+fn test_write_rust_code_uses_execute_fast_paths_in_generated_queries() {
+    let ir = validate(SIMPLE_SCHEMA);
+    let models = generate_all_models(&ir, false);
+    let tmp = tempfile::TempDir::new().expect("failed to create temp dir");
+    let path = tmp.path().to_str().unwrap();
+
+    write_rust_code(path, &models, None, None, &[], SIMPLE_SCHEMA, false)
+        .expect("write_rust_code failed");
+
+    let user_content =
+        std::fs::read_to_string(tmp.path().join("src").join("user.rs")).expect("missing user.rs");
+
+    assert!(
+        user_content.contains("crate::execute_all("),
+        "generated query builders should use execute_all fast paths when collecting rows:\n{user_content}"
+    );
+    assert!(
+        user_content.contains("crate::execute_one("),
+        "generated create builders should use execute_one for single-row mutations:\n{user_content}"
     );
 }
 

@@ -148,16 +148,21 @@ pub fn normalize_row_with_hints(
         )));
     }
 
+    if hints.iter().all(Option::is_none) {
+        return Ok(row);
+    }
+
     let columns = row
-        .columns()
-        .iter()
+        .into_columns()
+        .into_iter()
+        .zip(hints.iter().copied())
         .enumerate()
-        .map(|(idx, (name, value))| {
-            let normalized = match hints[idx] {
-                Some(hint) => normalize_value_with_hint(name, idx, value.clone(), hint)?,
-                None => value.clone(),
+        .map(|(idx, ((name, value), hint))| {
+            let normalized = match hint {
+                Some(hint) => normalize_value_with_hint(&name, idx, value, hint)?,
+                None => value,
             };
-            Ok::<(String, Value), ProtocolError>((name.clone(), normalized))
+            Ok::<(String, Value), ProtocolError>((name, normalized))
         })
         .collect::<std::result::Result<Vec<_>, ProtocolError>>()?;
 

@@ -71,6 +71,11 @@ impl Row {
     pub fn columns(&self) -> &[(String, Value)] {
         &self.columns
     }
+
+    /// Consume the row and return the owned columns.
+    pub fn into_columns(self) -> Vec<(String, Value)> {
+        self.columns
+    }
 }
 
 /// Implement RowAccess trait for the owned Row type.

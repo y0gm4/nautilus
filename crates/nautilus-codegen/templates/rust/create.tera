@@ -32,6 +32,7 @@ where
     /// Execute the create query.
     pub(crate) async fn exec(self) -> nautilus_core::Result<{{ model_name }}> {
         use nautilus_core::*;
+        use std::convert::Into;
 
         let mut columns = Vec::new();
         let mut values = Vec::new();
@@ -60,13 +61,8 @@ where
         let insert = builder.build()?;
         let sql = self.client.dialect().render_insert(&insert)?;
 
-        let stream = self.client.executor().execute(&sql);
-        futures::pin_mut!(stream);
-
-        let row: Row = stream
-            .next()
+        let row: Row = crate::execute_one(self.client.executor(), &sql)
             .await
-            .ok_or_else(|| Error::Other("INSERT returned no rows".to_string()))?
             .map_err(|e| Error::Other(e.to_string()))?
             .into();
 

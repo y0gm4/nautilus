@@ -54,6 +54,7 @@ where
     /// Execute the batch create using a single multi-row `INSERT`.
     pub(crate) async fn exec(self) -> nautilus_core::Result<Vec<{{ model_name }}>> {
         use nautilus_core::*;
+        use std::convert::Into;
 
         if self.entries.is_empty() {
             return Ok(vec![]);
@@ -101,12 +102,13 @@ where
         let insert = builder.build()?;
         let sql = self.client.dialect().render_insert(&insert)?;
 
-        let stream = self.client.executor().execute(&sql);
-        futures::pin_mut!(stream);
+        let rows = crate::execute_all(self.client.executor(), &sql)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?;
 
-        let mut results = Vec::with_capacity(self.entries.len());
-        while let Some(result) = stream.next().await {
-            let row: crate::Row = result.map_err(|e| Error::Other(e.to_string()))?.into();
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let row: crate::Row = row.into();
             let decoded = decode_model_row_with_hints(row, all_scalar_value_hints())?;
             results.push(decoded);
         }

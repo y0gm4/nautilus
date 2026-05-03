@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::error::{ConnectorError as Error, Result};
 use crate::{ConnectorPoolOptions, Executor, PgRowStream, Row};
+use futures::future::BoxFuture;
 use nautilus_core::Value;
 use nautilus_dialect::Sql;
 use sqlx::postgres::types::PgHstore;
@@ -213,6 +214,42 @@ impl Executor for PgExecutor {
         };
 
         PgRowStream::new_from_stream(Box::pin(stream))
+    }
+
+    fn execute_collect<'conn>(
+        &'conn self,
+        sql: &'conn Sql,
+    ) -> BoxFuture<'conn, Result<Vec<Self::Row<'conn>>>>
+    where
+        Self: 'conn,
+    {
+        let pool = self.pool.clone();
+        let sql_text = sql.text.clone();
+        let params = sql.params.clone();
+
+        Box::pin(async move {
+            let mut conn = pool
+                .acquire()
+                .await
+                .map_err(|e| Error::connection(e, "Failed to acquire connection"))?;
+
+            let mut query = sqlx::query(&sql_text);
+            for param in &params {
+                query = bind_value(query, param)?;
+            }
+
+            let pg_rows = query
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(|e| Error::database(e, "Query execution failed"))?;
+
+            drop(conn);
+
+            pg_rows
+                .into_iter()
+                .map(crate::postgres_stream::decode_row_internal)
+                .collect()
+        })
     }
 }
 
