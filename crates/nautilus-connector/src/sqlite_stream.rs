@@ -10,7 +10,7 @@ use sqlx::{Column, Row as SqlxRow, TypeInfo, ValueRef};
 /// Stream type for SQLite query results.
 ///
 /// A thin alias for the shared [`RowStream`] type.
-pub type SqliteRowStream = RowStream;
+pub type SqliteRowStream<'conn> = RowStream<'conn>;
 
 /// Decode a sqlx `SqliteRow` into a Nautilus `Row`.
 ///

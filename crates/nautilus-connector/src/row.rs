@@ -1,13 +1,101 @@
 //! Row representation for database results.
 
 use nautilus_core::{RowAccess, Value};
+use rustc_hash::FxHasher;
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::OnceLock;
+
+const LINEAR_SCAN_LOOKUP_THRESHOLD: usize = 8;
+
+type NameIndexMap = HashMap<u64, NameIndexEntry, BuildHasherDefault<U64IdentityHasher>>;
+
+#[derive(Debug)]
+enum NameIndexEntry {
+    Single(usize),
+    Multiple(Vec<usize>),
+}
+
+#[derive(Debug)]
+struct RowNameIndex {
+    entries: NameIndexMap,
+}
+
+#[derive(Default)]
+struct U64IdentityHasher(u64);
+
+impl Hasher for U64IdentityHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut hasher = FxHasher::default();
+        hasher.write(bytes);
+        self.0 = hasher.finish();
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 = value;
+    }
+}
+
+impl RowNameIndex {
+    fn new(columns: &[(String, Value)]) -> Self {
+        let mut entries =
+            NameIndexMap::with_capacity_and_hasher(columns.len(), BuildHasherDefault::default());
+
+        for (idx, (name, _)) in columns.iter().enumerate() {
+            let hash = hash_column_name(name);
+            match entries.entry(hash) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(NameIndexEntry::Single(idx));
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => match entry.get_mut() {
+                    NameIndexEntry::Single(first_idx) => {
+                        let existing = *first_idx;
+                        entry.insert(NameIndexEntry::Multiple(vec![existing, idx]));
+                    }
+                    NameIndexEntry::Multiple(indices) => indices.push(idx),
+                },
+            }
+        }
+
+        Self { entries }
+    }
+
+    fn find(&self, columns: &[(String, Value)], name: &str) -> Option<usize> {
+        self.find_hashed(columns, hash_column_name(name), name)
+    }
+
+    fn find_hashed(&self, columns: &[(String, Value)], hash: u64, name: &str) -> Option<usize> {
+        let entry = self.entries.get(&hash)?;
+        match entry {
+            NameIndexEntry::Single(idx) => {
+                let (column_name, _) = columns.get(*idx)?;
+                (column_name == name).then_some(*idx)
+            }
+            NameIndexEntry::Multiple(indices) => indices.iter().copied().find(|idx| {
+                columns
+                    .get(*idx)
+                    .is_some_and(|(column_name, _)| column_name == name)
+            }),
+        }
+    }
+}
+
+/// Hash a column name with `rustc-hash`'s lightweight `FxHasher`.
+fn hash_column_name(name: &str) -> u64 {
+    let mut hasher = FxHasher::default();
+    hasher.write(name.as_bytes());
+    hasher.finish()
+}
 
 /// A database row with hybrid access patterns.
 ///
 /// Stores columns as `Vec<(String, Value)>` to preserve order and allow duplicates.
-/// Lazily builds a name-to-index map on first `get()` call for efficient lookup.
+/// Small rows use a linear scan to avoid index-allocation overhead; wider rows
+/// lazily build a compact name-to-index map on first `get()` call.
 ///
 /// ## Duplicate Column Policy
 ///
@@ -15,7 +103,7 @@ use std::sync::OnceLock;
 #[derive(Debug)]
 pub struct Row {
     columns: Vec<(String, Value)>,
-    index: OnceLock<HashMap<String, usize>>,
+    index: OnceLock<RowNameIndex>,
 }
 
 impl Row {
@@ -34,17 +122,21 @@ impl Row {
 
     /// Get a value by column name.
     ///
-    /// Lazily builds an index on first call. If duplicate columns exist,
-    /// returns the first occurrence.
+    /// Narrow rows use a direct scan. Wider rows lazily build an index on the
+    /// first lookup. If duplicate columns exist, returns the first occurrence.
     pub fn get(&self, name: &str) -> Option<&Value> {
-        let index = self.index.get_or_init(|| {
-            let mut map = HashMap::new();
-            for (i, (col_name, _)) in self.columns.iter().enumerate() {
-                map.entry(col_name.clone()).or_insert(i);
-            }
-            map
-        });
-        index.get(name).and_then(|&idx| self.get_by_pos(idx))
+        if self.columns.len() <= LINEAR_SCAN_LOOKUP_THRESHOLD {
+            return self
+                .columns
+                .iter()
+                .find(|(column_name, _)| column_name == name)
+                .map(|(_, value)| value);
+        }
+
+        let index = self.index.get_or_init(|| RowNameIndex::new(&self.columns));
+        index
+            .find(&self.columns, name)
+            .and_then(|idx| self.get_by_pos(idx))
     }
 
     /// Get the column name at the given position.
@@ -193,5 +285,35 @@ mod tests {
         assert_eq!(cols[0].1, Value::I64(10));
         assert_eq!(cols[1].0, "y");
         assert_eq!(cols[1].1, Value::Bool(false));
+    }
+
+    #[test]
+    fn test_row_wide_named_access_uses_index_without_cloning_names() {
+        let mut columns = Vec::new();
+        for idx in 0..=LINEAR_SCAN_LOOKUP_THRESHOLD {
+            columns.push((format!("col_{idx}"), Value::I64(idx as i64)));
+        }
+        let row = Row::new(columns);
+
+        assert_eq!(
+            row.get(&format!("col_{}", LINEAR_SCAN_LOOKUP_THRESHOLD)),
+            Some(&Value::I64(LINEAR_SCAN_LOOKUP_THRESHOLD as i64))
+        );
+        assert_eq!(row.get("missing"), None);
+    }
+
+    #[test]
+    fn test_row_name_index_disambiguates_colliding_candidates() {
+        let columns = vec![
+            ("first".to_string(), Value::I64(1)),
+            ("second".to_string(), Value::I64(2)),
+        ];
+        let mut entries = NameIndexMap::with_capacity_and_hasher(1, BuildHasherDefault::default());
+        entries.insert(42, NameIndexEntry::Multiple(vec![0, 1]));
+        let index = RowNameIndex { entries };
+
+        assert_eq!(index.find_hashed(&columns, 42, "first"), Some(0));
+        assert_eq!(index.find_hashed(&columns, 42, "second"), Some(1));
+        assert_eq!(index.find_hashed(&columns, 42, "third"), None);
     }
 }

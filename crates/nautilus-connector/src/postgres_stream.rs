@@ -12,7 +12,7 @@ use uuid::Uuid;
 /// Stream type for PostgreSQL query results.
 ///
 /// A thin alias for the shared [`RowStream`] type.
-pub type PgRowStream = RowStream;
+pub type PgRowStream<'conn> = RowStream<'conn>;
 
 /// Decode a sqlx `PgRow` into a Nautilus `Row`.
 ///

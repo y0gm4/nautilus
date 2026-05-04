@@ -68,155 +68,19 @@ impl MysqlExecutor {
             .map_err(|e| Error::database(e, "DDL error"))
     }
 
-    impl_execute_affected!();
-}
-
-/// [`Executor`] implementation backed by a MySQL connection pool.
-impl Executor for MysqlExecutor {
-    type Row<'conn>
-        = Row
-    where
-        Self: 'conn;
-    type RowStream<'conn>
-        = MysqlRowStream
-    where
-        Self: 'conn;
-
-    fn execute<'conn>(&'conn self, sql: &'conn Sql) -> Self::RowStream<'conn> {
-        let pool = self.pool.clone();
-        let sql_text = sql.text.clone();
-        let params = sql.params.clone();
-
-        let stream = async_stream::stream! {
-            let mut conn = match pool.acquire().await {
-                Ok(c) => c,
-                Err(e) => {
-                    yield Err(Error::connection(e, "Failed to acquire connection"));
-                    return;
-                }
-            };
-
-            let mut query = sqlx::query(&sql_text);
-            for param in &params {
-                query = match bind_value(query, param) {
-                    Ok(q) => q,
-                    Err(e) => {
-                        yield Err(e);
-                        return;
-                    }
-                };
-            }
-
-            let mysql_rows = match query.fetch_all(&mut *conn).await {
-                Ok(rows) => rows,
-                Err(e) => {
-                    yield Err(Error::database(e, "Query execution failed"));
-                    return;
-                }
-            };
-
-            drop(conn);
-
-            for mysql_row in mysql_rows {
-                match crate::mysql_stream::decode_row_internal(mysql_row) {
-                    Ok(row) => yield Ok(row),
-                    Err(e) => yield Err(e),
-                }
-            }
-        };
-
-        MysqlRowStream::new_from_stream(Box::pin(stream))
-    }
-
-    fn execute_and_fetch<'conn>(
-        &'conn self,
-        mutation: &'conn Sql,
-        fetch: &'conn Sql,
-    ) -> Self::RowStream<'conn> {
-        let pool = self.pool.clone();
-        let mutation_text = mutation.text.clone();
-        let mutation_params = mutation.params.clone();
-        let fetch_text = fetch.text.clone();
-        let fetch_params = fetch.params.clone();
-
-        let stream = async_stream::stream! {
-            use sqlx::Executor as _;
-
-            let mut conn = match pool.acquire().await {
-                Ok(c) => c,
-                Err(e) => {
-                    yield Err(Error::connection(e, "Failed to acquire connection"));
-                    return;
-                }
-            };
-
-            let mut mutation_query = sqlx::query(&mutation_text);
-            for param in &mutation_params {
-                mutation_query = match bind_value(mutation_query, param) {
-                    Ok(q) => q,
-                    Err(e) => {
-                        yield Err(e);
-                        return;
-                    }
-                };
-            }
-
-            if let Err(e) = (&mut *conn).execute(mutation_query).await {
-                yield Err(Error::database(e, "Mutation failed"));
-                return;
-            }
-
-            let mut fetch_query = sqlx::query(&fetch_text);
-            for param in &fetch_params {
-                fetch_query = match bind_value(fetch_query, param) {
-                    Ok(q) => q,
-                    Err(e) => {
-                        yield Err(e);
-                        return;
-                    }
-                };
-            }
-
-            let mysql_rows = match fetch_query.fetch_all(&mut *conn).await {
-                Ok(rows) => rows,
-                Err(e) => {
-                    yield Err(Error::database(e, "Fetch failed"));
-                    return;
-                }
-            };
-
-            drop(conn);
-
-            for mysql_row in mysql_rows {
-                match crate::mysql_stream::decode_row_internal(mysql_row) {
-                    Ok(row) => yield Ok(row),
-                    Err(e) => yield Err(e),
-                }
-            }
-        };
-
-        MysqlRowStream::new_from_stream(Box::pin(stream))
-    }
-
-    fn execute_collect<'conn>(
+    fn execute_collect_internal<'conn>(
         &'conn self,
         sql: &'conn Sql,
-    ) -> BoxFuture<'conn, Result<Vec<Self::Row<'conn>>>>
-    where
-        Self: 'conn,
-    {
-        let pool = self.pool.clone();
-        let sql_text = sql.text.clone();
-        let params = sql.params.clone();
-
+    ) -> BoxFuture<'conn, Result<Vec<Row>>> {
         Box::pin(async move {
-            let mut conn = pool
+            let mut conn = self
+                .pool
                 .acquire()
                 .await
                 .map_err(|e| Error::connection(e, "Failed to acquire connection"))?;
 
-            let mut query = sqlx::query(&sql_text);
-            for param in &params {
+            let mut query = sqlx::query(&sql.text);
+            for param in &sql.params {
                 query = bind_value(query, param)?;
             }
 
@@ -232,6 +96,85 @@ impl Executor for MysqlExecutor {
                 .map(crate::mysql_stream::decode_row_internal)
                 .collect()
         })
+    }
+
+    fn execute_and_fetch_collect_internal<'conn>(
+        &'conn self,
+        mutation: &'conn Sql,
+        fetch: &'conn Sql,
+    ) -> BoxFuture<'conn, Result<Vec<Row>>> {
+        Box::pin(async move {
+            use sqlx::Executor as _;
+
+            let mut conn = self
+                .pool
+                .acquire()
+                .await
+                .map_err(|e| Error::connection(e, "Failed to acquire connection"))?;
+
+            let mut mutation_query = sqlx::query(&mutation.text);
+            for param in &mutation.params {
+                mutation_query = bind_value(mutation_query, param)?;
+            }
+
+            (&mut *conn)
+                .execute(mutation_query)
+                .await
+                .map_err(|e| Error::database(e, "Mutation failed"))?;
+
+            let mut fetch_query = sqlx::query(&fetch.text);
+            for param in &fetch.params {
+                fetch_query = bind_value(fetch_query, param)?;
+            }
+
+            let mysql_rows = fetch_query
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(|e| Error::database(e, "Fetch failed"))?;
+
+            drop(conn);
+
+            mysql_rows
+                .into_iter()
+                .map(crate::mysql_stream::decode_row_internal)
+                .collect()
+        })
+    }
+
+    impl_execute_affected!();
+}
+
+/// [`Executor`] implementation backed by a MySQL connection pool.
+impl Executor for MysqlExecutor {
+    type Row<'conn>
+        = Row
+    where
+        Self: 'conn;
+    type RowStream<'conn>
+        = MysqlRowStream<'conn>
+    where
+        Self: 'conn;
+
+    fn execute<'conn>(&'conn self, sql: &'conn Sql) -> Self::RowStream<'conn> {
+        MysqlRowStream::from_rows_future(self.execute_collect_internal(sql))
+    }
+
+    fn execute_and_fetch<'conn>(
+        &'conn self,
+        mutation: &'conn Sql,
+        fetch: &'conn Sql,
+    ) -> Self::RowStream<'conn> {
+        MysqlRowStream::from_rows_future(self.execute_and_fetch_collect_internal(mutation, fetch))
+    }
+
+    fn execute_collect<'conn>(
+        &'conn self,
+        sql: &'conn Sql,
+    ) -> BoxFuture<'conn, Result<Vec<Self::Row<'conn>>>>
+    where
+        Self: 'conn,
+    {
+        self.execute_collect_internal(sql)
     }
 }
 

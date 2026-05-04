@@ -6,6 +6,7 @@
 
 use crate::error::Result;
 use crate::Row;
+use futures::future::BoxFuture;
 use futures::stream::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -15,19 +16,37 @@ use std::task::{Context, Poll};
 /// Current connector implementations eagerly fetch database results and then
 /// expose those rows through this stream interface. The inner stream is
 /// heap-allocated and pinned, which is why implementing `Unpin` is safe here.
-pub struct RowStream {
-    inner: Pin<Box<dyn Stream<Item = Result<Row>> + Send>>,
+pub struct RowStream<'conn> {
+    inner: Pin<Box<dyn Stream<Item = Result<Row>> + Send + 'conn>>,
 }
 
-impl RowStream {
+impl<'conn> RowStream<'conn> {
     /// Create a new `RowStream` wrapping a boxed async stream.
-    pub(crate) fn new_from_stream(stream: Pin<Box<dyn Stream<Item = Result<Row>> + Send>>) -> Self {
+    pub(crate) fn new_from_stream(
+        stream: Pin<Box<dyn Stream<Item = Result<Row>> + Send + 'conn>>,
+    ) -> Self {
         Self { inner: stream }
+    }
+
+    /// Adapt a buffered rows future into the shared stream API.
+    pub(crate) fn from_rows_future(future: BoxFuture<'conn, Result<Vec<Row>>>) -> Self {
+        let stream = async_stream::stream! {
+            match future.await {
+                Ok(rows) => {
+                    for row in rows {
+                        yield Ok(row);
+                    }
+                }
+                Err(error) => yield Err(error),
+            }
+        };
+
+        Self::new_from_stream(Box::pin(stream))
     }
 }
 
 /// Delegates `poll_next` to the inner boxed stream.
-impl Stream for RowStream {
+impl Stream for RowStream<'_> {
     type Item = Result<Row>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -36,4 +55,4 @@ impl Stream for RowStream {
 }
 
 /// `RowStream` is `Unpin` because the inner stream is heap-allocated and pinned.
-impl Unpin for RowStream {}
+impl<'conn> Unpin for RowStream<'conn> {}

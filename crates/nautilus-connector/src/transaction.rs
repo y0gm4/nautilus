@@ -154,21 +154,6 @@ impl TransactionExecutor {
         tx_arc.lock().await.is_some()
     }
 
-    fn row_stream_from_rows_future(future: BoxFuture<'static, Result<Vec<Row>>>) -> RowStream {
-        let stream = async_stream::stream! {
-            match future.await {
-                Ok(rows) => {
-                    for row in rows {
-                        yield Ok(row);
-                    }
-                }
-                Err(e) => yield Err(e),
-            }
-        };
-
-        RowStream::new_from_stream(Box::pin(stream))
-    }
-
     fn execute_affected_on<DB, Bind, RowsAffected>(
         tx_arc: TxHandle<DB>,
         sql_text: String,
@@ -412,14 +397,14 @@ impl Executor for TransactionExecutor {
     where
         Self: 'conn;
     type RowStream<'conn>
-        = RowStream
+        = RowStream<'conn>
     where
         Self: 'conn;
 
     fn execute<'conn>(&'conn self, sql: &'conn Sql) -> Self::RowStream<'conn> {
         match &self.inner {
             TransactionInner::Postgres(tx_arc) => {
-                Self::row_stream_from_rows_future(Self::execute_collect_on(
+                RowStream::from_rows_future(Self::execute_collect_on(
                     Arc::clone(tx_arc),
                     sql.text.clone(),
                     sql.params.clone(),
@@ -429,7 +414,7 @@ impl Executor for TransactionExecutor {
                 ))
             }
             TransactionInner::Mysql(tx_arc) => {
-                Self::row_stream_from_rows_future(Self::execute_collect_on(
+                RowStream::from_rows_future(Self::execute_collect_on(
                     Arc::clone(tx_arc),
                     sql.text.clone(),
                     sql.params.clone(),
@@ -439,7 +424,7 @@ impl Executor for TransactionExecutor {
                 ))
             }
             TransactionInner::Sqlite(tx_arc) => {
-                Self::row_stream_from_rows_future(Self::execute_collect_on(
+                RowStream::from_rows_future(Self::execute_collect_on(
                     Arc::clone(tx_arc),
                     sql.text.clone(),
                     sql.params.clone(),
@@ -458,7 +443,7 @@ impl Executor for TransactionExecutor {
     ) -> Self::RowStream<'conn> {
         match &self.inner {
             TransactionInner::Postgres(tx_arc) => {
-                Self::row_stream_from_rows_future(Self::execute_and_fetch_collect_on(
+                RowStream::from_rows_future(Self::execute_and_fetch_collect_on(
                     Arc::clone(tx_arc),
                     mutation.text.clone(),
                     mutation.params.clone(),
@@ -469,7 +454,7 @@ impl Executor for TransactionExecutor {
                 ))
             }
             TransactionInner::Mysql(tx_arc) => {
-                Self::row_stream_from_rows_future(Self::execute_and_fetch_collect_on(
+                RowStream::from_rows_future(Self::execute_and_fetch_collect_on(
                     Arc::clone(tx_arc),
                     mutation.text.clone(),
                     mutation.params.clone(),
@@ -480,7 +465,7 @@ impl Executor for TransactionExecutor {
                 ))
             }
             TransactionInner::Sqlite(tx_arc) => {
-                Self::row_stream_from_rows_future(Self::execute_and_fetch_collect_on(
+                RowStream::from_rows_future(Self::execute_and_fetch_collect_on(
                     Arc::clone(tx_arc),
                     mutation.text.clone(),
                     mutation.params.clone(),

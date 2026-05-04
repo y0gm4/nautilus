@@ -1577,6 +1577,7 @@ dependencies = [
  "nautilus-orm-core",
  "nautilus-orm-dialect",
  "rust_decimal",
+ "rustc-hash",
  "serde_json",
  "sqlx",
  "tokio",

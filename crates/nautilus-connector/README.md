@@ -14,7 +14,7 @@ Supported backends: PostgreSQL, MySQL, SQLite (all via `sqlx`).
 | `execute_all(executor, sql)` | Convenience helper that collects all rows into a `Vec<Row>` |
 | `Row` | Single database row with positional (`get_by_pos`) and named (`get`) access |
 | `RowAccess<'row>` trait | Re-exported from `nautilus-core`; the generic access interface used by codegen |
-| `RowStream` | Type-erased async `Stream<Item = Result<Row>>` shared by all backends |
+| `RowStream<'conn>` | Type-erased async `Stream<Item = Result<Row>>` shared by all backends |
 | `PgRowStream` / `MysqlRowStream` / `SqliteRowStream` | Per-backend type aliases for `RowStream` |
 | `PgExecutor` / `MysqlExecutor` / `SqliteExecutor` | Concrete executors wrapping a `sqlx` connection pool |
 | `Client<E>` | Combines a `Dialect` and an `Executor`; the entry point for application code |
@@ -38,7 +38,7 @@ let users: Vec<User> = rows.iter().map(User::from_row).collect::<Result<_>>()?;
 ## Design notes
 
 ### Single `RowStream` type
-All three backends share one `RowStream` struct (`src/row_stream.rs`), a thin `Pin<Box<dyn Stream>>` newtype. The per-backend names (`PgRowStream`, `MysqlRowStream`, `SqliteRowStream`) are type aliases defined in the respective `*_stream.rs` modules for readability at call sites. Current executors fetch rows eagerly and then yield them through this stream wrapper so call sites keep one uniform interface.
+All three backends share one `RowStream<'conn>` struct (`src/row_stream.rs`), a thin `Pin<Box<dyn Stream>>` newtype. The per-backend names (`PgRowStream`, `MysqlRowStream`, `SqliteRowStream`) are type aliases defined in the respective `*_stream.rs` modules for readability at call sites. The lifetime parameter lets pool-backed executors borrow the rendered `Sql` instead of cloning it before wrapping the buffered rows in the uniform stream API.
 
 ### Value binding
 `bind_value` in each executor module maps every `nautilus_core::Value` variant to the appropriate `sqlx` parameter type. Common notes:

@@ -10,7 +10,7 @@ use sqlx::{Column, Row as SqlxRow, TypeInfo, ValueRef};
 /// Stream type for MySQL query results.
 ///
 /// A thin alias for the shared [`RowStream`] type.
-pub type MysqlRowStream = RowStream;
+pub type MysqlRowStream<'conn> = RowStream<'conn>;
 
 /// Decode a sqlx `MySqlRow` into a Nautilus `Row`.
 ///
