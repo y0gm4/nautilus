@@ -1,6 +1,6 @@
 ---
 source: crates/nautilus-codegen/tests/snapshot_tests.rs
-expression: "&client_sync"
+expression: snapshot_value
 ---
 """Generated Nautilus client with model delegates.
 

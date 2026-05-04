@@ -1,7 +1,6 @@
 ---
 source: crates/nautilus-codegen/tests/snapshot_tests.rs
-assertion_line: 272
-expression: post_code
+expression: snapshot_value
 ---
 //! Post model and associated builders.
 
@@ -839,6 +838,50 @@ where
         PostDelegate { client }
     }
 
+    fn build_find_many_builder(
+        client: crate::Client<E>,
+        args: nautilus_core::FindManyArgs,
+    ) -> nautilus_core::Result<PostFindMany<E>> {
+        if !args.include.is_empty() {
+            return Err(nautilus_core::Error::InvalidQuery(
+                "include queries require the embedded engine path in the generated Rust client"
+                    .to_string(),
+            ));
+        }
+
+        let mut builder = PostFindMany::new(client);
+        if let Some(filter) = args.where_ {
+            builder = builder.where_(filter);
+        }
+        for order in args.order_by {
+            builder = builder.order_by(order);
+        }
+        if let Some(take) = args.take {
+            builder = builder.take(take);
+        }
+        if let Some(skip) = args.skip {
+            builder = builder.skip(skip);
+        }
+        if !args.select.is_empty() {
+            let set: std::collections::HashSet<String> = args
+                .select
+                .into_iter()
+                .filter_map(|(k, v)| if v { Some(k) } else { None })
+                .collect();
+            if !set.is_empty() {
+                builder = builder.select_fields(set);
+            }
+        }
+        if let Some(cursor) = args.cursor {
+            builder = builder.cursor(cursor);
+        }
+        if !args.distinct.is_empty() {
+            builder = builder.distinct(args.distinct);
+        }
+
+        Ok(builder)
+    }
+
     /// Find all Post records matching `args`.
     ///
     /// Executes immediately and returns a `Vec<Post>`.
@@ -859,41 +902,10 @@ where
             return Ok(rows);
         }
 
-        if !args.include.is_empty() {
-            return Err(nautilus_core::Error::InvalidQuery(
-                "include queries require the embedded engine path in the generated Rust client"
-                    .to_string(),
-            ));
-        }
-
-        let mut builder = PostFindMany::new(_c);
-        if let Some(filter) = args.where_ {
-            builder = builder.where_(filter);
-        }
-        for order in args.order_by {
-            builder = builder.order_by(order);
-        }
-        if let Some(take) = args.take {
-            builder = builder.take(take);
-        }
-        if let Some(skip) = args.skip {
-            builder = builder.skip(skip);
-        }
-        if !args.select.is_empty() {
-            let set: std::collections::HashSet<String> = args.select
-                .into_iter()
-                .filter_map(|(k, v)| if v { Some(k) } else { None })
-                .collect();
-            if !set.is_empty() {
-                builder = builder.select_fields(set);
-            }
-        }
-        if let Some(cursor) = args.cursor {
-            builder = builder.cursor(cursor);
-        }
-        if !args.distinct.is_empty() {
-            builder = builder.distinct(args.distinct);
-        }
+        let builder = Self::build_find_many_builder(
+            _c,
+            args,
+        )?;
         builder.exec().await
         }))
     }
@@ -903,8 +915,26 @@ where
         &self,
         args: nautilus_core::FindManyArgs,
     ) -> nautilus_core::Result<Option<Post>> {
+        let _c = self.client.clone();
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
         let args = nautilus_core::FindManyArgs { take: Some(1), ..args };
-        Ok(self.find_many(args)?.into_iter().next())
+        if let Some(rows) =
+            crate::runtime::try_find_many_via_engine::<_, Post>(
+                &_c,
+                "Post",
+                &args,
+            )
+            .await?
+        {
+            return Ok(rows.into_iter().next());
+        }
+
+        let builder = Self::build_find_many_builder(
+            _c,
+            args,
+        )?;
+        builder.exec_optional().await
+        }))
     }
 
     /// Find a single Post record by a unique filter, or `None` if not found.
@@ -921,7 +951,25 @@ where
             include: args.include,
             ..Default::default()
         };
-        Ok(self.find_many(find_args)?.into_iter().next())
+        let _c = self.client.clone();
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
+        if let Some(rows) =
+            crate::runtime::try_find_many_via_engine::<_, Post>(
+                &_c,
+                "Post",
+                &find_args,
+            )
+            .await?
+        {
+            return Ok(rows.into_iter().next());
+        }
+
+        let builder = Self::build_find_many_builder(
+            _c,
+            find_args,
+        )?;
+        builder.exec_optional().await
+        }))
     }
 
     /// Find a single Post record by a unique filter, or return `Error::NotFound`.
@@ -1361,41 +1409,43 @@ where
         self.select = fields;
         self
     }
-}
 
-impl<E> PostFindMany<E, ()>
-where
-    E: crate::Executor,
-    for<'a> E::Row<'a>: Into<crate::Row>,
-{
-    /// Execute the query and return all rows.
-    pub(crate) async fn exec(self) -> nautilus_core::Result<Vec<Post>> {
+    fn into_execution_parts(
+        self,
+    ) -> nautilus_core::Result<(
+        crate::Client<E>,
+        nautilus_dialect::Sql,
+        Vec<Option<crate::ValueHint>>,
+        bool,
+    )> {
         use nautilus_core::*;
 
-        let client = self.client;
+        let PostFindMany {
+            client,
+            filter,
+            order_by,
+            take,
+            skip,
+            select,
+            cursor,
+            backward,
+            distinct,
+            _selection,
+        } = self;
         let mut builder = Select::from_table("Post");
         let mut row_hints: Vec<Option<crate::ValueHint>> = Vec::new();
 
         // Add scalar columns (PK columns always included; others filtered by select if active)
         builder = builder.item(SelectItem::column(ColumnMarker::new("Post", "id")));
         row_hints.push(None);
-        if self.select.is_empty() || self.select.contains("title") {
+        if select.is_empty() || select.contains("title") {
             builder = builder.item(SelectItem::column(ColumnMarker::new("Post", "title")));
             row_hints.push(None);
         }
-        if self.select.is_empty() || self.select.contains("author_id") {
+        if select.is_empty() || select.contains("author_id") {
             builder = builder.item(SelectItem::column(ColumnMarker::new("Post", "authorId")));
             row_hints.push(None);
         }
-
-        // Extract fields from self so we can mix borrows and moves freely.
-        let backward = self.backward;
-        let cursor = self.cursor;
-        let filter = self.filter;
-        let order_by = self.order_by;
-        let take = self.take;
-        let skip = self.skip;
-        let distinct = self.distinct;
 
         // Auto-add distinct columns to ORDER BY so they appear first (required for
         // Postgres DISTINCT ON; harmless for SQLite / MySQL which use plain DISTINCT).
@@ -1472,12 +1522,29 @@ where
         let select = builder.build()?;
         let sql = client.dialect().render_select(&select)?;
 
-        let stream = client.executor().execute(&sql);
-        futures::pin_mut!(stream);
+        Ok((client, sql, row_hints, backward))
+    }
+}
 
-        let mut results = Vec::new();
-        while let Some(result) = stream.next().await {
-            let row: crate::Row = result.map_err(|e| Error::Other(e.to_string()))?.into();
+impl<E> PostFindMany<E, ()>
+where
+    E: crate::Executor,
+    for<'a> E::Row<'a>: Into<crate::Row>,
+{
+    /// Execute the query and return all rows.
+    pub(crate) async fn exec(self) -> nautilus_core::Result<Vec<Post>> {
+        use nautilus_core::*;
+        use std::convert::Into;
+
+        let (client, sql, row_hints, backward) = self.into_execution_parts()?;
+
+        let rows = crate::execute_all(client.executor(), &sql)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?;
+
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let row: crate::Row = row.into();
             let decoded = decode_model_row_with_hints(row, &row_hints)?;
             results.push(decoded);
         }
@@ -1488,6 +1555,24 @@ where
         }
 
         Ok(results)
+    }
+
+    /// Execute the query and decode at most one row.
+    pub(crate) async fn exec_optional(self) -> nautilus_core::Result<Option<Post>> {
+        use nautilus_core::*;
+        use std::convert::Into;
+
+        let (client, sql, row_hints, _backward) = self.into_execution_parts()?;
+        let row = crate::execute_optional(client.executor(), &sql)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let row: crate::Row = row.into();
+        Ok(Some(decode_model_row_with_hints(row, &row_hints)?))
     }
 }
 
@@ -1534,6 +1619,7 @@ where
     /// Execute the create query.
     pub(crate) async fn exec(self) -> nautilus_core::Result<Post> {
         use nautilus_core::*;
+        use std::convert::Into;
 
         let mut columns = Vec::new();
         let mut values = Vec::new();
@@ -1567,13 +1653,8 @@ where
         let insert = builder.build()?;
         let sql = self.client.dialect().render_insert(&insert)?;
 
-        let stream = self.client.executor().execute(&sql);
-        futures::pin_mut!(stream);
-
-        let row: Row = stream
-            .next()
+        let row: Row = crate::execute_one(self.client.executor(), &sql)
             .await
-            .ok_or_else(|| Error::Other("INSERT returned no rows".to_string()))?
             .map_err(|e| Error::Other(e.to_string()))?
             .into();
 
@@ -1637,6 +1718,7 @@ where
     /// Execute the batch create using a single multi-row `INSERT`.
     pub(crate) async fn exec(self) -> nautilus_core::Result<Vec<Post>> {
         use nautilus_core::*;
+        use std::convert::Into;
 
         if self.entries.is_empty() {
             return Ok(vec![]);
@@ -1684,12 +1766,13 @@ where
         let insert = builder.build()?;
         let sql = self.client.dialect().render_insert(&insert)?;
 
-        let stream = self.client.executor().execute(&sql);
-        futures::pin_mut!(stream);
+        let rows = crate::execute_all(self.client.executor(), &sql)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?;
 
-        let mut results = Vec::with_capacity(self.entries.len());
-        while let Some(result) = stream.next().await {
-            let row: crate::Row = result.map_err(|e| Error::Other(e.to_string()))?.into();
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let row: crate::Row = row.into();
             let decoded = decode_model_row_with_hints(row, all_scalar_value_hints())?;
             results.push(decoded);
         }
@@ -1774,7 +1857,7 @@ where
     /// when no assignments have been loaded via `set_data`.
     pub(crate) async fn exec(self) -> nautilus_core::Result<Vec<Post>> {
         use nautilus_core::*;
-        use futures::StreamExt;
+        use std::convert::Into;
 
         if self.assignments.is_empty() {
             return Ok(vec![]);
@@ -1807,12 +1890,13 @@ where
         let update = builder.build()?;
         let sql = self.client.dialect().render_update(&update)?;
 
-        let stream = self.client.executor().execute(&sql);
-        futures::pin_mut!(stream);
+        let rows = crate::execute_all(self.client.executor(), &sql)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?;
 
-        let mut results = Vec::new();
-        while let Some(result) = stream.next().await {
-            let row: crate::Row = result.map_err(|e| Error::Other(e.to_string()))?.into();
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let row: crate::Row = row.into();
             results.push(decode_model_row_with_hints(row, all_scalar_value_hints())?);
         }
 
@@ -1861,7 +1945,7 @@ where
     /// (e.g. MySQL).
     pub(crate) async fn exec(self) -> nautilus_core::Result<Vec<Post>> {
         use nautilus_core::*;
-        use futures::StreamExt;
+        use std::convert::Into;
 
         if self.require_filter && self.filter.is_none() {
             return Err(Error::InvalidQuery(
@@ -1887,12 +1971,13 @@ where
         let delete = builder.build()?;
         let sql = self.client.dialect().render_delete(&delete)?;
 
-        let stream = self.client.executor().execute(&sql);
-        futures::pin_mut!(stream);
+        let rows = crate::execute_all(self.client.executor(), &sql)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?;
 
-        let mut results = Vec::new();
-        while let Some(result) = stream.next().await {
-            let row: crate::Row = result.map_err(|e| Error::Other(e.to_string()))?.into();
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let row: crate::Row = row.into();
             results.push(decode_model_row_with_hints(row, all_scalar_value_hints())?);
         }
 

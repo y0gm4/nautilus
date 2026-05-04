@@ -233,23 +233,8 @@ impl EngineState {
         match tx_id {
             None => self.client.execute_query(sql, context).await,
             Some(id) => {
-                let txs = self.transactions.lock().await;
-                let timed_out = match txs.get(id) {
-                    Some(active) => active.created_at.elapsed() > active.timeout,
-                    None => {
-                        drop(txs);
-                        return Err(self.transaction_lookup_error(id).await);
-                    }
-                };
-                if timed_out {
-                    drop(txs);
-                    self.expire_transaction(id).await;
-                    return Err(Self::transaction_timeout_error(id));
-                }
-                let active = txs
-                    .get(id)
-                    .expect("transaction disappeared after timeout check");
-                execute_all(active.client.executor(), sql)
+                let tx_client = self.transaction_client_for_request(id).await?;
+                execute_all(tx_client.executor(), sql)
                     .await
                     .map_err(|e| connector_to_protocol(e, context))
             }
@@ -289,24 +274,8 @@ impl EngineState {
         match tx_id {
             None => self.client.execute_affected(sql, context).await,
             Some(id) => {
-                let txs = self.transactions.lock().await;
-                let timed_out = match txs.get(id) {
-                    Some(active) => active.created_at.elapsed() > active.timeout,
-                    None => {
-                        drop(txs);
-                        return Err(self.transaction_lookup_error(id).await);
-                    }
-                };
-                if timed_out {
-                    drop(txs);
-                    self.expire_transaction(id).await;
-                    return Err(Self::transaction_timeout_error(id));
-                }
-                let active = txs
-                    .get(id)
-                    .expect("transaction disappeared after timeout check");
-                active
-                    .client
+                let tx_client = self.transaction_client_for_request(id).await?;
+                tx_client
                     .executor()
                     .execute_affected(sql)
                     .await
@@ -483,6 +452,37 @@ impl EngineState {
         }
     }
 
+    async fn transaction_client_for_request(
+        &self,
+        id: &str,
+    ) -> Result<TransactionClient, ProtocolError> {
+        enum TransactionLookup {
+            Ready(TransactionClient),
+            TimedOut,
+            Missing,
+        }
+
+        let lookup = {
+            let txs = self.transactions.lock().await;
+            match txs.get(id) {
+                Some(active) if active.created_at.elapsed() > active.timeout => {
+                    TransactionLookup::TimedOut
+                }
+                Some(active) => TransactionLookup::Ready(active.client.clone()),
+                None => TransactionLookup::Missing,
+            }
+        };
+
+        match lookup {
+            TransactionLookup::Ready(client) => Ok(client),
+            TransactionLookup::TimedOut => {
+                self.expire_transaction(id).await;
+                Err(Self::transaction_timeout_error(id))
+            }
+            TransactionLookup::Missing => Err(self.transaction_lookup_error(id).await),
+        }
+    }
+
     async fn take_transaction(&self, id: &str) -> Result<ActiveTransaction, ProtocolError> {
         match self.transactions.lock().await.remove(id) {
             Some(active) => Ok(active),
@@ -509,6 +509,7 @@ fn resolve_database_url(url: &str) -> Result<String, Box<dyn std::error::Error>>
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Arc;
 
     use nautilus_core::Value;
     use nautilus_migrate::{DatabaseProvider, DdlGenerator};
@@ -569,6 +570,15 @@ model User {
         Sql {
             text: r#"INSERT INTO "User" ("name") VALUES (?)"#.to_string(),
             params: vec![Value::String(name.to_string())],
+        }
+    }
+
+    fn long_running_sql(iterations: usize) -> Sql {
+        Sql {
+            text: format!(
+                "WITH RECURSIVE cnt(x) AS (SELECT 0 UNION ALL SELECT x + 1 FROM cnt WHERE x < {iterations}) SELECT MAX(x) AS value FROM cnt"
+            ),
+            params: vec![],
         }
     }
 
@@ -725,6 +735,60 @@ model User {
             .rollback()
             .await
             .expect("rollback should succeed");
+
+        drop(state);
+        drop(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn long_running_transaction_query_does_not_block_new_transactions() {
+        let (state, temp_dir) = sqlite_state(schema_source()).await;
+        let state = Arc::new(state);
+        let tx_id = "long-query".to_string();
+
+        state
+            .begin_transaction(tx_id.clone(), Duration::from_secs(5), None)
+            .await
+            .expect("transaction should start");
+
+        let query_state = Arc::clone(&state);
+        let query_tx_id = tx_id.clone();
+        let long_query = tokio::spawn(async move {
+            query_state
+                .execute_query_on(
+                    &long_running_sql(5_000_000),
+                    "long-running transaction query",
+                    Some(&query_tx_id),
+                )
+                .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let second_tx_id = "independent-tx".to_string();
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            state.begin_transaction(second_tx_id.clone(), Duration::from_secs(5), None),
+        )
+        .await
+        .expect("independent transaction start should not wait on another transaction query")
+        .expect("second transaction should start successfully");
+
+        state
+            .rollback_transaction(&second_tx_id)
+            .await
+            .expect("second transaction rollback should succeed");
+
+        let rows = long_query
+            .await
+            .expect("long query task should join")
+            .expect("long query should succeed");
+        assert_eq!(rows.len(), 1);
+
+        state
+            .rollback_transaction(&tx_id)
+            .await
+            .expect("long-query transaction rollback should succeed");
 
         drop(state);
         drop(temp_dir);

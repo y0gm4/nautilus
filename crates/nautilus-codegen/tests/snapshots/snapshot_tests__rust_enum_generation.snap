@@ -1,7 +1,6 @@
 ---
 source: crates/nautilus-codegen/tests/snapshot_tests.rs
-assertion_line: 106
-expression: enums_code
+expression: snapshot_value
 ---
 //! Generated enum types.
 
