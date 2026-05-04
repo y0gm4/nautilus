@@ -706,6 +706,50 @@ where
         {{ delegate_name }} { client }
     }
 
+    fn build_find_many_builder(
+        client: crate::Client<E>,
+        args: nautilus_core::FindManyArgs,
+    ) -> nautilus_core::Result<{{ find_many_name }}<E>> {
+        if !args.include.is_empty() {
+            return Err(nautilus_core::Error::InvalidQuery(
+                "include queries require the embedded engine path in the generated Rust client"
+                    .to_string(),
+            ));
+        }
+
+        let mut builder = {{ find_many_name }}::new(client);
+        if let Some(filter) = args.where_ {
+            builder = builder.where_(filter);
+        }
+        for order in args.order_by {
+            builder = builder.order_by(order);
+        }
+        if let Some(take) = args.take {
+            builder = builder.take(take);
+        }
+        if let Some(skip) = args.skip {
+            builder = builder.skip(skip);
+        }
+        if !args.select.is_empty() {
+            let set: std::collections::HashSet<String> = args
+                .select
+                .into_iter()
+                .filter_map(|(k, v)| if v { Some(k) } else { None })
+                .collect();
+            if !set.is_empty() {
+                builder = builder.select_fields(set);
+            }
+        }
+        if let Some(cursor) = args.cursor {
+            builder = builder.cursor(cursor);
+        }
+        if !args.distinct.is_empty() {
+            builder = builder.distinct(args.distinct);
+        }
+
+        Ok(builder)
+    }
+
     /// Find all {{ model_name }} records matching `args`.
     ///
     /// Executes immediately and returns a `Vec<{{ model_name }}>`.
@@ -728,41 +772,10 @@ where
             return Ok(rows);
         }
 
-        if !args.include.is_empty() {
-            return Err(nautilus_core::Error::InvalidQuery(
-                "include queries require the embedded engine path in the generated Rust client"
-                    .to_string(),
-            ));
-        }
-
-        let mut builder = {{ find_many_name }}::new({% if is_async %}self.client.clone(){% else %}_c{% endif %});
-        if let Some(filter) = args.where_ {
-            builder = builder.where_(filter);
-        }
-        for order in args.order_by {
-            builder = builder.order_by(order);
-        }
-        if let Some(take) = args.take {
-            builder = builder.take(take);
-        }
-        if let Some(skip) = args.skip {
-            builder = builder.skip(skip);
-        }
-        if !args.select.is_empty() {
-            let set: std::collections::HashSet<String> = args.select
-                .into_iter()
-                .filter_map(|(k, v)| if v { Some(k) } else { None })
-                .collect();
-            if !set.is_empty() {
-                builder = builder.select_fields(set);
-            }
-        }
-        if let Some(cursor) = args.cursor {
-            builder = builder.cursor(cursor);
-        }
-        if !args.distinct.is_empty() {
-            builder = builder.distinct(args.distinct);
-        }
+        let builder = Self::build_find_many_builder(
+            {% if is_async %}self.client.clone(){% else %}_c{% endif %},
+            args,
+        )?;
         builder.exec().await
 {%- if not is_async %}
         }))
@@ -774,8 +787,30 @@ where
         &self,
         args: nautilus_core::FindManyArgs,
     ) -> nautilus_core::Result<Option<{{ model_name }}>> {
+{%- if not is_async %}
+        let _c = self.client.clone();
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
+{%- endif %}
         let args = nautilus_core::FindManyArgs { take: Some(1), ..args };
-        Ok(self.find_many(args){% if is_async %}.await{% endif %}?.into_iter().next())
+        if let Some(rows) =
+            crate::runtime::try_find_many_via_engine::<_, {{ model_name }}>(
+                {% if is_async %}&self.client{% else %}&_c{% endif %},
+                "{{ model_name }}",
+                &args,
+            )
+            .await?
+        {
+            return Ok(rows.into_iter().next());
+        }
+
+        let builder = Self::build_find_many_builder(
+            {% if is_async %}self.client.clone(){% else %}_c{% endif %},
+            args,
+        )?;
+        builder.exec_optional().await
+{%- if not is_async %}
+        }))
+{%- endif %}
     }
 
     /// Find a single {{ model_name }} record by a unique filter, or `None` if not found.
@@ -792,7 +827,29 @@ where
             include: args.include,
             ..Default::default()
         };
-        Ok(self.find_many(find_args){% if is_async %}.await{% endif %}?.into_iter().next())
+{%- if not is_async %}
+        let _c = self.client.clone();
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
+{%- endif %}
+        if let Some(rows) =
+            crate::runtime::try_find_many_via_engine::<_, {{ model_name }}>(
+                {% if is_async %}&self.client{% else %}&_c{% endif %},
+                "{{ model_name }}",
+                &find_args,
+            )
+            .await?
+        {
+            return Ok(rows.into_iter().next());
+        }
+
+        let builder = Self::build_find_many_builder(
+            {% if is_async %}self.client.clone(){% else %}_c{% endif %},
+            find_args,
+        )?;
+        builder.exec_optional().await
+{%- if not is_async %}
+        }))
+{%- endif %}
     }
 
     /// Find a single {{ model_name }} record by a unique filter, or return `Error::NotFound`.

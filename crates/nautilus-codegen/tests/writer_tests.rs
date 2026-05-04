@@ -294,6 +294,10 @@ fn test_write_rust_code_uses_execute_fast_paths_in_generated_queries() {
         user_content.contains("crate::execute_one("),
         "generated create builders should use execute_one for single-row mutations:\n{user_content}"
     );
+    assert!(
+        user_content.contains("crate::execute_optional("),
+        "generated single-row read builders should use execute_optional when decoding optional rows:\n{user_content}"
+    );
 }
 
 /// Multiple models each get their own snake_case .rs file.

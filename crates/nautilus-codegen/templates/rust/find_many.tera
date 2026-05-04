@@ -101,19 +101,29 @@ where
         self.select = fields;
         self
     }
-}
 
-impl<E> {{ find_many_name }}<E, ()>
-where
-    E: crate::Executor,
-    for<'a> E::Row<'a>: Into<crate::Row>,
-{
-    /// Execute the query and return all rows.
-    pub(crate) async fn exec(self) -> nautilus_core::Result<Vec<{{ model_name }}>> {
+    fn into_execution_parts(
+        self,
+    ) -> nautilus_core::Result<(
+        crate::Client<E>,
+        nautilus_dialect::Sql,
+        Vec<Option<crate::ValueHint>>,
+        bool,
+    )> {
         use nautilus_core::*;
-        use std::convert::Into;
 
-        let client = self.client;
+        let {{ find_many_name }} {
+            client,
+            filter,
+            order_by,
+            take,
+            skip,
+            select,
+            cursor,
+            backward,
+            distinct,
+            _selection,
+        } = self;
         let mut builder = Select::from_table("{{ table_name }}");
         let mut row_hints: Vec<Option<crate::ValueHint>> = Vec::new();
 
@@ -123,21 +133,12 @@ where
         builder = builder.item(SelectItem::column(ColumnMarker::new("{{ table_name }}", "{{ field.db_name }}")));
         row_hints.push({{ field.read_hint_expr }});
 {%- else %}
-        if self.select.is_empty() || self.select.contains("{{ field.name }}") {
+        if select.is_empty() || select.contains("{{ field.name }}") {
             builder = builder.item(SelectItem::column(ColumnMarker::new("{{ table_name }}", "{{ field.db_name }}")));
             row_hints.push({{ field.read_hint_expr }});
         }
 {%- endif %}
 {%- endfor %}
-
-        // Extract fields from self so we can mix borrows and moves freely.
-        let backward = self.backward;
-        let cursor = self.cursor;
-        let filter = self.filter;
-        let order_by = self.order_by;
-        let take = self.take;
-        let skip = self.skip;
-        let distinct = self.distinct;
 
         // Auto-add distinct columns to ORDER BY so they appear first (required for
         // Postgres DISTINCT ON; harmless for SQLite / MySQL which use plain DISTINCT).
@@ -218,6 +219,22 @@ where
         let select = builder.build()?;
         let sql = client.dialect().render_select(&select)?;
 
+        Ok((client, sql, row_hints, backward))
+    }
+}
+
+impl<E> {{ find_many_name }}<E, ()>
+where
+    E: crate::Executor,
+    for<'a> E::Row<'a>: Into<crate::Row>,
+{
+    /// Execute the query and return all rows.
+    pub(crate) async fn exec(self) -> nautilus_core::Result<Vec<{{ model_name }}>> {
+        use nautilus_core::*;
+        use std::convert::Into;
+
+        let (client, sql, row_hints, backward) = self.into_execution_parts()?;
+
         let rows = crate::execute_all(client.executor(), &sql)
             .await
             .map_err(|e| Error::Other(e.to_string()))?;
@@ -235,5 +252,23 @@ where
         }
 
         Ok(results)
+    }
+
+    /// Execute the query and decode at most one row.
+    pub(crate) async fn exec_optional(self) -> nautilus_core::Result<Option<{{ model_name }}>> {
+        use nautilus_core::*;
+        use std::convert::Into;
+
+        let (client, sql, row_hints, _backward) = self.into_execution_parts()?;
+        let row = crate::execute_optional(client.executor(), &sql)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let row: crate::Row = row.into();
+        Ok(Some(decode_model_row_with_hints(row, &row_hints)?))
     }
 }
