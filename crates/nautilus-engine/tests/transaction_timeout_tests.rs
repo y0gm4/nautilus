@@ -9,7 +9,6 @@ use nautilus_engine::{handlers, EngineState};
 use nautilus_protocol::{
     error::ERR_TRANSACTION_TIMEOUT, RpcRequest, PROTOCOL_VERSION, TRANSACTION_COMMIT,
 };
-use tokio::sync::mpsc;
 
 fn schema_source() -> &'static str {
     r#"
@@ -60,8 +59,7 @@ async fn transaction_commit_rpc_preserves_timeout_error_code() {
 
     tokio::time::sleep(Duration::from_millis(30)).await;
 
-    let (tx, _rx) = mpsc::channel(4);
-    let response = handlers::handle_request(
+    let response = handlers::handle_request_inline(
         &state,
         RpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -72,7 +70,6 @@ async fn transaction_commit_rpc_preserves_timeout_error_code() {
                 "id": tx_id
             }),
         },
-        tx,
     )
     .await;
 

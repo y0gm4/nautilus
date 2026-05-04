@@ -231,17 +231,25 @@ pub async fn handle_request(
     // Route findMany separately so we can pass the sender for chunked streaming.
     if request.method == QUERY_FIND_MANY {
         let result = crud::handle_find_many(state, request, Some(tx)).await;
-        return match result {
-            Ok(value) => ok(id, value),
-            Err(protocol_error) => {
-                let rpc_error: RpcError = protocol_error.into();
-                err(id, rpc_error.code, rpc_error.message, rpc_error.data)
-            }
-        };
+        return response_from_result(id, result);
     }
 
-    let result = dispatch(state, request).await;
+    response_from_result(id, dispatch(state, request).await)
+}
 
+/// Handle an in-process request without allocating a response channel.
+///
+/// This is intended for embedded callers that only consume the final response
+/// and do not use chunked `findMany` partials.
+pub async fn handle_request_inline(state: &EngineState, request: RpcRequest) -> RpcResponse {
+    let id = request.id.clone();
+    response_from_result(id, dispatch(state, request).await)
+}
+
+fn response_from_result(
+    id: Option<nautilus_protocol::RpcId>,
+    result: Result<Box<serde_json::value::RawValue>, ProtocolError>,
+) -> RpcResponse {
     match result {
         Ok(value) => ok(id, value),
         Err(protocol_error) => {

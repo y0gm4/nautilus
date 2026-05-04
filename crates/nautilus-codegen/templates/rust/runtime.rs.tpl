@@ -12,12 +12,12 @@ use nautilus_engine::{handlers, EngineState};
 use nautilus_protocol::error::ERR_RECORD_NOT_FOUND;
 use nautilus_protocol::{
     CountParams, CreateManyParams, CreateParams, FindManyParams, GroupByParams, RpcId, RpcRequest,
-    RpcResponse, UpdateParams, PROTOCOL_VERSION, QUERY_COUNT, QUERY_CREATE, QUERY_CREATE_MANY,
-    QUERY_FIND_MANY, QUERY_GROUP_BY, QUERY_UPDATE,
+    UpdateParams, PROTOCOL_VERSION, QUERY_COUNT, QUERY_CREATE, QUERY_CREATE_MANY, QUERY_FIND_MANY,
+    QUERY_GROUP_BY, QUERY_UPDATE,
 };
 use nautilus_schema::validate_schema_source;
 use serde_json::Value as JsonValue;
-use tokio::sync::{mpsc, OnceCell};
+use tokio::sync::OnceCell;
 
 pub struct Client<E: Executor> {
     inner: ConnectorClient<E>,
@@ -618,8 +618,7 @@ async fn execute_engine_request(
     method: &str,
     params: JsonValue,
 ) -> nautilus_core::Result<JsonValue> {
-    let (tx, _rx) = mpsc::channel::<RpcResponse>(1);
-    let response = handlers::handle_request(
+    let response = handlers::handle_request_inline(
         state,
         RpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -627,7 +626,6 @@ async fn execute_engine_request(
             method: method.to_string(),
             params,
         },
-        tx,
     )
     .await;
 

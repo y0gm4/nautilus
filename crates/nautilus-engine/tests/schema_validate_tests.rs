@@ -3,7 +3,6 @@ use nautilus_protocol::{RpcId, RpcRequest, PROTOCOL_VERSION, SCHEMA_VALIDATE};
 use nautilus_schema::validate_schema_source;
 use serde_json::json;
 use tempfile::TempDir;
-use tokio::sync::mpsc;
 
 fn parse_ir(source: &str) -> nautilus_schema::ir::SchemaIr {
     validate_schema_source(source)
@@ -44,8 +43,7 @@ model Existing {
 }
 
 async fn call_schema_validate(state: &EngineState, schema: &str) -> nautilus_protocol::RpcResponse {
-    let (tx, _rx) = mpsc::channel(4);
-    handlers::handle_request(
+    handlers::handle_request_inline(
         state,
         RpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -56,7 +54,6 @@ async fn call_schema_validate(state: &EngineState, schema: &str) -> nautilus_pro
                 "schema": schema,
             }),
         },
-        tx,
     )
     .await
 }

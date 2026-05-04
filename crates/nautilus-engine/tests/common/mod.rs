@@ -3,7 +3,6 @@ use nautilus_migrate::{DatabaseProvider, DdlGenerator};
 use nautilus_protocol::{RpcRequest, RpcResponse};
 use nautilus_schema::validate_schema_source;
 use tempfile::TempDir;
-use tokio::sync::mpsc;
 
 pub fn parse_ir(source: &str) -> nautilus_schema::ir::SchemaIr {
     validate_schema_source(source)
@@ -47,8 +46,7 @@ pub async fn call_rpc_response(
     method: &str,
     params: serde_json::Value,
 ) -> RpcResponse {
-    let (tx, _rx) = mpsc::channel(4);
-    handlers::handle_request(
+    handlers::handle_request_inline(
         state,
         RpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -56,7 +54,6 @@ pub async fn call_rpc_response(
             method: method.to_string(),
             params,
         },
-        tx,
     )
     .await
 }
