@@ -37,8 +37,11 @@ The crate is organized as follows:
 
 - **`lib.rs`** — Public API: `Dialect` trait, `Sql` struct, shared rendering
   macros (`render_insert_body!`, `render_update_body!`, `render_delete_body!`,
-  `render_select_body_core!`, `render_returning!`), and shared identifier-quoting
-  helpers (`double_quote_identifier`, `backtick_quote_identifier`).
+  `render_select_body_core!`, `render_returning!`), and shared render helpers
+  for identifier writing and placeholder formatting.
+
+- **`render_estimate.rs`** — Conservative SQL/params capacity estimation used
+  by the dialect renderers to preallocate `String` and `Vec<Value>` buffers.
 
 - **`postgres.rs`** — PostgreSQL renderer. Handles `$N` placeholders,
   `DISTINCT ON`, `FILTER (WHERE ...)` on aggregates, and `@>` / `<@` / `&&`

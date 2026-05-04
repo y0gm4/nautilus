@@ -11,15 +11,8 @@ pub struct SqliteDialect;
 /// and double-quoted identifiers.
 impl Dialect for SqliteDialect {
     fn render_select(&self, select: &Select) -> Result<Sql> {
-        let mut ctx = RenderContext::new();
-        render_select_body_core!(
-            &mut ctx,
-            select,
-            quote_identifier,
-            render_expr,
-            false,
-            false
-        );
+        let mut ctx = RenderContext::with_estimate(crate::estimate_select_render(select));
+        render_select_body_core!(&mut ctx, select, '"', render_expr, false, false);
         Ok(Sql {
             text: ctx.sql,
             params: ctx.params,
@@ -27,8 +20,8 @@ impl Dialect for SqliteDialect {
     }
 
     fn render_insert(&self, insert: &Insert) -> Result<Sql> {
-        let mut ctx = RenderContext::new();
-        render_insert_body!(&mut ctx, insert, quote_identifier, true, false);
+        let mut ctx = RenderContext::with_estimate(crate::estimate_insert_render(insert));
+        render_insert_body!(&mut ctx, insert, '"', true, false);
         Ok(Sql {
             text: ctx.sql,
             params: ctx.params,
@@ -36,8 +29,8 @@ impl Dialect for SqliteDialect {
     }
 
     fn render_update(&self, update: &Update) -> Result<Sql> {
-        let mut ctx = RenderContext::new();
-        render_update_body!(&mut ctx, update, quote_identifier, render_expr, true, false);
+        let mut ctx = RenderContext::with_estimate(crate::estimate_update_render(update));
+        render_update_body!(&mut ctx, update, '"', render_expr, true, false);
         Ok(Sql {
             text: ctx.sql,
             params: ctx.params,
@@ -45,17 +38,13 @@ impl Dialect for SqliteDialect {
     }
 
     fn render_delete(&self, delete: &Delete) -> Result<Sql> {
-        let mut ctx = RenderContext::new();
-        render_delete_body!(&mut ctx, delete, quote_identifier, render_expr, true);
+        let mut ctx = RenderContext::with_estimate(crate::estimate_delete_render(delete));
+        render_delete_body!(&mut ctx, delete, '"', render_expr, true);
         Ok(Sql {
             text: ctx.sql,
             params: ctx.params,
         })
     }
-}
-
-fn quote_identifier(name: &str) -> String {
-    crate::double_quote_identifier(name)
 }
 
 struct RenderContext {
@@ -64,31 +53,30 @@ struct RenderContext {
 }
 
 impl RenderContext {
-    fn new() -> Self {
+    fn with_estimate(estimate: crate::RenderEstimate) -> Self {
         Self {
-            sql: String::new(),
-            params: Vec::new(),
+            sql: String::with_capacity(estimate.sql_capacity),
+            params: Vec::with_capacity(estimate.params_capacity),
         }
     }
 
-    fn push_param(&mut self, value: Value) -> String {
+    fn push_param(&mut self, value: Value) {
         self.params.push(value);
-        "?".to_string()
+        self.sql.push('?');
     }
 }
 
 fn render_select_body(ctx: &mut RenderContext, select: &crate::Select) {
-    render_select_body_core!(ctx, select, quote_identifier, render_expr, false, false);
+    render_select_body_core!(ctx, select, '"', render_expr, false, false);
 }
 
 fn render_expr(ctx: &mut RenderContext, expr: &Expr) {
-    render_expr_common!(ctx, expr, quote_identifier, render_expr, render_select_body, {
+    render_expr_common!(ctx, expr, '"', render_expr, render_select_body, {
         Expr::Param(value) => {
             if matches!(value, Value::Null) {
                 ctx.sql.push_str("NULL");
             } else {
-                let placeholder = ctx.push_param(value.clone());
-                ctx.sql.push_str(&placeholder);
+                ctx.push_param(value.clone());
             }
         }
         Expr::Binary { left, op, right } => {
@@ -174,6 +162,12 @@ fn render_expr(ctx: &mut RenderContext, expr: &Expr) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn quote_identifier(name: &str) -> String {
+        let mut sql = String::new();
+        crate::push_quoted_identifier(&mut sql, name, '"');
+        sql
+    }
 
     #[test]
     fn test_quote_identifier() {
