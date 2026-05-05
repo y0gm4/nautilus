@@ -1,6 +1,7 @@
 // Runtime file — do not edit manually.
 
 import * as readline from 'readline';
+import { PROTOCOL_VERSION } from './_protocol.js';
 import { EngineProcess } from './_engine.js';
 import { IsolationLevel, TransactionClient } from './_transaction.js';
 import { errorFromCode, HandshakeError, ProtocolError } from './_errors.js';
@@ -138,7 +139,7 @@ export class NautilusClient {
     let response;
     try {
       response = await this._rpc('engine.handshake', {
-        protocolVersion: 1,
+        protocolVersion: PROTOCOL_VERSION,
         clientName:      'nautilus-js',
         clientVersion:   '0.1.0',
       });
@@ -148,34 +149,34 @@ export class NautilusClient {
     }
 
     const v = response?.['protocolVersion'];
-    if (v !== 1) {
+    if (v !== PROTOCOL_VERSION) {
       await this.disconnect();
       throw new HandshakeError(
-        `Protocol version mismatch: engine uses ${v}, client expects 1`,
+        `Protocol version mismatch: engine uses ${v}, client expects ${PROTOCOL_VERSION}`,
       );
     }
   }
 
   async _startTransaction(timeoutMs = 5000, isolationLevel) {
-    const params = { protocolVersion: 1, timeoutMs };
+    const params = { protocolVersion: PROTOCOL_VERSION, timeoutMs };
     if (isolationLevel != null) params['isolationLevel'] = isolationLevel;
     const result = await this._rpc('transaction.start', params);
     return result['id'];
   }
 
   async _commitTransaction(txId) {
-    await this._rpc('transaction.commit', { protocolVersion: 1, id: txId });
+    await this._rpc('transaction.commit', { protocolVersion: PROTOCOL_VERSION, id: txId });
   }
 
   async _rollbackTransaction(txId) {
     try {
-      await this._rpc('transaction.rollback', { protocolVersion: 1, id: txId });
+      await this._rpc('transaction.rollback', { protocolVersion: PROTOCOL_VERSION, id: txId });
     } catch { /* best-effort */ }
   }
 
   async _runTransactionBatch(operations, options) {
     const params = {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       operations,
       timeoutMs: options?.timeout ?? 5000,
     };

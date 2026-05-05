@@ -1,5 +1,7 @@
 // Runtime file — do not edit manually.
 
+export declare const PROTOCOL_VERSION: {{ protocol_version }};
+
 export interface JsonRpcRequest {
   jsonrpc: '2.0';
   id?: number;

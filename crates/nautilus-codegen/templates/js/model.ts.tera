@@ -2,6 +2,7 @@
 
 import { NautilusClient } from '../_internal/_client';
 import { NotFoundError } from '../_internal/_errors';
+import { PROTOCOL_VERSION } from '../_internal/_protocol';
 {%- if has_enums %}
 import { {% for e in enum_imports %}{{ e }}{% if not loop.last %}, {% endif %}{% endfor %} } from '../enums';
 {%- endif %}
@@ -327,6 +328,14 @@ function _serializeInclude(include: unknown): unknown {
   return result;
 }
 
+function _firstDataRow(result: Record<string, unknown>): Record<string, unknown> | null {
+  const data = result['data'];
+  if (!Array.isArray(data)) return null;
+  const row = data[0];
+  if (row == null || typeof row !== 'object' || Array.isArray(row)) return null;
+  return row as Record<string, unknown>;
+}
+
 export class {{ delegate_name }} {
   constructor(public client: NautilusClient) {}
 
@@ -351,7 +360,7 @@ export class {{ delegate_name }} {
       rpcArgs['orderBy'] = Array.isArray(ob) ? ob : [ob];
     }
 {%- if has_vector_fields %}
-    if (args?.nearest  != null) rpcArgs['nearest'] = args.nearest;
+    if (args?.nearest  != null) rpcArgs['nearest'] = _serializeNearestInput(args.nearest);
 {%- endif %}
     if (args?.take     != null) rpcArgs['take']    = args.take;
     if (args?.skip     != null) rpcArgs['skip']    = args.skip;
@@ -360,7 +369,7 @@ export class {{ delegate_name }} {
     if (args?.cursor   != null) rpcArgs['cursor']  = args.cursor;
     if (args?.distinct != null) rpcArgs['distinct'] = args.distinct;
     const request: Record<string, unknown> = {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       model: '{{ model_name }}',
       args: rpcArgs,
     };
@@ -378,8 +387,26 @@ export class {{ delegate_name }} {
     select?:  {{ model_name }}SelectInput;
     include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
   }): Promise<{{ model_name }}Model | null> {
-    const rows = await this.findMany({ where: args?.where, orderBy: args?.orderBy,{% if has_vector_fields %} nearest: args?.nearest,{% endif %} take: 1, select: args?.select, include: args?.include });
-    return rows[0] ?? null;
+    const rpcArgs: Record<string, unknown> = {};
+    if (args?.where    != null) rpcArgs['where']   = _processWhereFilters(args.where as Record<string, unknown>, _{{ table_name }}FieldToDb);
+    if (args?.orderBy  != null) {
+      const ob = args.orderBy;
+      rpcArgs['orderBy'] = Array.isArray(ob) ? ob : [ob];
+    }
+{%- if has_vector_fields %}
+    if (args?.nearest  != null) rpcArgs['nearest'] = _serializeNearestInput(args.nearest);
+{%- endif %}
+    rpcArgs['take'] = 1;
+    if (args?.select   != null) rpcArgs['select']  = args.select;
+    if (args?.include  != null) rpcArgs['include'] = _serializeInclude(args.include);
+    const request: Record<string, unknown> = {
+      protocolVersion: PROTOCOL_VERSION,
+      model: '{{ model_name }}',
+      args: rpcArgs,
+    };
+    const result = (await this.client._rpc('query.findFirst', request)) as Record<string, unknown>;
+    const row = _firstDataRow(result);
+    return row == null ? null : _coerce{{ model_name }}(row);
   }
 
   async findUnique(args: {
@@ -387,8 +414,17 @@ export class {{ delegate_name }} {
     select?:  {{ model_name }}SelectInput;
     include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
   }): Promise<{{ model_name }}Model | null> {
-    const rows = await this.findMany({ where: args.where, take: 1, select: args.select, include: args.include });
-    return rows[0] ?? null;
+    if (args.select != null || args.include != null) {
+      return this.findFirst({ where: args.where, select: args.select, include: args.include });
+    }
+    const request: Record<string, unknown> = {
+      protocolVersion: PROTOCOL_VERSION,
+      model: '{{ model_name }}',
+      filter: _processWhereFilters(args.where as Record<string, unknown>, _{{ table_name }}FieldToDb),
+    };
+    const result = (await this.client._rpc('query.findUnique', request)) as Record<string, unknown>;
+    const row = _firstDataRow(result);
+    return row == null ? null : _coerce{{ model_name }}(row);
   }
 
   async findUniqueOrThrow(args: {
@@ -426,7 +462,7 @@ export class {{ delegate_name }} {
 {%- endfor %}
 {%- endif %}
     const result = (await this.client._rpc('query.create', {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       model:      '{{ model_name }}',
       data:       _processCreateData({% if updated_at_fields | length > 0 %}_createData{% else %}args.data as Record<string, unknown>{% endif %}, _{{ table_name }}FieldToDb),
       returnData: args.returnData ?? true,
@@ -451,7 +487,7 @@ export class {{ delegate_name }} {
     });
 {%- endif %}
     const result = (await this.client._rpc('query.createMany', {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       model:      '{{ model_name }}',
       data:       {% if updated_at_fields | length > 0 %}_batchData.map(d => _processCreateData(d, _{{ table_name }}FieldToDb)){% else %}args.data.map(d => _processCreateData(d as Record<string, unknown>, _{{ table_name }}FieldToDb)){% endif %},
       returnData: args.returnData ?? true,
@@ -472,7 +508,7 @@ export class {{ delegate_name }} {
 {%- endfor %}
 {%- endif %}
     const result = (await this.client._rpc('query.update', {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       model:      '{{ model_name }}',
       filter:     _processWhereFilters((args.where ?? {}) as Record<string, unknown>, _{{ table_name }}FieldToDb),
       data:       _processCreateData({% if updated_at_fields | length > 0 %}_updateData{% else %}args.data as Record<string, unknown>{% endif %}, _{{ table_name }}FieldToDb),
@@ -494,7 +530,7 @@ export class {{ delegate_name }} {
 {%- endfor %}
     };
     const result = (await this.client._rpc('query.delete', {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       model:      '{{ model_name }}',
       filter:     _processWhereFilters(pkFilter, _{{ table_name }}FieldToDb),
       returnData: args.returnData ?? true,
@@ -510,7 +546,7 @@ export class {{ delegate_name }} {
   }): Promise<{{ model_name }}Model[] | number> {
     const returnData = args?.returnData ?? false;
     const result = (await this.client._rpc('query.delete', {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       model:      '{{ model_name }}',
       filter:     _processWhereFilters((args?.where ?? {}) as Record<string, unknown>, _{{ table_name }}FieldToDb),
       returnData,
@@ -531,7 +567,7 @@ export class {{ delegate_name }} {
     if (args?.skip   != null) rpcArgs['skip']   = args.skip;
     if (args?.cursor != null) rpcArgs['cursor'] = args.cursor;
     const result = (await this.client._rpc('query.count', {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       model: '{{ model_name }}',
       args:  Object.keys(rpcArgs).length ? rpcArgs : null,
     })) as Record<string, unknown>;
@@ -547,7 +583,7 @@ export class {{ delegate_name }} {
    */
   async rawQuery(sql: string): Promise<Record<string, unknown>[]> {
     const result = (await this.client._rpc('query.rawQuery', {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       sql,
     })) as Record<string, unknown>;
     return (result['data'] as Record<string, unknown>[]) ?? [];
@@ -561,7 +597,7 @@ export class {{ delegate_name }} {
    */
   async rawStmtQuery(sql: string, params?: unknown[]): Promise<Record<string, unknown>[]> {
     const result = (await this.client._rpc('query.rawStmtQuery', {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       sql,
       params: params ?? [],
     })) as Record<string, unknown>;
@@ -626,7 +662,7 @@ export class {{ delegate_name }} {
       rpcArgs['orderBy'] = Array.isArray(o) ? o : [o];
     }
     const result = (await this.client._rpc('query.groupBy', {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       model: '{{ model_name }}',
       args:  rpcArgs,
     })) as Record<string, unknown>;

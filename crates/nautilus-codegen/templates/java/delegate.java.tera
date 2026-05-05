@@ -39,7 +39,13 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
     }
 
     public CompletableFuture<{{ model_name }}> findUnique(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
-        return findFirst(spec);
+        return async(() -> {
+            {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return findUniqueInternal(args);
+        });
     }
 
     public CompletableFuture<{{ model_name }}> findFirstOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
@@ -178,7 +184,11 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
     }
 
     public {{ model_name }} findUnique(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
-        return findFirst(spec);
+        {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return findUniqueInternal(args);
     }
 
     public {{ model_name }} findFirstOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
@@ -276,7 +286,7 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
 {% endif %}
     private List<{{ model_name }}> findManyInternal({{ dsl_name }}.FindManyArgs args) {
         ObjectNode request = JsonSupport.object();
-        request.put("protocolVersion", 1);
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         request.put("model", "{{ model_name }}");
         request.set("args", args == null ? JsonSupport.object() : args.node());
         if (args != null && args.chunkSize() != null) {
@@ -288,14 +298,35 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
 
     private {{ model_name }} findFirstInternal({{ dsl_name }}.FindManyArgs args) {
         {{ dsl_name }}.FindManyArgs actual = args == null ? new {{ dsl_name }}.FindManyArgs() : args;
-        actual.take(1);
-        List<{{ model_name }}> rows = findManyInternal(actual);
-        return rows.isEmpty() ? null : rows.get(0);
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
+        request.put("model", "{{ model_name }}");
+        ObjectNode requestArgs = actual.node();
+        requestArgs.put("take", 1);
+        request.set("args", requestArgs);
+        JsonNode result = rpc("query.findFirst", request);
+        JsonNode row = JsonSupport.firstDataRow(result);
+        return row == null || row.isNull() ? null : {{ model_name }}.fromJsonNode(row);
+    }
+
+    private {{ model_name }} findUniqueInternal({{ dsl_name }}.FindManyArgs args) {
+        {{ dsl_name }}.FindManyArgs actual = args == null ? new {{ dsl_name }}.FindManyArgs() : args;
+        ObjectNode node = actual.node();
+        if (node.size() == 1 && node.has("where")) {
+            ObjectNode request = JsonSupport.object();
+            request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
+            request.put("model", "{{ model_name }}");
+            request.set("filter", actual.whereNode());
+            JsonNode result = rpc("query.findUnique", request);
+            JsonNode row = JsonSupport.firstDataRow(result);
+            return row == null || row.isNull() ? null : {{ model_name }}.fromJsonNode(row);
+        }
+        return findFirstInternal(actual);
     }
 
     private {{ model_name }} createInternal({{ dsl_name }}.CreateInput data) {
         ObjectNode request = JsonSupport.object();
-        request.put("protocolVersion", 1);
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         request.put("model", "{{ model_name }}");
         request.set("data", data == null ? JsonSupport.object() : data.node());
         request.put("returnData", true);
@@ -309,7 +340,7 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
 
     private List<{{ model_name }}> createManyInternal(List<{{ dsl_name }}.CreateInput> data) {
         ObjectNode request = JsonSupport.object();
-        request.put("protocolVersion", 1);
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         request.put("model", "{{ model_name }}");
         ArrayNode items = JsonSupport.array();
         for ({{ dsl_name }}.CreateInput item : data) {
@@ -323,7 +354,7 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
 
     private List<{{ model_name }}> updateInternal({{ dsl_name }}.UpdateArgs args) {
         ObjectNode request = JsonSupport.object();
-        request.put("protocolVersion", 1);
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         request.put("model", "{{ model_name }}");
         request.set("filter", args == null ? JsonSupport.object() : args.whereNode());
         request.set("data", args == null ? JsonSupport.object() : args.dataNode());
@@ -334,7 +365,7 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
 
     private {{ model_name }} deleteInternal({{ dsl_name }}.DeleteArgs args) {
         ObjectNode request = JsonSupport.object();
-        request.put("protocolVersion", 1);
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         request.put("model", "{{ model_name }}");
         request.set("filter", args == null ? JsonSupport.object() : args.whereNode());
         request.put("returnData", true);
@@ -348,7 +379,7 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
 
     private long deleteManyInternal({{ dsl_name }}.DeleteArgs args) {
         ObjectNode request = JsonSupport.object();
-        request.put("protocolVersion", 1);
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         request.put("model", "{{ model_name }}");
         request.set("filter", args == null ? JsonSupport.object() : args.whereNode());
         request.put("returnData", false);
@@ -358,7 +389,7 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
 
     private long countInternal({{ dsl_name }}.CountArgs args) {
         ObjectNode request = JsonSupport.object();
-        request.put("protocolVersion", 1);
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         request.put("model", "{{ model_name }}");
         request.set("args", args == null ? JsonSupport.object() : args.node());
         JsonNode result = rpc("query.count", request);
@@ -376,7 +407,7 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
 
     private List<JsonNode> groupByInternal({{ dsl_name }}.GroupByArgs args) {
         ObjectNode request = JsonSupport.object();
-        request.put("protocolVersion", 1);
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         request.put("model", "{{ model_name }}");
         request.set("args", args == null ? JsonSupport.object() : args.node());
         JsonNode result = rpc("query.groupBy", request);
@@ -385,7 +416,7 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
 
     private List<JsonNode> rawQueryInternal(String sql) {
         ObjectNode request = JsonSupport.object();
-        request.put("protocolVersion", 1);
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         request.put("sql", sql);
         JsonNode result = rpc("query.rawQuery", request);
         return JsonSupport.dataList(result, JsonNode::deepCopy);
@@ -393,7 +424,7 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
 
     private List<JsonNode> rawStmtQueryInternal(String sql, List<?> params) {
         ObjectNode request = JsonSupport.object();
-        request.put("protocolVersion", 1);
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         request.put("sql", sql);
         request.set("params", JsonSupport.toJsonNode(params));
         JsonNode result = rpc("query.rawStmtQuery", request);

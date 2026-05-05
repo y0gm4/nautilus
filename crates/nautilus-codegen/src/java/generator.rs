@@ -298,6 +298,7 @@ fn render(template: &str, context: &Context) -> String {
 /// Render a template that only requires `package_name`.
 fn render_pkg(template: &str, package_name: &str) -> String {
     let mut ctx = Context::new();
+    crate::template::insert_protocol_version(&mut ctx);
     ctx.insert("package_name", package_name);
     render(template, &ctx)
 }
@@ -461,9 +462,11 @@ pub(crate) fn generate_java_client_with_registry(
 /// at generation time.
 pub fn java_runtime_files(package_name: &str) -> Vec<(String, String)> {
     let mut ctx_pkg = Context::new();
+    crate::template::insert_protocol_version(&mut ctx_pkg);
     ctx_pkg.insert("package_name", package_name);
 
     let mut ctx_ver = Context::new();
+    crate::template::insert_protocol_version(&mut ctx_ver);
     ctx_ver.insert("package_name", package_name);
     ctx_ver.insert("version", env!("CARGO_PKG_VERSION"));
 

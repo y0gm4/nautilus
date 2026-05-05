@@ -215,7 +215,7 @@ pub fn write_python_code(
     composite_types_code: Option<String>,
     extension_files: &[(String, String)],
     client_code: Option<String>,
-    runtime_files: &[(&str, &str)],
+    runtime_files: &[(String, String)],
 ) -> Result<()> {
     let output_dir = Path::new(output_path);
 
@@ -327,7 +327,7 @@ pub fn write_python_code(
     fs::write(&enums_init_path, enums_init).with_context(|| "Failed to write enums/__init__.py")?;
 
     for (file_name, content) in runtime_files {
-        let (target_dir, new_name) = match *file_name {
+        let (target_dir, new_name) = match file_name.as_str() {
             "_errors.py" => (&errors_dir, "errors.py"),
             _ => (&internal_dir, file_name.trim_start_matches('_')),
         };
@@ -402,7 +402,7 @@ pub fn write_js_code(
     dts_client: Option<String>,
     js_models_index: Option<String>,
     dts_models_index: Option<String>,
-    runtime_files: &[(&str, &str)],
+    runtime_files: &[(String, String)],
 ) -> Result<()> {
     let output_dir = Path::new(output_path);
 

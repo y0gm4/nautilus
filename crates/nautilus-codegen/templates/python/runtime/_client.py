@@ -23,7 +23,7 @@ _SYNC_LOOP_JOIN_TIMEOUT_S: int = 10
 
 from .engine import EnginePoolOptions, EngineProcess  # type: ignore
 from ..errors.errors import HandshakeError, ProtocolError, TransactionError, TransactionTimeoutError  # type: ignore
-from .protocol import JsonRpcRequest, JsonRpcResponse  # type: ignore
+from .protocol import PROTOCOL_VERSION, JsonRpcRequest, JsonRpcResponse  # type: ignore
 from .transaction import IsolationLevel, TransactionClient  # type: ignore
 
 
@@ -235,16 +235,16 @@ class NautilusClient:
         """Perform protocol handshake with engine."""
         try:
             response = await self._rpc("engine.handshake", {
-                "protocolVersion": 1,
+                "protocolVersion": PROTOCOL_VERSION,
                 "clientName": "nautilus-py",
                 "clientVersion": "0.1.0",
             })
 
             protocol_version = response.get("protocolVersion")
-            if protocol_version != 1:
+            if protocol_version != PROTOCOL_VERSION:
                 raise HandshakeError(
                     f"Protocol version mismatch: engine uses {protocol_version}, "
-                    f"client expects 1"
+                    f"client expects {PROTOCOL_VERSION}"
                 )
 
             self._handshake_done = True
@@ -412,18 +412,21 @@ class NautilusClient:
         isolation_level: Optional[IsolationLevel] = None,
     ) -> str:
         """Begin a server-side transaction and return its id."""
-        params: Dict[str, Any] = {"protocolVersion": 1, "timeoutMs": timeout_ms}
+        params: Dict[str, Any] = {"protocolVersion": PROTOCOL_VERSION, "timeoutMs": timeout_ms}
         if isolation_level is not None:
             params["isolationLevel"] = isolation_level.value
         result = await self._rpc("transaction.start", params)
         return result["id"]
 
     async def _commit_transaction(self, tx_id: str) -> None:
-        await self._rpc("transaction.commit", {"protocolVersion": 1, "id": tx_id})
+        await self._rpc("transaction.commit", {"protocolVersion": PROTOCOL_VERSION, "id": tx_id})
 
     async def _rollback_transaction(self, tx_id: str) -> None:
         try:
-            await self._rpc("transaction.rollback", {"protocolVersion": 1, "id": tx_id})
+            await self._rpc(
+                "transaction.rollback",
+                {"protocolVersion": PROTOCOL_VERSION, "id": tx_id},
+            )
         except Exception:
             pass  # best-effort rollback
 
@@ -461,10 +464,10 @@ class NautilusClient:
 
             results = await client.transaction_batch([
                 {"method": "query.create", "params": {
-                    "protocolVersion": 1, "model": "User",
+                    "protocolVersion": PROTOCOL_VERSION, "model": "User",
                     "data": {"name": "Alice"}}},
                 {"method": "query.create", "params": {
-                    "protocolVersion": 1, "model": "Post",
+                    "protocolVersion": PROTOCOL_VERSION, "model": "Post",
                     "data": {"title": "Hello"}}},
             ])
 
@@ -477,7 +480,7 @@ class NautilusClient:
             A list of result dicts, one per operation.
         """
         params: Dict[str, Any] = {
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "operations": operations,
             "timeoutMs": timeout_ms,
         }

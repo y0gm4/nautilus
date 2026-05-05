@@ -12,3 +12,8 @@ pub(crate) fn render(tera: &Tera, template: &str, ctx: &Context) -> String {
         .unwrap_or_else(|error| panic!("template rendering failed for '{}': {:?}", template, error))
         .replace("\r\n", "\n")
 }
+
+/// Insert the current wire protocol version into a Tera context.
+pub(crate) fn insert_protocol_version(ctx: &mut Context) {
+    ctx.insert("protocol_version", &nautilus_protocol::PROTOCOL_VERSION);
+}

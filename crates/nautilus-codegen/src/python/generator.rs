@@ -285,6 +285,7 @@ fn generate_python_model_with_registry(
     extensions: &ExtensionRegistry,
 ) -> (String, String) {
     let mut context = Context::new();
+    crate::template::insert_protocol_version(&mut context);
 
     context.insert("model_name", &model.logical_name);
     context.insert("snake_name", &model.logical_name.to_snake_case());
@@ -949,31 +950,33 @@ pub fn generate_transaction_init() -> &'static str {
 
 /// Returns static runtime Python files to be written alongside generated code.
 /// These files implement the base client, engine process manager, protocol, and errors.
-pub fn python_runtime_files() -> Vec<(&'static str, &'static str)> {
+pub fn python_runtime_files() -> Vec<(String, String)> {
+    let protocol_version = nautilus_protocol::PROTOCOL_VERSION.to_string();
     vec![
         (
-            "_errors.py",
-            include_str!("../../templates/python/runtime/_errors.py"),
+            "_errors.py".to_string(),
+            include_str!("../../templates/python/runtime/_errors.py").to_string(),
         ),
         (
-            "_protocol.py",
-            include_str!("../../templates/python/runtime/_protocol.py"),
+            "_protocol.py".to_string(),
+            include_str!("../../templates/python/runtime/_protocol.py")
+                .replace("{{ protocol_version }}", &protocol_version),
         ),
         (
-            "_engine.py",
-            include_str!("../../templates/python/runtime/_engine.py"),
+            "_engine.py".to_string(),
+            include_str!("../../templates/python/runtime/_engine.py").to_string(),
         ),
         (
-            "_client.py",
-            include_str!("../../templates/python/runtime/_client.py"),
+            "_client.py".to_string(),
+            include_str!("../../templates/python/runtime/_client.py").to_string(),
         ),
         (
-            "_descriptors.py",
-            include_str!("../../templates/python/runtime/_descriptors.py"),
+            "_descriptors.py".to_string(),
+            include_str!("../../templates/python/runtime/_descriptors.py").to_string(),
         ),
         (
-            "_transaction.py",
-            include_str!("../../templates/python/runtime/_transaction.py"),
+            "_transaction.py".to_string(),
+            include_str!("../../templates/python/runtime/_transaction.py").to_string(),
         ),
     ]
 }

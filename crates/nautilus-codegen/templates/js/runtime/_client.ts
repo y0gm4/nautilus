@@ -5,7 +5,7 @@ import * as readline from 'readline';
 const RPC_TIMEOUT_MS        = 30_000;
 const DEFAULT_TX_TIMEOUT_MS =  5_000;
 import { EngineProcess, type EnginePoolOptions } from './_engine';
-import type { JsonRpcResponse } from './_protocol';
+import { PROTOCOL_VERSION, type JsonRpcResponse } from './_protocol';
 import { IsolationLevel, TransactionClient } from './_transaction';
 import { errorFromCode, HandshakeError, ProtocolError } from './_errors';
 
@@ -207,7 +207,7 @@ export class NautilusClient {
     let response: Record<string, unknown>;
     try {
       response = (await this._rpc('engine.handshake', {
-        protocolVersion: 1,
+        protocolVersion: PROTOCOL_VERSION,
         clientName:      'nautilus-js',
         clientVersion:   '0.1.0',
       })) as Record<string, unknown>;
@@ -217,10 +217,10 @@ export class NautilusClient {
     }
 
     const v = response?.['protocolVersion'] as number | undefined;
-    if (v !== 1) {
+    if (v !== PROTOCOL_VERSION) {
       await this.disconnect();
       throw new HandshakeError(
-        `Protocol version mismatch: engine uses ${v}, client expects 1`,
+        `Protocol version mismatch: engine uses ${v}, client expects ${PROTOCOL_VERSION}`,
       );
     }
   }
@@ -229,19 +229,19 @@ export class NautilusClient {
     timeoutMs      = DEFAULT_TX_TIMEOUT_MS,
     isolationLevel?: IsolationLevel,
   ): Promise<string> {
-    const params: Record<string, unknown> = { protocolVersion: 1, timeoutMs };
+    const params: Record<string, unknown> = { protocolVersion: PROTOCOL_VERSION, timeoutMs };
     if (isolationLevel != null) params['isolationLevel'] = isolationLevel;
     const result = (await this._rpc('transaction.start', params)) as Record<string, unknown>;
     return result['id'] as string;
   }
 
   protected async _commitTransaction(txId: string): Promise<void> {
-    await this._rpc('transaction.commit', { protocolVersion: 1, id: txId });
+    await this._rpc('transaction.commit', { protocolVersion: PROTOCOL_VERSION, id: txId });
   }
 
   protected async _rollbackTransaction(txId: string): Promise<void> {
     try {
-      await this._rpc('transaction.rollback', { protocolVersion: 1, id: txId });
+      await this._rpc('transaction.rollback', { protocolVersion: PROTOCOL_VERSION, id: txId });
     } catch { /* best-effort */ }
   }
 
@@ -250,7 +250,7 @@ export class NautilusClient {
     options?: { timeout?: number; isolationLevel?: IsolationLevel },
   ): Promise<unknown[]> {
     const params: Record<string, unknown> = {
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
       operations,
       timeoutMs: options?.timeout ?? DEFAULT_TX_TIMEOUT_MS,
     };

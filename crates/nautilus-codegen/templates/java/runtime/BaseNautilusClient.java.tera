@@ -121,7 +121,7 @@ public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
     public final String startTransaction(TransactionOptions options) {
         TransactionOptions actual = options == null ? new TransactionOptions() : options;
         ObjectNode params = JsonSupport.object();
-        params.put("protocolVersion", 1);
+        params.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         params.put("timeoutMs", actual.timeoutMs());
         if (actual.isolationLevel() != null) {
             params.put("isolationLevel", actual.isolationLevel().wireValue());
@@ -132,7 +132,7 @@ public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
 
     public final void commitTransaction(String transactionId) {
         ObjectNode params = JsonSupport.object();
-        params.put("protocolVersion", 1);
+        params.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         params.put("id", transactionId);
         rpc("transaction.commit", params);
     }
@@ -140,7 +140,7 @@ public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
     public final void rollbackTransaction(String transactionId) {
         try {
             ObjectNode params = JsonSupport.object();
-            params.put("protocolVersion", 1);
+            params.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
             params.put("id", transactionId);
             rpc("transaction.rollback", params);
         } catch (RuntimeException ignored) {
@@ -153,7 +153,7 @@ public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
     ) {
         TransactionOptions actual = options == null ? new TransactionOptions() : options;
         ObjectNode params = JsonSupport.object();
-        params.put("protocolVersion", 1);
+        params.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         params.put("timeoutMs", actual.timeoutMs());
         if (actual.isolationLevel() != null) {
             params.put("isolationLevel", actual.isolationLevel().wireValue());
@@ -188,14 +188,15 @@ public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
 
     private void handshake() {
         ObjectNode params = JsonSupport.object();
-        params.put("protocolVersion", 1);
+        params.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         params.put("clientName", "nautilus-java");
         params.put("clientVersion", "{{ version }}");
         JsonNode response = rpc("engine.handshake", params);
         Integer protocolVersion = JsonSupport.asInteger(JsonSupport.firstPresent(response, "protocolVersion"));
-        if (protocolVersion == null || protocolVersion.intValue() != 1) {
+        if (protocolVersion == null || protocolVersion.intValue() != JsonSupport.PROTOCOL_VERSION) {
             throw new HandshakeException(
-                "Protocol version mismatch: engine uses " + protocolVersion + ", client expects 1"
+                "Protocol version mismatch: engine uses " + protocolVersion
+                    + ", client expects " + JsonSupport.PROTOCOL_VERSION
             );
         }
     }

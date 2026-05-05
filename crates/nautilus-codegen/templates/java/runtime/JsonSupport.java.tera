@@ -20,6 +20,8 @@ import java.util.UUID;
 import java.util.function.Function;
 
 public final class JsonSupport {
+    public static final int PROTOCOL_VERSION = {{ protocol_version }};
+
     private static final ObjectMapper MAPPER = new ObjectMapper()
         .registerModule(new JavaTimeModule())
         .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);

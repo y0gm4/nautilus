@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Union
 
+PROTOCOL_VERSION = {{ protocol_version }}
+
 
 @dataclass
 class JsonRpcRequest:

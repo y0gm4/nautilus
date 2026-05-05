@@ -568,19 +568,28 @@ model User {
     let runtime = js_runtime_files();
     let client_runtime = runtime
         .iter()
-        .find(|(name, _)| *name == "_client.js")
+        .find(|(name, _)| name == "_client.js")
         .expect("missing JS runtime client")
-        .1;
+        .1
+        .as_str();
+    let protocol_runtime = runtime
+        .iter()
+        .find(|(name, _)| name == "_protocol.js")
+        .expect("missing JS runtime protocol")
+        .1
+        .as_str();
     let error_runtime = runtime
         .iter()
-        .find(|(name, _)| *name == "_errors.js")
+        .find(|(name, _)| name == "_errors.js")
         .expect("missing JS runtime errors")
-        .1;
+        .1
+        .as_str();
     let tx_runtime = runtime
         .iter()
-        .find(|(name, _)| *name == "_transaction.js")
+        .find(|(name, _)| name == "_transaction.js")
         .expect("missing JS runtime transaction")
-        .1;
+        .1
+        .as_str();
 
     assert!(
         client_js.contains("async $transactionBatch(operations, options)"),
@@ -591,10 +600,11 @@ model User {
         "expected generated JS declarations to expose $transactionBatch():\n{client_dts}"
     );
     assert!(
-        client_runtime.contains("protocolVersion: 1")
-            && client_runtime.contains("client expects 1")
+        protocol_runtime.contains("export const PROTOCOL_VERSION = 1;")
+            && client_runtime.contains("protocolVersion: PROTOCOL_VERSION")
+            && client_runtime.contains("client expects ${PROTOCOL_VERSION}")
             && client_runtime.contains("transaction.batch"),
-        "expected JS runtime client to speak protocol v1 and expose transaction.batch:\n{client_runtime}"
+        "expected JS runtime client to reuse the shared protocol version constant and expose transaction.batch:\n{client_runtime}\n\nProtocol:\n{protocol_runtime}"
     );
     assert!(
         error_runtime.contains("this.data = details?.data"),
@@ -611,30 +621,35 @@ fn test_python_runtime_stays_on_protocol_v1_and_preserves_error_data() {
     let runtime = python_runtime_files();
     let client_runtime = runtime
         .iter()
-        .find(|(name, _)| *name == "_client.py")
+        .find(|(name, _)| name == "_client.py")
         .expect("missing Python runtime client")
-        .1;
+        .1
+        .as_str();
     let protocol_runtime = runtime
         .iter()
-        .find(|(name, _)| *name == "_protocol.py")
+        .find(|(name, _)| name == "_protocol.py")
         .expect("missing Python runtime protocol")
-        .1;
+        .1
+        .as_str();
     let error_runtime = runtime
         .iter()
-        .find(|(name, _)| *name == "_errors.py")
+        .find(|(name, _)| name == "_errors.py")
         .expect("missing Python runtime errors")
-        .1;
+        .1
+        .as_str();
     let tx_runtime = runtime
         .iter()
-        .find(|(name, _)| *name == "_transaction.py")
+        .find(|(name, _)| name == "_transaction.py")
         .expect("missing Python runtime transaction")
-        .1;
+        .1
+        .as_str();
 
     assert!(
-        client_runtime.contains("\"protocolVersion\": 1")
-            && client_runtime.contains("client expects 1")
+        protocol_runtime.contains("PROTOCOL_VERSION = 1")
+            && client_runtime.contains("\"protocolVersion\": PROTOCOL_VERSION")
+            && client_runtime.contains("client expects {PROTOCOL_VERSION}")
             && client_runtime.contains("async def transaction_batch("),
-        "expected Python runtime client to speak protocol v1 and keep transaction_batch():\n{client_runtime}"
+        "expected Python runtime client to reuse the shared protocol version constant and keep transaction_batch():\n{client_runtime}\n\nProtocol:\n{protocol_runtime}"
     );
     assert!(
         protocol_runtime.contains("self.error.data"),
@@ -664,9 +679,10 @@ model User {
     let runtime = python_runtime_files();
     let engine_runtime = runtime
         .iter()
-        .find(|(name, _)| *name == "_engine.py")
+        .find(|(name, _)| name == "_engine.py")
         .expect("missing Python runtime engine")
-        .1;
+        .1
+        .as_str();
 
     assert!(
         client.contains("pool_options: EnginePoolOptions | None = None"),
@@ -987,6 +1003,47 @@ model User {
 }
 
 #[test]
+fn test_python_single_row_finds_use_dedicated_engine_methods() {
+    let ir = validate(
+        r#"
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let py_models = generate_all_python_models(&ir, false, 0);
+    let py_model = generated_python_file(&py_models, "user.py");
+
+    assert!(
+        py_model.contains(r#""query.findFirst", payload"#),
+        "expected generated Python find_first() to call query.findFirst:\n{py_model}"
+    );
+    assert!(
+        py_model.contains("from .._internal.protocol import PROTOCOL_VERSION")
+            && py_model.contains("\"protocolVersion\": PROTOCOL_VERSION"),
+        "expected generated Python delegates to reuse the shared protocol version constant:\n{py_model}"
+    );
+    assert!(
+        py_model.contains(r#""query.findUnique", payload"#),
+        "expected generated Python find_unique() to call query.findUnique when possible:\n{py_model}"
+    );
+    assert!(
+        py_model.contains("if select is not None or include is not None:"),
+        "expected generated Python find_unique() to fall back to the single-row projection path when select/include are used:\n{py_model}"
+    );
+    assert!(
+        !py_model.contains("rows = self.find_many(where=where, order_by=order_by, take=1, select=select, include=include)"),
+        "generated Python find_first() should no longer delegate to find_many():\n{py_model}"
+    );
+    assert!(
+        !py_model
+            .contains("rows = self.find_many(where=where, take=1, select=select, include=include)"),
+        "generated Python find_unique() should no longer delegate to find_many():\n{py_model}"
+    );
+}
+
+#[test]
 fn test_js_select_input_supports_projection_safe_models() {
     let ir = validate(
         r#"
@@ -1061,6 +1118,46 @@ model User {
 }
 
 #[test]
+fn test_js_single_row_finds_use_dedicated_engine_methods() {
+    let ir = validate(
+        r#"
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let (js_models, _dts_models) = generate_all_js_models(&ir);
+    let js_model = generated_named_file(&js_models, "user.js");
+
+    assert!(
+        js_model.contains("this.client._rpc('query.findFirst', request)"),
+        "expected generated JS findFirst() to call query.findFirst:\n{js_model}"
+    );
+    assert!(
+        js_model.contains("import { PROTOCOL_VERSION } from '../_internal/_protocol.js';")
+            && js_model.contains("protocolVersion: PROTOCOL_VERSION"),
+        "expected generated JS delegates to reuse the shared protocol version constant:\n{js_model}"
+    );
+    assert!(
+        js_model.contains("this.client._rpc('query.findUnique', request)"),
+        "expected generated JS findUnique() to call query.findUnique when possible:\n{js_model}"
+    );
+    assert!(
+        js_model.contains("if (args.select != null || args.include != null)"),
+        "expected generated JS findUnique() to fall back to the single-row projection path when select/include are used:\n{js_model}"
+    );
+    assert!(
+        !js_model.contains("const rows = await this.findMany({ where: args?.where, orderBy: args?.orderBy, take: 1, select: args?.select, include: args?.include });"),
+        "generated JS findFirst() should no longer delegate to findMany():\n{js_model}"
+    );
+    assert!(
+        !js_model.contains("const rows = await this.findMany({ where: args.where, take: 1, select: args.select, include: args.include });"),
+        "generated JS findUnique() should no longer delegate to findMany():\n{js_model}"
+    );
+}
+
+#[test]
 fn test_js_runtime_exposes_engine_pool_options() {
     let ir = validate(
         r#"
@@ -1074,19 +1171,22 @@ model User {
     let runtime = js_runtime_files();
     let client_runtime = runtime
         .iter()
-        .find(|(name, _)| *name == "_client.d.ts")
+        .find(|(name, _)| name == "_client.d.ts")
         .expect("missing JS runtime client declarations")
-        .1;
+        .1
+        .as_str();
     let engine_runtime_dts = runtime
         .iter()
-        .find(|(name, _)| *name == "_engine.d.ts")
+        .find(|(name, _)| name == "_engine.d.ts")
         .expect("missing JS runtime engine declarations")
-        .1;
+        .1
+        .as_str();
     let engine_runtime = runtime
         .iter()
-        .find(|(name, _)| *name == "_engine.js")
+        .find(|(name, _)| name == "_engine.js")
         .expect("missing JS runtime engine")
-        .1;
+        .1
+        .as_str();
 
     assert!(
         client_dts.contains("constructor(options?: NautilusClientOptions);")
@@ -1635,6 +1735,50 @@ model User {
     assert!(py_model.contains("class JsonFilter(TypedDict, total=False):"));
     assert!(py_model.contains("equals: NotRequired[JsonValue]"));
     assert!(py_model.contains("payload: NotRequired[Union[JsonScalarOrArray, JsonFilter]]"));
+}
+
+#[test]
+fn test_java_single_row_finds_use_dedicated_engine_methods() {
+    let ir = validate(
+        r#"
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+}
+
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let java_files =
+        generate_java_client(&ir, "schema.nautilus", false).expect("generate_java_client failed");
+    let delegate = generated_java_file(&java_files, "client/UserDelegate.java");
+
+    assert!(
+        delegate.contains("JsonNode result = rpc(\"query.findFirst\", request);"),
+        "expected generated Java findFirst() to call query.findFirst:\n{delegate}"
+    );
+    assert!(
+        delegate.contains("request.put(\"protocolVersion\", JsonSupport.PROTOCOL_VERSION);"),
+        "expected generated Java delegates to reuse the shared protocol version constant:\n{delegate}"
+    );
+    assert!(
+        delegate.contains("JsonNode result = rpc(\"query.findUnique\", request);"),
+        "expected generated Java findUnique() to call query.findUnique when possible:\n{delegate}"
+    );
+    assert!(
+        delegate.contains("if (node.size() == 1 && node.has(\"where\"))"),
+        "expected generated Java findUnique() to gate the unique-only fast path conservatively:\n{delegate}"
+    );
+    assert!(
+        !delegate.contains("return findFirst(spec);"),
+        "generated Java findUnique() should no longer alias directly to findFirst():\n{delegate}"
+    );
 }
 
 #[test]

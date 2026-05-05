@@ -23,6 +23,7 @@ from decimal import Decimal
 {%- endif %}
 from enum import Enum
 from .._internal.descriptors import classproperty
+from .._internal.protocol import PROTOCOL_VERSION
 {% if has_enums %}
 
 from ..enums.enums import {% for e in enum_imports %}{{ e }}{% if not loop.last %}, {% endif %}{% endfor %}
@@ -254,6 +255,16 @@ def _serialize_nearest_input(nearest: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(field_name, str) and "query" in result:
         result["query"] = _serialize_scalar_input(field_name, result["query"])
     return result
+
+
+def _first_data_row(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    data = result.get("data")
+    if not isinstance(data, list) or not data:
+        return None
+    row = data[0]
+    if not isinstance(row, dict):
+        return None
+    return row
 
 
 def _process_create_data(data: Dict[str, Any], py_to_db: Dict[str, str]) -> Dict[str, Any]:
@@ -516,7 +527,7 @@ class {{ delegate_name }}:
         if distinct is not None:
             args["distinct"] = distinct
         payload: Dict[str, Any] = {
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "model": "{{ model_name }}",
             "args": args,
         }
@@ -540,8 +551,31 @@ class {{ delegate_name }}:
         Returns:
             The first matching ``{{ model_name }}`` instance, or ``None``.
         """
-        rows = {% if is_async %}await {% endif %}self.find_many(where=where, order_by=order_by,{% if has_vector_fields %} nearest=nearest,{% endif %} take=1, select=select, include=include)
-        return rows[0] if rows else None
+        args: Dict[str, Any] = {"take": 1}
+        if where is not None:
+            args["where"] = _process_where_filters(where, _{{ table_name }}_py_to_db)
+        if order_by is not None:
+            if isinstance(order_by, list):
+                args["orderBy"] = order_by
+            else:
+                args["orderBy"] = [{field: direction} for field, direction in order_by.items()]
+{% if has_vector_fields %}
+        if nearest is not None:
+            args["nearest"] = _serialize_nearest_input(nearest)
+{% endif %}
+        if select is not None:
+            args["select"] = _process_select_fields(select, _{{ table_name }}_py_to_logical)
+        if include is not None:
+            args["include"] = _serialize_include(include)
+
+        payload: Dict[str, Any] = {
+            "protocolVersion": PROTOCOL_VERSION,
+            "model": "{{ model_name }}",
+            "args": args,
+        }
+        result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.findFirst", payload)
+        row = _first_data_row(result)
+        return _{{ table_name }}_from_row(row) if row is not None else None
 
     {% if is_async %}async {% endif %}def find_unique(
         self,
@@ -555,8 +589,17 @@ class {{ delegate_name }}:
         Returns:
             The matching ``{{ model_name }}`` instance, or ``None``.
         """
-        rows = {% if is_async %}await {% endif %}self.find_many(where=where, take=1, select=select, include=include)
-        return rows[0] if rows else None
+        if select is not None or include is not None:
+            return {% if is_async %}await {% endif %}self.find_first(where=where, select=select, include=include)
+
+        payload: Dict[str, Any] = {
+            "protocolVersion": PROTOCOL_VERSION,
+            "model": "{{ model_name }}",
+            "filter": _process_where_filters(where, _{{ table_name }}_py_to_db),
+        }
+        result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.findUnique", payload)
+        row = _first_data_row(result)
+        return _{{ table_name }}_from_row(row) if row is not None else None
 
     {% if is_async %}async {% endif %}def find_unique_or_throw(
         self,
@@ -620,7 +663,7 @@ class {{ delegate_name }}:
             ``return_data=False``.
         """
         result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.create", {
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "model": "{{ model_name }}",
             "data": _process_create_data(data, _{{ table_name }}_py_to_db),
             "returnData": return_data,
@@ -650,7 +693,7 @@ class {{ delegate_name }}:
             list when ``return_data=False``.
         """
         result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.createMany", {
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "model": "{{ model_name }}",
             "data": [_process_create_data(_entry, _{{ table_name }}_py_to_db) for _entry in data],
             "returnData": return_data,
@@ -680,7 +723,7 @@ class {{ delegate_name }}:
             (affected-row count) when ``return_data=False``.
         """
         result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.update", {
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "model": "{{ model_name }}",
             "filter": _process_where_filters(where or {}, _{{ table_name }}_py_to_db),
             "data": _process_create_data(data, _{{ table_name }}_py_to_db),
@@ -725,7 +768,7 @@ class {{ delegate_name }}:
 {%- endfor %}
         }
         result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.delete", {
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "model": "{{ model_name }}",
             "filter": _process_where_filters(pk_filter, _{{ table_name }}_py_to_db),
             "returnData": return_data,
@@ -755,7 +798,7 @@ class {{ delegate_name }}:
             or ``List[{{ model_name }}]`` when ``return_data=True``.
         """
         result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.delete", {
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "model": "{{ model_name }}",
             "filter": _process_where_filters(where or {}, _{{ table_name }}_py_to_db),
             "returnData": return_data,
@@ -797,7 +840,7 @@ class {{ delegate_name }}:
             args["cursor"] = cursor
 
         result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.count", {
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "model": "{{ model_name }}",
             "args": args if args else None,
         })
@@ -875,7 +918,7 @@ class {{ delegate_name }}:
                 args["orderBy"] = [{field: direction} for field, direction in order.items()]
 
         result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.groupBy", {
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "model": "{{ model_name }}",
             "args": args,
         })
@@ -898,7 +941,7 @@ class {{ delegate_name }}:
             A list of dicts mapping column name to value for each result row.
         """
         result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.rawQuery", {
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "sql": sql,
         })
         return result.get("data", [])
@@ -921,7 +964,7 @@ class {{ delegate_name }}:
             A list of dicts mapping column name to value for each result row.
         """
         result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.rawStmtQuery", {
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "sql": sql,
             "params": params or [],
         })

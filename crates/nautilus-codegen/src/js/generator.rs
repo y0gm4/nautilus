@@ -201,6 +201,7 @@ fn generate_js_model_with_registry(
     extensions: &ExtensionRegistry,
 ) -> ((String, String), (String, String)) {
     let mut context = Context::new();
+    crate::template::insert_protocol_version(&mut context);
 
     context.insert("model_name", &model.logical_name);
     context.insert("snake_name", &model.logical_name.to_snake_case());
@@ -702,47 +703,50 @@ pub fn generate_js_models_index(js_models: &[(String, String)]) -> (String, Stri
 
 /// Static JavaScript + declaration runtime files embedded at compile time.
 /// Returns `Vec<(filename, content)>` containing both `.js` and `.d.ts` pairs.
-pub fn js_runtime_files() -> Vec<(&'static str, &'static str)> {
+pub fn js_runtime_files() -> Vec<(String, String)> {
+    let protocol_version = nautilus_protocol::PROTOCOL_VERSION.to_string();
     vec![
         (
-            "_errors.js",
-            include_str!("../../templates/js/runtime/_errors.js"),
+            "_errors.js".to_string(),
+            include_str!("../../templates/js/runtime/_errors.js").to_string(),
         ),
         (
-            "_errors.d.ts",
-            include_str!("../../templates/js/runtime/_errors.d.ts"),
+            "_errors.d.ts".to_string(),
+            include_str!("../../templates/js/runtime/_errors.d.ts").to_string(),
         ),
         (
-            "_protocol.js",
-            include_str!("../../templates/js/runtime/_protocol.js"),
+            "_protocol.js".to_string(),
+            include_str!("../../templates/js/runtime/_protocol.js")
+                .replace("{{ protocol_version }}", &protocol_version),
         ),
         (
-            "_protocol.d.ts",
-            include_str!("../../templates/js/runtime/_protocol.d.ts"),
+            "_protocol.d.ts".to_string(),
+            include_str!("../../templates/js/runtime/_protocol.d.ts")
+                .replace("{{ protocol_version }}", &protocol_version),
         ),
         (
-            "_engine.js",
-            include_str!("../../templates/js/runtime/_engine.js"),
+            "_engine.js".to_string(),
+            include_str!("../../templates/js/runtime/_engine.js").to_string(),
         ),
         (
-            "_engine.d.ts",
-            include_str!("../../templates/js/runtime/_engine.d.ts"),
+            "_engine.d.ts".to_string(),
+            include_str!("../../templates/js/runtime/_engine.d.ts").to_string(),
         ),
         (
-            "_client.js",
-            include_str!("../../templates/js/runtime/_client.js"),
+            "_client.js".to_string(),
+            include_str!("../../templates/js/runtime/_client.js").to_string(),
         ),
         (
-            "_client.d.ts",
-            include_str!("../../templates/js/runtime/_client.d.ts"),
+            "_client.d.ts".to_string(),
+            include_str!("../../templates/js/runtime/_client.d.ts").to_string(),
         ),
         (
-            "_transaction.js",
-            include_str!("../../templates/js/runtime/_transaction.js"),
+            "_transaction.js".to_string(),
+            include_str!("../../templates/js/runtime/_transaction.js").to_string(),
         ),
         (
-            "_transaction.d.ts",
-            include_str!("../../templates/js/runtime/_transaction.d.ts"),
+            "_transaction.d.ts".to_string(),
+            include_str!("../../templates/js/runtime/_transaction.d.ts").to_string(),
         ),
     ]
 }
