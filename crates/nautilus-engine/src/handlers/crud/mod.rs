@@ -3,7 +3,8 @@
 
 use nautilus_connector::Row;
 use nautilus_core::{
-    build_cursor_predicate, Delete, Expr, Insert, OrderDir, Select, SelectItem, Update, Value,
+    build_cursor_predicate, Delete, DeleteCapacity, Expr, Insert, InsertCapacity, OrderDir, Select,
+    SelectCapacity, SelectItem, Update, UpdateCapacity, Value,
 };
 use nautilus_dialect::Sql;
 use nautilus_protocol::wire::ok_partial;

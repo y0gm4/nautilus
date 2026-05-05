@@ -145,7 +145,18 @@ pub(super) async fn handle_group_by(
         .transpose()?
         .unwrap_or_default();
 
-    let mut builder = Select::from_table(&model.db_name);
+    let order_by_columns = group_orders
+        .iter()
+        .filter(|order| matches!(order, crate::filter::GroupByOrderItem::Column(_)))
+        .count();
+    let order_by_exprs = group_orders.len() - order_by_columns;
+    let mut builder = Select::from_table(&model.db_name).with_capacity(SelectCapacity {
+        items: by_fields.len() + aggregate_items.len(),
+        order_by_columns,
+        order_by_exprs,
+        group_by: by_fields.len(),
+        ..SelectCapacity::default()
+    });
 
     for field_name in &by_fields {
         let db_col = logical_to_db

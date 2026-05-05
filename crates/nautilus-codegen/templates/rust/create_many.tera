@@ -80,16 +80,14 @@ where
 {%- endfor %}
         ];
 
-        let mut builder = Insert::into_table("{{ table_name }}")
-            .columns(columns);
-
+        let mut rows = Vec::with_capacity(self.entries.len());
         for entry in &self.entries {
             let row = vec![
 {%- for field in create_fields %}
                 Value::from(entry.{{ field.name }}.clone()),
 {%- endfor %}
             ];
-            builder = builder.values(row);
+            rows.push(row);
         }
 
         let returning_cols = vec![
@@ -97,7 +95,15 @@ where
             ColumnMarker::new("{{ table_name }}", "{{ field.db_name }}"),
 {%- endfor %}
         ];
-        builder = builder.returning(returning_cols);
+        let builder = Insert::into_table("{{ table_name }}")
+            .with_capacity(InsertCapacity {
+                columns: columns.len(),
+                rows: rows.len(),
+                returning: returning_cols.len(),
+            })
+            .columns(columns)
+            .rows(rows)
+            .returning(returning_cols);
 
         let insert = builder.build()?;
         let sql = self.client.dialect().render_insert_owned(insert)?;

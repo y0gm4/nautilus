@@ -17,7 +17,7 @@ where
             client,
             filter: None,
             require_filter: true,
-            assignments: Vec::new(),
+            assignments: Vec::with_capacity({{ create_fields | length }}),
         }
     }
 
@@ -80,10 +80,12 @@ where
             ));
         }
 
-        let mut builder = Update::table("{{ table_name }}");
-        for (col, val) in self.assignments {
-            builder = builder.set(col, val);
-        }
+        let mut builder = Update::table("{{ table_name }}")
+            .with_capacity(UpdateCapacity {
+                assignments: self.assignments.len(),
+                returning: usize::from(self.client.dialect().supports_returning()) * {{ all_scalar_fields | length }},
+            })
+            .assignments(self.assignments);
         if let Some(filter) = self.filter {
             builder = builder.filter(filter);
         }

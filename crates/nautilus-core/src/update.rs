@@ -30,6 +30,15 @@ impl Update {
     }
 }
 
+/// Reserved capacities for the `Vec`s maintained by an [`UpdateBuilder`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UpdateCapacity {
+    /// Expected number of column assignments.
+    pub assignments: usize,
+    /// Expected number of `RETURNING` columns.
+    pub returning: usize,
+}
+
 /// Builder for UPDATE queries.
 #[derive(Debug, Clone)]
 pub struct UpdateBuilder {
@@ -40,10 +49,25 @@ pub struct UpdateBuilder {
 }
 
 impl UpdateBuilder {
+    /// Reserve capacity for the builder's internal vectors.
+    #[must_use]
+    pub fn with_capacity(mut self, capacity: UpdateCapacity) -> Self {
+        self.assignments.reserve(capacity.assignments);
+        self.returning.reserve(capacity.returning);
+        self
+    }
+
     /// Adds a column-value assignment to the SET clause.
     #[must_use]
     pub fn set(mut self, column: ColumnMarker, value: Value) -> Self {
         self.assignments.push((column, value));
+        self
+    }
+
+    /// Sets all column-value assignments in one call.
+    #[must_use]
+    pub fn assignments(mut self, assignments: Vec<(ColumnMarker, Value)>) -> Self {
+        self.assignments = assignments;
         self
     }
 

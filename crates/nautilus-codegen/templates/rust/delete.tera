@@ -46,7 +46,9 @@ where
             ));
         }
 
-        let mut builder = Delete::from_table("{{ table_name }}");
+        let mut builder = Delete::from_table("{{ table_name }}").with_capacity(DeleteCapacity {
+            returning: usize::from(self.client.dialect().supports_returning()) * {{ all_scalar_fields | length }},
+        });
         if let Some(filter) = self.filter {
             builder = builder.filter(filter);
         }

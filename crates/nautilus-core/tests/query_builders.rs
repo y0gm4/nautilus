@@ -5,8 +5,8 @@
 //! and pagination.
 
 use nautilus_core::{
-    ColumnMarker, Delete, Expr, Insert, JoinClause, JoinType, OrderDir, Select, SelectItem, Update,
-    Value,
+    ColumnMarker, Delete, DeleteCapacity, Expr, Insert, InsertCapacity, JoinClause, JoinType,
+    OrderDir, Select, SelectCapacity, SelectItem, Update, UpdateCapacity, Value,
 };
 
 #[test]
@@ -14,6 +14,11 @@ fn select_with_filter_take_skip() {
     let filter = Expr::column("users__active").eq(Expr::param(Value::Bool(true)));
 
     let sel = Select::from_table("users")
+        .with_capacity(SelectCapacity {
+            items: 2,
+            order_by_columns: 1,
+            ..SelectCapacity::default()
+        })
         .items(vec![
             SelectItem::column(ColumnMarker::new("users", "id")),
             SelectItem::column(ColumnMarker::new("users", "email")),
@@ -89,6 +94,11 @@ fn select_distinct() {
 #[test]
 fn insert_with_returning() {
     let ins = Insert::into_table("users")
+        .with_capacity(InsertCapacity {
+            columns: 2,
+            rows: 1,
+            returning: 1,
+        })
         .columns(vec![
             ColumnMarker::new("users", "email"),
             ColumnMarker::new("users", "name"),
@@ -126,10 +136,14 @@ fn update_with_filter_and_returning() {
     let filter = Expr::column("users__id").eq(Expr::param(Value::I64(1)));
 
     let upd = Update::table("users")
-        .set(
+        .with_capacity(UpdateCapacity {
+            assignments: 1,
+            returning: 1,
+        })
+        .assignments(vec![(
             ColumnMarker::new("users", "email"),
             Value::String("new@example.com".into()),
-        )
+        )])
         .filter(filter.clone())
         .returning(vec![ColumnMarker::new("users", "id")])
         .build()
@@ -177,12 +191,32 @@ fn delete_with_filter() {
 #[test]
 fn delete_with_returning() {
     let del = Delete::from_table("users")
+        .with_capacity(DeleteCapacity { returning: 1 })
         .filter(Expr::column("users__id").eq(Expr::param(Value::I64(1))))
         .returning(vec![ColumnMarker::new("users", "id")])
         .build()
         .unwrap();
 
     assert_eq!(del.returning.len(), 1);
+}
+
+#[test]
+fn insert_rows_builder_batches_rows() {
+    let ins = Insert::into_table("users")
+        .with_capacity(InsertCapacity {
+            columns: 1,
+            rows: 2,
+            returning: 0,
+        })
+        .columns(vec![ColumnMarker::new("users", "email")])
+        .rows(vec![
+            vec![Value::String("alice@example.com".into())],
+            vec![Value::String("bob@example.com".into())],
+        ])
+        .build()
+        .unwrap();
+
+    assert_eq!(ins.values.len(), 2);
 }
 
 #[test]

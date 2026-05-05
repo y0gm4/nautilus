@@ -34,8 +34,8 @@ where
         use nautilus_core::*;
         use std::convert::Into;
 
-        let mut columns = Vec::new();
-        let mut values = Vec::new();
+        let mut columns = Vec::with_capacity({{ create_fields | length }});
+        let mut values = Vec::with_capacity({{ create_fields | length }});
 
 {%- for field in create_fields %}
         if let Some(value) = self.{{ field.name }} {

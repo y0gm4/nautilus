@@ -29,15 +29,16 @@ pub mod value;
 pub use args::{FindManyArgs, FindUniqueArgs, IncludeRelation, VectorMetric, VectorNearest};
 pub use column::{Column, ColumnMarker, FromValue, RowAccess, SelectColumns};
 pub use cursor::build_cursor_predicate;
-pub use delete::{Delete, DeleteBuilder};
+pub use delete::{Delete, DeleteBuilder, DeleteCapacity};
 pub use error::{Error, Result};
 pub use expr::{BinaryOp, Expr};
-pub use insert::{Insert, InsertBuilder};
+pub use insert::{Insert, InsertBuilder, InsertCapacity};
 pub use protocol_json::{
     find_many_args_to_protocol_json, find_many_args_to_protocol_object, where_expr_to_protocol_json,
 };
 pub use select::{
-    JoinClause, JoinType, OrderBy, OrderByItem, OrderDir, Select, SelectBuilder, SelectItem,
+    JoinClause, JoinType, OrderBy, OrderByItem, OrderDir, Select, SelectBuilder, SelectCapacity,
+    SelectItem,
 };
-pub use update::{Update, UpdateBuilder};
+pub use update::{Update, UpdateBuilder, UpdateCapacity};
 pub use value::{Geography, Geometry, Value};

@@ -149,11 +149,16 @@ async fn execute_find_many_rows(
     let logical_to_db = metadata.logical_to_db();
     let qualified_filter =
         filter.map(|expr| qualify_filter_columns(expr, &model.db_name, logical_to_db));
-
-    let mut builder = Select::from_table(&model.db_name);
-    let mut row_hints = Vec::new();
-
     let pk_fields = metadata.primary_key_fields();
+
+    let mut builder = Select::from_table(&model.db_name).with_capacity(SelectCapacity {
+        items: metadata.scalar_fields().len(),
+        order_by_columns: order_by.len() + distinct.len() + pk_fields.len(),
+        order_by_exprs: usize::from(nearest.is_some()),
+        distinct: distinct.len(),
+        ..SelectCapacity::default()
+    });
+    let mut row_hints = Vec::new();
 
     for field in metadata.scalar_fields() {
         if !select.is_empty()
@@ -409,7 +414,10 @@ pub(super) async fn handle_find_unique(
         metadata.logical_to_db(),
     )?;
 
-    let mut builder = Select::from_table(&model.db_name);
+    let mut builder = Select::from_table(&model.db_name).with_capacity(SelectCapacity {
+        items: metadata.scalar_markers().len(),
+        ..SelectCapacity::default()
+    });
     for marker in metadata.scalar_markers() {
         builder = builder.item(SelectItem::from(marker.clone()));
     }
@@ -497,6 +505,10 @@ pub(super) async fn handle_count(
 
     let sql: Sql = if has_pagination {
         let mut inner = Select::from_table(&model.db_name)
+            .with_capacity(SelectCapacity {
+                items: 1,
+                ..SelectCapacity::default()
+            })
             .item(SelectItem::computed(Expr::param(Value::I32(1)), "_1"));
         if let Some(filter) = qualified_filter {
             inner = inner.filter(filter);
@@ -521,10 +533,15 @@ pub(super) async fn handle_count(
             params: inner_rendered.params,
         }
     } else {
-        let mut builder = Select::from_table(&model.db_name).item(SelectItem::computed(
-            Expr::function_call("COUNT", vec![Expr::star()]),
-            "count",
-        ));
+        let mut builder = Select::from_table(&model.db_name)
+            .with_capacity(SelectCapacity {
+                items: 1,
+                ..SelectCapacity::default()
+            })
+            .item(SelectItem::computed(
+                Expr::function_call("COUNT", vec![Expr::star()]),
+                "count",
+            ));
         if let Some(filter) = qualified_filter {
             builder = builder.filter(filter);
         }

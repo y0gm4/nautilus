@@ -124,7 +124,12 @@ where
             distinct,
             _selection,
         } = self;
-        let mut builder = Select::from_table("{{ table_name }}");
+        let mut builder = Select::from_table("{{ table_name }}").with_capacity(SelectCapacity {
+            items: {{ scalar_fields | length }},
+            order_by_columns: order_by.len() + distinct.len() + {{ pk_fields_with_db | length }},
+            distinct: distinct.len(),
+            ..SelectCapacity::default()
+        });
         let mut row_hints: Vec<Option<crate::ValueHint>> = Vec::new();
 
         // Add scalar columns (PK columns always included; others filtered by select if active)

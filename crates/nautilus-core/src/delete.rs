@@ -26,6 +26,13 @@ impl Delete {
     }
 }
 
+/// Reserved capacities for the `Vec`s maintained by a [`DeleteBuilder`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeleteCapacity {
+    /// Expected number of `RETURNING` columns.
+    pub returning: usize,
+}
+
 /// Builder for DELETE queries.
 #[derive(Debug, Clone)]
 pub struct DeleteBuilder {
@@ -35,6 +42,13 @@ pub struct DeleteBuilder {
 }
 
 impl DeleteBuilder {
+    /// Reserve capacity for the builder's internal vectors.
+    #[must_use]
+    pub fn with_capacity(mut self, capacity: DeleteCapacity) -> Self {
+        self.returning.reserve(capacity.returning);
+        self
+    }
+
     /// Adds a WHERE clause filter.
     #[must_use]
     pub fn filter(mut self, expr: Expr) -> Self {

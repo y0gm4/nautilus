@@ -77,6 +77,23 @@ impl OrderBy {
     }
 }
 
+/// Reserved capacities for the `Vec`s maintained by a [`SelectBuilder`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SelectCapacity {
+    /// Expected number of select-list items.
+    pub items: usize,
+    /// Expected number of JOIN clauses.
+    pub joins: usize,
+    /// Expected number of column-based `ORDER BY` items.
+    pub order_by_columns: usize,
+    /// Expected number of expression-based `ORDER BY` items.
+    pub order_by_exprs: usize,
+    /// Expected number of `GROUP BY` columns.
+    pub group_by: usize,
+    /// Expected number of `DISTINCT` columns.
+    pub distinct: usize,
+}
+
 /// One ORDER BY item in the original user-specified sequence.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OrderByItem {
@@ -200,6 +217,20 @@ pub struct SelectBuilder {
 }
 
 impl SelectBuilder {
+    /// Reserve capacity for the builder's internal vectors.
+    #[must_use]
+    pub fn with_capacity(mut self, capacity: SelectCapacity) -> Self {
+        self.items.reserve(capacity.items);
+        self.joins.reserve(capacity.joins);
+        self.order_by.reserve(capacity.order_by_columns);
+        self.group_by.reserve(capacity.group_by);
+        self.distinct.reserve(capacity.distinct);
+        self.order_by_items
+            .reserve(capacity.order_by_columns + capacity.order_by_exprs);
+        self.order_by_exprs.reserve(capacity.order_by_exprs);
+        self
+    }
+
     /// Sets the select items.
     #[must_use]
     pub fn items(mut self, items: Vec<SelectItem>) -> Self {

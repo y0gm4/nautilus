@@ -97,9 +97,9 @@ pub(super) async fn handle_create(
         .as_object()
         .ok_or_else(|| ProtocolError::InvalidParams("data must be an object".to_string()))?;
 
-    let mut builder = Insert::into_table(&model.db_name);
-    let mut columns = Vec::new();
-    let mut values = Vec::new();
+    let scalar_field_capacity = metadata.scalar_fields().len();
+    let mut columns = Vec::with_capacity(scalar_field_capacity);
+    let mut values = Vec::with_capacity(scalar_field_capacity);
 
     for field in &model.fields {
         if matches!(field.field_type, ResolvedFieldType::Relation(_)) {
@@ -111,7 +111,14 @@ pub(super) async fn handle_create(
         }
     }
 
-    builder = builder.columns(columns).values(values);
+    let mut builder = Insert::into_table(&model.db_name)
+        .with_capacity(InsertCapacity {
+            columns: columns.len(),
+            rows: 1,
+            returning: usize::from(params.return_data) * metadata.scalar_markers().len(),
+        })
+        .columns(columns)
+        .values(values);
     if params.return_data {
         builder = builder.returning(metadata.scalar_markers().to_vec());
     }
@@ -168,7 +175,7 @@ pub(super) async fn handle_create_many(
         .map(|field| field_marker(model, field))
         .collect();
 
-    let mut all_values = Vec::new();
+    let mut all_values = Vec::with_capacity(params.data.len());
     for (row_idx, json_value) in params.data.iter().enumerate() {
         let data_obj = json_value.as_object().ok_or_else(|| {
             ProtocolError::InvalidParams("data items must be objects".to_string())
@@ -200,7 +207,7 @@ pub(super) async fn handle_create_many(
             )));
         }
 
-        let mut row_values = Vec::new();
+        let mut row_values = Vec::with_capacity(relevant_fields.len());
         for field in &relevant_fields {
             if let Some(value) = field_input_value(data_obj, field, FieldInputMode::Create)? {
                 row_values.push(value);
@@ -211,10 +218,14 @@ pub(super) async fn handle_create_many(
         all_values.push(row_values);
     }
 
-    let mut builder = Insert::into_table(&model.db_name).columns(columns);
-    for row in all_values {
-        builder = builder.values(row);
-    }
+    let mut builder = Insert::into_table(&model.db_name)
+        .with_capacity(InsertCapacity {
+            columns: columns.len(),
+            rows: all_values.len(),
+            returning: usize::from(params.return_data) * metadata.scalar_markers().len(),
+        })
+        .columns(columns)
+        .rows(all_values);
     if params.return_data {
         builder = builder.returning(metadata.scalar_markers().to_vec());
     }
@@ -261,16 +272,23 @@ pub(super) async fn handle_update(
         .as_object()
         .ok_or_else(|| ProtocolError::InvalidParams("data must be an object".to_string()))?;
 
-    let mut builder = Update::table(&model.db_name);
+    let mut assignments = Vec::with_capacity(metadata.scalar_fields().len());
 
     for field in &model.fields {
         if matches!(field.field_type, ResolvedFieldType::Relation(_)) {
             continue;
         }
         if let Some(value) = field_input_value(data_obj, field, FieldInputMode::Update)? {
-            builder = builder.set(field_marker(model, field), value);
+            assignments.push((field_marker(model, field), value));
         }
     }
+
+    let mut builder = Update::table(&model.db_name)
+        .with_capacity(UpdateCapacity {
+            assignments: assignments.len(),
+            returning: usize::from(params.return_data) * metadata.scalar_markers().len(),
+        })
+        .assignments(assignments);
 
     if let Some(filter) = qualified_filter {
         builder = builder.filter(filter);
@@ -317,7 +335,9 @@ pub(super) async fn handle_delete(
         metadata.logical_to_db(),
     )?;
 
-    let mut builder = Delete::from_table(&model.db_name);
+    let mut builder = Delete::from_table(&model.db_name).with_capacity(DeleteCapacity {
+        returning: usize::from(params.return_data) * metadata.scalar_markers().len(),
+    });
     if let Some(filter) = qualified_filter {
         builder = builder.filter(filter);
     }

@@ -29,6 +29,17 @@ impl Insert {
     }
 }
 
+/// Reserved capacities for the `Vec`s maintained by an [`InsertBuilder`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InsertCapacity {
+    /// Expected number of insert columns.
+    pub columns: usize,
+    /// Expected number of rows to insert.
+    pub rows: usize,
+    /// Expected number of `RETURNING` columns.
+    pub returning: usize,
+}
+
 /// Builder for INSERT queries.
 #[derive(Debug, Clone)]
 pub struct InsertBuilder {
@@ -39,6 +50,15 @@ pub struct InsertBuilder {
 }
 
 impl InsertBuilder {
+    /// Reserve capacity for the builder's internal vectors.
+    #[must_use]
+    pub fn with_capacity(mut self, capacity: InsertCapacity) -> Self {
+        self.columns.reserve(capacity.columns);
+        self.values.reserve(capacity.rows);
+        self.returning.reserve(capacity.returning);
+        self
+    }
+
     /// Sets the columns to insert into.
     #[must_use]
     pub fn columns(mut self, columns: Vec<ColumnMarker>) -> Self {
@@ -60,6 +80,13 @@ impl InsertBuilder {
     #[must_use]
     pub fn values(mut self, row: Vec<Value>) -> Self {
         self.values.push(row);
+        self
+    }
+
+    /// Sets all rows to insert in one call.
+    #[must_use]
+    pub fn rows(mut self, rows: Vec<Vec<Value>>) -> Self {
+        self.values = rows;
         self
     }
 
