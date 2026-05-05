@@ -122,7 +122,7 @@ pub(super) async fn handle_create(
 
     let sql = state
         .dialect
-        .render_insert(&insert)
+        .render_insert_owned(insert)
         .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
 
     finish_mutation(
@@ -225,7 +225,7 @@ pub(super) async fn handle_create_many(
 
     let sql = state
         .dialect
-        .render_insert(&insert)
+        .render_insert_owned(insert)
         .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
 
     finish_mutation(
@@ -286,7 +286,7 @@ pub(super) async fn handle_update(
 
     let sql = state
         .dialect
-        .render_update(&update)
+        .render_update_owned(update)
         .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
 
     finish_mutation(
@@ -332,7 +332,7 @@ pub(super) async fn handle_delete(
 
     let sql = state
         .dialect
-        .render_delete(&delete)
+        .render_delete_owned(delete)
         .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
 
     finish_mutation(

@@ -450,6 +450,423 @@ macro_rules! render_expr_common {
     };
 }
 
+/// Mutable/owned variant of [`render_returning!`] used by `render_*_owned`.
+macro_rules! render_returning_mut {
+    ($ctx:expr, $returning:expr, $quote:expr) => {{
+        if !$returning.is_empty() {
+            $ctx.sql.push_str(" RETURNING ");
+            for (i, col) in $returning.iter().enumerate() {
+                if i > 0 {
+                    $ctx.sql.push_str(", ");
+                }
+                crate::push_qualified_identifier(&mut $ctx.sql, &col.table, &col.name, $quote);
+                $ctx.sql.push_str(" AS ");
+                crate::push_column_alias(&mut $ctx.sql, col, $quote);
+            }
+        }
+    }};
+}
+
+/// Mutable/owned variant of [`render_insert_body!`] used by `render_*_owned`.
+macro_rules! render_insert_body_mut {
+    ($ctx:expr, $insert:expr, $quote:expr, $supports_returning:expr, $supports_enum_cast:expr) => {{
+        $ctx.sql.push_str("INSERT INTO ");
+        crate::push_quoted_identifier(&mut $ctx.sql, &$insert.table, $quote);
+
+        $ctx.sql.push_str(" (");
+        for (i, col) in $insert.columns.iter().enumerate() {
+            if i > 0 {
+                $ctx.sql.push_str(", ");
+            }
+            crate::push_quoted_identifier(&mut $ctx.sql, &col.name, $quote);
+        }
+        $ctx.sql.push(')');
+
+        $ctx.sql.push_str(" VALUES ");
+        for (row_idx, row) in $insert.values.iter_mut().enumerate() {
+            if row_idx > 0 {
+                $ctx.sql.push_str(", ");
+            }
+            $ctx.sql.push('(');
+            for (val_idx, value) in row.iter_mut().enumerate() {
+                if val_idx > 0 {
+                    $ctx.sql.push_str(", ");
+                }
+                if matches!(value, nautilus_core::Value::Null) {
+                    $ctx.sql.push_str("NULL");
+                } else {
+                    let enum_type_name = if $supports_enum_cast {
+                        if let nautilus_core::Value::Enum { type_name, .. } = value {
+                            Some(type_name.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    $ctx.take_param(value);
+                    if let Some(type_name) = enum_type_name.as_deref() {
+                        $ctx.sql.push_str("::");
+                        $ctx.sql.push_str(type_name);
+                    }
+                }
+            }
+            $ctx.sql.push(')');
+        }
+
+        if $supports_returning {
+            render_returning_mut!($ctx, $insert.returning, $quote);
+        }
+    }};
+}
+
+/// Mutable/owned variant of [`render_update_body!`] used by `render_*_owned`.
+macro_rules! render_update_body_mut {
+    ($ctx:expr, $update:expr, $quote:expr, $render_expr:ident, $supports_returning:expr, $supports_enum_cast:expr) => {{
+        $ctx.sql.push_str("UPDATE ");
+        crate::push_quoted_identifier(&mut $ctx.sql, &$update.table, $quote);
+
+        $ctx.sql.push_str(" SET ");
+        for (i, (col, value)) in $update.assignments.iter_mut().enumerate() {
+            if i > 0 {
+                $ctx.sql.push_str(", ");
+            }
+            crate::push_quoted_identifier(&mut $ctx.sql, &col.name, $quote);
+            $ctx.sql.push_str(" = ");
+            if matches!(value, nautilus_core::Value::Null) {
+                $ctx.sql.push_str("NULL");
+            } else {
+                let enum_type_name = if $supports_enum_cast {
+                    if let nautilus_core::Value::Enum { type_name, .. } = value {
+                        Some(type_name.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                $ctx.take_param(value);
+                if let Some(type_name) = enum_type_name.as_deref() {
+                    $ctx.sql.push_str("::");
+                    $ctx.sql.push_str(type_name);
+                }
+            }
+        }
+
+        if let Some(filter) = $update.filter.as_mut() {
+            $ctx.sql.push_str(" WHERE ");
+            $render_expr($ctx, filter);
+        }
+
+        if $supports_returning {
+            render_returning_mut!($ctx, $update.returning, $quote);
+        }
+    }};
+}
+
+/// Mutable/owned variant of [`render_delete_body!`] used by `render_*_owned`.
+macro_rules! render_delete_body_mut {
+    ($ctx:expr, $delete:expr, $quote:expr, $render_expr:ident, $supports_returning:expr) => {{
+        $ctx.sql.push_str("DELETE FROM ");
+        crate::push_quoted_identifier(&mut $ctx.sql, &$delete.table, $quote);
+
+        if let Some(filter) = $delete.filter.as_mut() {
+            $ctx.sql.push_str(" WHERE ");
+            $render_expr($ctx, filter);
+        }
+
+        if $supports_returning {
+            render_returning_mut!($ctx, $delete.returning, $quote);
+        }
+    }};
+}
+
+/// Mutable/owned variant of [`render_select_body_core!`] used by `render_*_owned`.
+macro_rules! render_select_body_core_mut {
+    (
+        $ctx:expr, $select:expr,
+        $quote:expr, $render_expr:ident,
+        $distinct_on:expr, $mysql_limit_hack:expr
+    ) => {{
+        $ctx.sql.push_str("SELECT ");
+
+        if !$select.distinct.is_empty() {
+            if $distinct_on {
+                $ctx.sql.push_str("DISTINCT ON (");
+                for (i, col) in $select.distinct.iter().enumerate() {
+                    if i > 0 {
+                        $ctx.sql.push_str(", ");
+                    }
+                    crate::push_identifier_reference(&mut $ctx.sql, col, $quote);
+                }
+                $ctx.sql.push_str(") ");
+            } else {
+                $ctx.sql.push_str("DISTINCT ");
+            }
+        }
+
+        let has_items =
+            !$select.items.is_empty() || $select.joins.iter().any(|join| !join.items.is_empty());
+
+        if !has_items {
+            $ctx.sql.push('*');
+        } else {
+            let mut first = true;
+            for item in $select.items.iter_mut() {
+                if !first {
+                    $ctx.sql.push_str(", ");
+                }
+                first = false;
+                match item {
+                    nautilus_core::SelectItem::Column(col) => {
+                        crate::push_qualified_identifier(
+                            &mut $ctx.sql,
+                            &col.table,
+                            &col.name,
+                            $quote,
+                        );
+                        $ctx.sql.push_str(" AS ");
+                        crate::push_column_alias(&mut $ctx.sql, col, $quote);
+                    }
+                    nautilus_core::SelectItem::Computed { expr, alias } => {
+                        $ctx.sql.push('(');
+                        $render_expr($ctx, expr);
+                        $ctx.sql.push(')');
+                        $ctx.sql.push_str(" AS ");
+                        crate::push_quoted_identifier(&mut $ctx.sql, alias, $quote);
+                    }
+                }
+            }
+            for join in $select.joins.iter_mut() {
+                for item in join.items.iter_mut() {
+                    if !first {
+                        $ctx.sql.push_str(", ");
+                    }
+                    first = false;
+                    match item {
+                        nautilus_core::SelectItem::Column(col) => {
+                            crate::push_qualified_identifier(
+                                &mut $ctx.sql,
+                                &col.table,
+                                &col.name,
+                                $quote,
+                            );
+                            $ctx.sql.push_str(" AS ");
+                            crate::push_column_alias(&mut $ctx.sql, col, $quote);
+                        }
+                        nautilus_core::SelectItem::Computed { expr, alias } => {
+                            $ctx.sql.push('(');
+                            $render_expr($ctx, expr);
+                            $ctx.sql.push(')');
+                            $ctx.sql.push_str(" AS ");
+                            crate::push_quoted_identifier(&mut $ctx.sql, alias, $quote);
+                        }
+                    }
+                }
+            }
+        }
+
+        $ctx.sql.push_str(" FROM ");
+        crate::push_quoted_identifier(&mut $ctx.sql, &$select.table, $quote);
+
+        for join in $select.joins.iter_mut() {
+            match join.join_type {
+                nautilus_core::JoinType::Inner => $ctx.sql.push_str(" INNER JOIN "),
+                nautilus_core::JoinType::Left => $ctx.sql.push_str(" LEFT JOIN "),
+            }
+            crate::push_quoted_identifier(&mut $ctx.sql, &join.table, $quote);
+            $ctx.sql.push_str(" ON ");
+            $render_expr($ctx, &mut join.on);
+        }
+
+        if let Some(filter) = $select.filter.as_mut() {
+            $ctx.sql.push_str(" WHERE ");
+            $render_expr($ctx, filter);
+        }
+
+        if !$select.group_by.is_empty() {
+            $ctx.sql.push_str(" GROUP BY ");
+            for (i, col) in $select.group_by.iter().enumerate() {
+                if i > 0 {
+                    $ctx.sql.push_str(", ");
+                }
+                crate::push_qualified_identifier(&mut $ctx.sql, &col.table, &col.name, $quote);
+            }
+        }
+
+        if let Some(having) = $select.having.as_mut() {
+            $ctx.sql.push_str(" HAVING ");
+            $render_expr($ctx, having);
+        }
+
+        let has_order_items = !$select.order_by_items.is_empty();
+        let has_col_order = !$select.order_by.is_empty();
+        let has_expr_order = !$select.order_by_exprs.is_empty();
+        if has_order_items || has_col_order || has_expr_order {
+            $ctx.sql.push_str(" ORDER BY ");
+            let mut first = true;
+            if has_order_items {
+                for item in $select.order_by_items.iter_mut() {
+                    if !first {
+                        $ctx.sql.push_str(", ");
+                    }
+                    first = false;
+                    match item {
+                        nautilus_core::OrderByItem::Column(order) => {
+                            crate::push_identifier_reference(&mut $ctx.sql, &order.column, $quote);
+                            match order.direction {
+                                nautilus_core::OrderDir::Asc => $ctx.sql.push_str(" ASC"),
+                                nautilus_core::OrderDir::Desc => $ctx.sql.push_str(" DESC"),
+                            }
+                        }
+                        nautilus_core::OrderByItem::Expr(expr, dir) => {
+                            $render_expr($ctx, expr);
+                            match *dir {
+                                nautilus_core::OrderDir::Asc => $ctx.sql.push_str(" ASC"),
+                                nautilus_core::OrderDir::Desc => $ctx.sql.push_str(" DESC"),
+                            }
+                        }
+                    }
+                }
+            } else {
+                for order in $select.order_by.iter() {
+                    if !first {
+                        $ctx.sql.push_str(", ");
+                    }
+                    first = false;
+                    crate::push_identifier_reference(&mut $ctx.sql, &order.column, $quote);
+                    match order.direction {
+                        nautilus_core::OrderDir::Asc => $ctx.sql.push_str(" ASC"),
+                        nautilus_core::OrderDir::Desc => $ctx.sql.push_str(" DESC"),
+                    }
+                }
+                for (expr, dir) in $select.order_by_exprs.iter_mut() {
+                    if !first {
+                        $ctx.sql.push_str(", ");
+                    }
+                    first = false;
+                    $render_expr($ctx, expr);
+                    match *dir {
+                        nautilus_core::OrderDir::Asc => $ctx.sql.push_str(" ASC"),
+                        nautilus_core::OrderDir::Desc => $ctx.sql.push_str(" DESC"),
+                    }
+                }
+            }
+        }
+
+        if let Some(take) = $select.take {
+            $ctx.sql.push_str(" LIMIT ");
+            crate::push_u32(&mut $ctx.sql, take.unsigned_abs());
+        } else if $mysql_limit_hack && $select.skip.is_some() {
+            $ctx.sql.push_str(" LIMIT 18446744073709551615");
+        }
+
+        if let Some(skip) = $select.skip {
+            $ctx.sql.push_str(" OFFSET ");
+            crate::push_u32(&mut $ctx.sql, skip);
+        }
+    }};
+}
+
+/// Mutable/owned variant of [`render_expr_common!`] used by `render_*_owned`.
+macro_rules! render_expr_common_mut {
+    (
+        $ctx:expr, $expr:expr,
+        $quote:expr, $render_expr:ident, $render_select_body:ident,
+        { $($specific:tt)* }
+    ) => {
+        match $expr {
+            nautilus_core::Expr::Column(name) => {
+                crate::push_identifier_reference(&mut $ctx.sql, name, $quote);
+            }
+            nautilus_core::Expr::Not(inner) => {
+                $ctx.sql.push_str("NOT (");
+                $render_expr($ctx, inner.as_mut());
+                $ctx.sql.push(')');
+            }
+            nautilus_core::Expr::Exists(subquery) => {
+                $ctx.sql.push_str("EXISTS (");
+                $render_select_body($ctx, subquery.as_mut());
+                $ctx.sql.push(')');
+            }
+            nautilus_core::Expr::NotExists(subquery) => {
+                $ctx.sql.push_str("NOT EXISTS (");
+                $render_select_body($ctx, subquery.as_mut());
+                $ctx.sql.push(')');
+            }
+            nautilus_core::Expr::Relation { op, relation } => {
+                let is_exists = matches!(*op, nautilus_core::expr::RelationFilterOp::Some);
+                if is_exists {
+                    $ctx.sql.push_str("EXISTS (SELECT * FROM ");
+                } else {
+                    $ctx.sql.push_str("NOT EXISTS (SELECT * FROM ");
+                }
+                crate::push_quoted_identifier(&mut $ctx.sql, &relation.target_table, $quote);
+                $ctx.sql.push_str(" WHERE ");
+                crate::push_qualified_identifier(
+                    &mut $ctx.sql,
+                    &relation.target_table,
+                    &relation.fk_db,
+                    $quote,
+                );
+                $ctx.sql.push_str(" = ");
+                crate::push_qualified_identifier(
+                    &mut $ctx.sql,
+                    &relation.parent_table,
+                    &relation.pk_db,
+                    $quote,
+                );
+                $ctx.sql.push_str(" AND ");
+                if matches!(*op, nautilus_core::expr::RelationFilterOp::Every) {
+                    $ctx.sql.push_str("NOT (");
+                    $render_expr($ctx, relation.filter.as_mut());
+                    $ctx.sql.push(')');
+                } else {
+                    $render_expr($ctx, relation.filter.as_mut());
+                }
+                $ctx.sql.push(')');
+            }
+            nautilus_core::Expr::ScalarSubquery(subquery) => {
+                $ctx.sql.push('(');
+                $render_select_body($ctx, subquery.as_mut());
+                $ctx.sql.push(')');
+            }
+            nautilus_core::Expr::IsNull(inner) => {
+                $ctx.sql.push('(');
+                $render_expr($ctx, inner.as_mut());
+                $ctx.sql.push_str(" IS NULL)");
+            }
+            nautilus_core::Expr::IsNotNull(inner) => {
+                $ctx.sql.push('(');
+                $render_expr($ctx, inner.as_mut());
+                $ctx.sql.push_str(" IS NOT NULL)");
+            }
+            nautilus_core::Expr::Literal(s) => {
+                crate::push_sql_string_literal(&mut $ctx.sql, s);
+            }
+            nautilus_core::Expr::List(exprs) => {
+                for (i, e) in exprs.iter_mut().enumerate() {
+                    if i > 0 {
+                        $ctx.sql.push_str(", ");
+                    }
+                    $render_expr($ctx, e);
+                }
+            }
+            nautilus_core::Expr::CaseWhen { condition, then } => {
+                $ctx.sql.push_str("CASE WHEN ");
+                $render_expr($ctx, condition.as_mut());
+                $ctx.sql.push_str(" THEN ");
+                $render_expr($ctx, then.as_mut());
+                $ctx.sql.push_str(" ELSE NULL END");
+            }
+            nautilus_core::Expr::Star => {
+                $ctx.sql.push('*');
+            }
+            $($specific)*
+        }
+    };
+}
+
 mod mysql;
 mod postgres;
 mod render_estimate;
@@ -493,14 +910,38 @@ pub trait Dialect {
     /// Render a SELECT query into SQL.
     fn render_select(&self, select: &Select) -> Result<Sql>;
 
+    /// Render an owned SELECT query into SQL, allowing dialects to move bound
+    /// values out of the AST instead of cloning them.
+    fn render_select_owned(&self, select: Select) -> Result<Sql> {
+        self.render_select(&select)
+    }
+
     /// Render an INSERT query into SQL.
     fn render_insert(&self, insert: &Insert) -> Result<Sql>;
+
+    /// Render an owned INSERT query into SQL, allowing dialects to move bound
+    /// values out of the AST instead of cloning them.
+    fn render_insert_owned(&self, insert: Insert) -> Result<Sql> {
+        self.render_insert(&insert)
+    }
 
     /// Render an UPDATE query into SQL.
     fn render_update(&self, update: &Update) -> Result<Sql>;
 
+    /// Render an owned UPDATE query into SQL, allowing dialects to move bound
+    /// values out of the AST instead of cloning them.
+    fn render_update_owned(&self, update: Update) -> Result<Sql> {
+        self.render_update(&update)
+    }
+
     /// Render a DELETE query into SQL.
     fn render_delete(&self, delete: &Delete) -> Result<Sql>;
+
+    /// Render an owned DELETE query into SQL, allowing dialects to move bound
+    /// values out of the AST instead of cloning them.
+    fn render_delete_owned(&self, delete: Delete) -> Result<Sql> {
+        self.render_delete(&delete)
+    }
 }
 
 fn push_escaped_identifier(sql: &mut String, name: &str, quote: char) {

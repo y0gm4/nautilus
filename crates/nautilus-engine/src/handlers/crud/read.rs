@@ -275,7 +275,7 @@ async fn execute_find_many_rows(
 
     let sql = state
         .dialect
-        .render_select(&select)
+        .render_select_owned(select)
         .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
 
     let mut rows = normalize_rows_with_hints(
@@ -423,7 +423,7 @@ pub(super) async fn handle_find_unique(
 
     let sql = state
         .dialect
-        .render_select(&select)
+        .render_select_owned(select)
         .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
 
     let rows = normalize_rows_with_hints(
@@ -510,9 +510,12 @@ pub(super) async fn handle_count(
         let inner_built = inner.build().map_err(|e| {
             ProtocolError::QueryPlanning(format!("Failed to build inner count query: {}", e))
         })?;
-        let inner_rendered = state.dialect.render_select(&inner_built).map_err(|e| {
-            ProtocolError::QueryPlanning(format!("Failed to render inner count query: {}", e))
-        })?;
+        let inner_rendered = state
+            .dialect
+            .render_select_owned(inner_built)
+            .map_err(|e| {
+                ProtocolError::QueryPlanning(format!("Failed to render inner count query: {}", e))
+            })?;
         Sql {
             text: format!("SELECT COUNT(*) FROM ({}) AS _cntq", inner_rendered.text),
             params: inner_rendered.params,
@@ -528,7 +531,7 @@ pub(super) async fn handle_count(
         let select = builder.build().map_err(|e| {
             ProtocolError::QueryPlanning(format!("Failed to build count query: {}", e))
         })?;
-        state.dialect.render_select(&select).map_err(|e| {
+        state.dialect.render_select_owned(select).map_err(|e| {
             ProtocolError::QueryPlanning(format!("Failed to render count query: {}", e))
         })?
     };

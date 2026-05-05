@@ -99,7 +99,7 @@ where
         }
 
         let update = builder.build()?;
-        let sql = self.client.dialect().render_update(&update)?;
+        let sql = self.client.dialect().render_update_owned(update)?;
 
         let rows = crate::execute_all(self.client.executor(), &sql)
             .await

@@ -164,6 +164,78 @@ fn check_complex_where(h: &Harness) {
     );
 }
 
+fn check_owned_select_matches_borrowed(h: &Harness) {
+    let select =
+        Select::from_table("users")
+            .item(SelectItem::from(ColumnMarker::new("users", "id")))
+            .filter(Expr::column("age").ge(Expr::param(Value::I64(18))).and(
+                Expr::column("email").like(Expr::param(Value::String("%@gmail.com".to_string()))),
+            ))
+            .order_by("users__id", OrderDir::Desc)
+            .build()
+            .unwrap();
+
+    let expected = h.dialect.render_select(&select).unwrap();
+    let actual = h.dialect.render_select_owned(select).unwrap();
+    assert_eq!(actual, expected, "[{}]", h.name);
+}
+
+fn check_owned_insert_matches_borrowed(h: &Harness) {
+    let insert = Insert::into_table("users")
+        .columns(vec![
+            ColumnMarker::new("users", "email"),
+            ColumnMarker::new("users", "name"),
+        ])
+        .values(vec![
+            Value::String("alice@example.com".to_string()),
+            Value::String("Alice".to_string()),
+        ])
+        .values(vec![
+            Value::String("bob@example.com".to_string()),
+            Value::String("Bob".to_string()),
+        ])
+        .returning(vec![ColumnMarker::new("users", "id")])
+        .build()
+        .unwrap();
+
+    let expected = h.dialect.render_insert(&insert).unwrap();
+    let actual = h.dialect.render_insert_owned(insert).unwrap();
+    assert_eq!(actual, expected, "[{}]", h.name);
+}
+
+fn check_owned_update_matches_borrowed(h: &Harness) {
+    let update = Update::table("users")
+        .set(
+            ColumnMarker::new("users", "email"),
+            Value::String("new@example.com".to_string()),
+        )
+        .set(ColumnMarker::new("users", "name"), Value::Null)
+        .filter(Expr::column("id").eq(Expr::param(Value::I64(7))))
+        .returning(vec![ColumnMarker::new("users", "id")])
+        .build()
+        .unwrap();
+
+    let expected = h.dialect.render_update(&update).unwrap();
+    let actual = h.dialect.render_update_owned(update).unwrap();
+    assert_eq!(actual, expected, "[{}]", h.name);
+}
+
+fn check_owned_delete_matches_borrowed(h: &Harness) {
+    let delete = Delete::from_table("users")
+        .filter(
+            Expr::column("id")
+                .eq(Expr::param(Value::I64(7)))
+                .and(Expr::column("active").eq(Expr::param(Value::Bool(true)))),
+        )
+        .returning(vec![ColumnMarker::new("users", "id")])
+        .build()
+        .unwrap();
+
+    let expected = h.dialect.render_delete(&delete).unwrap();
+    let actual = h.dialect.render_delete_owned(delete).unwrap();
+    assert_eq!(actual, expected, "[{}]", h.name);
+}
+
 fn check_order_by(h: &Harness) {
     let select = Select::from_table("users")
         .order_by("id", OrderDir::Desc)
@@ -1412,6 +1484,34 @@ fn supports_returning_true() {
 #[test]
 fn supports_returning_false() {
     assert!(!MysqlDialect.supports_returning());
+}
+
+#[test]
+fn owned_select_matches_borrowed_rendering() {
+    for h in all_harnesses() {
+        check_owned_select_matches_borrowed(&h);
+    }
+}
+
+#[test]
+fn owned_insert_matches_borrowed_rendering() {
+    for h in all_harnesses() {
+        check_owned_insert_matches_borrowed(&h);
+    }
+}
+
+#[test]
+fn owned_update_matches_borrowed_rendering() {
+    for h in all_harnesses() {
+        check_owned_update_matches_borrowed(&h);
+    }
+}
+
+#[test]
+fn owned_delete_matches_borrowed_rendering() {
+    for h in all_harnesses() {
+        check_owned_delete_matches_borrowed(&h);
+    }
 }
 
 #[test]

@@ -21,9 +21,27 @@ impl Dialect for PostgresDialect {
         })
     }
 
+    fn render_select_owned(&self, mut select: Select) -> Result<Sql> {
+        let mut ctx = RenderContext::with_estimate(crate::estimate_select_render(&select));
+        render_select_body_core_mut!(&mut ctx, &mut select, '"', render_expr_owned, true, false);
+        Ok(Sql {
+            text: ctx.sql,
+            params: ctx.params,
+        })
+    }
+
     fn render_insert(&self, insert: &Insert) -> Result<Sql> {
         let mut ctx = RenderContext::with_estimate(crate::estimate_insert_render(insert));
         render_insert_body!(&mut ctx, insert, '"', true, true);
+        Ok(Sql {
+            text: ctx.sql,
+            params: ctx.params,
+        })
+    }
+
+    fn render_insert_owned(&self, mut insert: Insert) -> Result<Sql> {
+        let mut ctx = RenderContext::with_estimate(crate::estimate_insert_render(&insert));
+        render_insert_body_mut!(&mut ctx, &mut insert, '"', true, true);
         Ok(Sql {
             text: ctx.sql,
             params: ctx.params,
@@ -39,9 +57,27 @@ impl Dialect for PostgresDialect {
         })
     }
 
+    fn render_update_owned(&self, mut update: Update) -> Result<Sql> {
+        let mut ctx = RenderContext::with_estimate(crate::estimate_update_render(&update));
+        render_update_body_mut!(&mut ctx, &mut update, '"', render_expr_owned, true, true);
+        Ok(Sql {
+            text: ctx.sql,
+            params: ctx.params,
+        })
+    }
+
     fn render_delete(&self, delete: &Delete) -> Result<Sql> {
         let mut ctx = RenderContext::with_estimate(crate::estimate_delete_render(delete));
         render_delete_body!(&mut ctx, delete, '"', render_expr, true);
+        Ok(Sql {
+            text: ctx.sql,
+            params: ctx.params,
+        })
+    }
+
+    fn render_delete_owned(&self, mut delete: Delete) -> Result<Sql> {
+        let mut ctx = RenderContext::with_estimate(crate::estimate_delete_render(&delete));
+        render_delete_body_mut!(&mut ctx, &mut delete, '"', render_expr_owned, true);
         Ok(Sql {
             text: ctx.sql,
             params: ctx.params,
@@ -67,10 +103,18 @@ impl RenderContext {
         self.sql.push('$');
         crate::push_usize(&mut self.sql, self.params.len());
     }
+
+    fn take_param(&mut self, value: &mut Value) {
+        self.push_param(std::mem::replace(value, Value::Null));
+    }
 }
 
 fn render_select_body(ctx: &mut RenderContext, select: &crate::Select) {
     render_select_body_core!(ctx, select, '"', render_expr, true, false);
+}
+
+fn render_select_body_owned(ctx: &mut RenderContext, select: &mut crate::Select) {
+    render_select_body_core_mut!(ctx, select, '"', render_expr_owned, true, false);
 }
 
 fn render_expr(ctx: &mut RenderContext, expr: &Expr) {
@@ -170,6 +214,128 @@ fn render_expr(ctx: &mut RenderContext, expr: &Expr) {
             ctx.sql.push(')');
         }
     });
+}
+
+fn render_expr_owned(ctx: &mut RenderContext, expr: &mut Expr) {
+    render_expr_common_mut!(ctx, expr, '"', render_expr_owned, render_select_body_owned, {
+        Expr::Param(value) => {
+            // NULL is emitted literally; PostgreSQL cannot implicitly resolve a
+            // typed NULL sent as an unknown OID via the binary protocol.
+            if matches!(value, Value::Null) {
+                ctx.sql.push_str("NULL");
+            } else {
+                let cast = postgres_param_cast(value);
+                ctx.take_param(value);
+                if let Some(cast) = cast {
+                    cast.push_sql(&mut ctx.sql);
+                }
+            }
+        }
+        Expr::Binary { left, op, right } => {
+            if matches!(*op, BinaryOp::In | BinaryOp::NotIn) {
+                ctx.sql.push('(');
+                render_expr_owned(ctx, left.as_mut());
+                ctx.sql.push(' ');
+                ctx.sql
+                    .push_str(if matches!(*op, BinaryOp::In) { "IN" } else { "NOT IN" });
+                ctx.sql.push_str(" (");
+                if let Expr::List(exprs) = right.as_mut() {
+                    for (i, e) in exprs.iter_mut().enumerate() {
+                        if i > 0 {
+                            ctx.sql.push_str(", ");
+                        }
+                        render_expr_owned(ctx, e);
+                    }
+                } else {
+                    render_expr_owned(ctx, right.as_mut());
+                }
+                ctx.sql.push(')');
+                ctx.sql.push(')');
+            } else {
+                ctx.sql.push('(');
+                render_expr_owned(ctx, left.as_mut());
+                ctx.sql.push(' ');
+                ctx.sql.push_str(match *op {
+                    BinaryOp::ArrayContains => "@>",
+                    BinaryOp::ArrayContainedBy => "<@",
+                    BinaryOp::ArrayOverlaps => "&&",
+                    _ => crate::binary_op_sql(op),
+                });
+                ctx.sql.push(' ');
+                render_expr_owned(ctx, right.as_mut());
+                ctx.sql.push(')');
+            }
+        }
+        Expr::FunctionCall { name, args } => {
+            if args.len() == 2 {
+                let op = match name.as_str() {
+                    nautilus_core::expr::VECTOR_L2_DISTANCE_FUNCTION => Some("<->"),
+                    nautilus_core::expr::VECTOR_INNER_PRODUCT_FUNCTION => Some("<#>"),
+                    nautilus_core::expr::VECTOR_COSINE_DISTANCE_FUNCTION => Some("<=>"),
+                    _ => None,
+                };
+                if let Some(op) = op {
+                    ctx.sql.push('(');
+                    render_expr_owned(ctx, &mut args[0]);
+                    ctx.sql.push(' ');
+                    ctx.sql.push_str(op);
+                    ctx.sql.push(' ');
+                    render_expr_owned(ctx, &mut args[1]);
+                    ctx.sql.push(')');
+                    return;
+                }
+            }
+            ctx.sql.push_str(name);
+            ctx.sql.push('(');
+            for (i, arg) in args.iter_mut().enumerate() {
+                if i > 0 {
+                    ctx.sql.push_str(", ");
+                }
+                render_expr_owned(ctx, arg);
+            }
+            ctx.sql.push(')');
+        }
+        Expr::Filter { expr, predicate } => {
+            render_expr_owned(ctx, expr.as_mut());
+            ctx.sql.push_str(" FILTER (WHERE ");
+            render_expr_owned(ctx, predicate.as_mut());
+            ctx.sql.push(')');
+        }
+    });
+}
+
+enum ParamCast {
+    Static(&'static str),
+    Enum(String),
+}
+
+impl ParamCast {
+    fn push_sql(&self, sql: &mut String) {
+        match self {
+            Self::Static(name) => {
+                sql.push_str("::");
+                sql.push_str(name);
+            }
+            Self::Enum(type_name) => {
+                sql.push_str("::");
+                sql.push_str(type_name);
+            }
+        }
+    }
+}
+
+fn postgres_param_cast(value: &Value) -> Option<ParamCast> {
+    match value {
+        Value::Uuid(_) => Some(ParamCast::Static("uuid")),
+        Value::Json(_) => Some(ParamCast::Static("json")),
+        Value::Vector(_) => Some(ParamCast::Static("vector")),
+        Value::Geometry(_) => Some(ParamCast::Static("geometry")),
+        Value::Geography(_) => Some(ParamCast::Static("geography")),
+        value if is_homogeneous_geometry_array(value) => Some(ParamCast::Static("geometry[]")),
+        value if is_homogeneous_geography_array(value) => Some(ParamCast::Static("geography[]")),
+        Value::Enum { type_name, .. } => Some(ParamCast::Enum(type_name.clone())),
+        _ => None,
+    }
 }
 
 fn is_homogeneous_geometry_array(value: &Value) -> bool {

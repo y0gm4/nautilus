@@ -1,5 +1,6 @@
 ---
 source: crates/nautilus-codegen/tests/snapshot_tests.rs
+assertion_line: 297
 expression: snapshot_value
 ---
 //! Product model and associated builders.
@@ -1506,7 +1507,7 @@ where
         }
 
         let select = builder.build()?;
-        let sql = client.dialect().render_select(&select)?;
+        let sql = client.dialect().render_select_owned(select)?;
 
         Ok((client, sql, row_hints, backward))
     }
@@ -1637,7 +1638,7 @@ where
         }
 
         let insert = builder.build()?;
-        let sql = self.client.dialect().render_insert(&insert)?;
+        let sql = self.client.dialect().render_insert_owned(insert)?;
 
         let row: Row = crate::execute_one(self.client.executor(), &sql)
             .await
@@ -1750,7 +1751,7 @@ where
         builder = builder.returning(returning_cols);
 
         let insert = builder.build()?;
-        let sql = self.client.dialect().render_insert(&insert)?;
+        let sql = self.client.dialect().render_insert_owned(insert)?;
 
         let rows = crate::execute_all(self.client.executor(), &sql)
             .await
@@ -1874,7 +1875,7 @@ where
         }
 
         let update = builder.build()?;
-        let sql = self.client.dialect().render_update(&update)?;
+        let sql = self.client.dialect().render_update_owned(update)?;
 
         let rows = crate::execute_all(self.client.executor(), &sql)
             .await
@@ -1955,7 +1956,7 @@ where
         }
 
         let delete = builder.build()?;
-        let sql = self.client.dialect().render_delete(&delete)?;
+        let sql = self.client.dialect().render_delete_owned(delete)?;
 
         let rows = crate::execute_all(self.client.executor(), &sql)
             .await

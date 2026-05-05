@@ -62,7 +62,7 @@ where
         }
 
         let delete = builder.build()?;
-        let sql = self.client.dialect().render_delete(&delete)?;
+        let sql = self.client.dialect().render_delete_owned(delete)?;
 
         let rows = crate::execute_all(self.client.executor(), &sql)
             .await

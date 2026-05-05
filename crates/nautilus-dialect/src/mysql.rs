@@ -20,9 +20,21 @@ impl Dialect for MysqlDialect {
         ctx.finish()
     }
 
+    fn render_select_owned(&self, mut select: Select) -> Result<Sql> {
+        let mut ctx = RenderContext::with_estimate(crate::estimate_select_render(&select));
+        render_select_body_core_mut!(&mut ctx, &mut select, '`', render_expr_owned, false, true);
+        ctx.finish()
+    }
+
     fn render_insert(&self, insert: &Insert) -> Result<Sql> {
         let mut ctx = RenderContext::with_estimate(crate::estimate_insert_render(insert));
         render_insert_body!(&mut ctx, insert, '`', false, false);
+        ctx.finish()
+    }
+
+    fn render_insert_owned(&self, mut insert: Insert) -> Result<Sql> {
+        let mut ctx = RenderContext::with_estimate(crate::estimate_insert_render(&insert));
+        render_insert_body_mut!(&mut ctx, &mut insert, '`', false, false);
         ctx.finish()
     }
 
@@ -32,9 +44,21 @@ impl Dialect for MysqlDialect {
         ctx.finish()
     }
 
+    fn render_update_owned(&self, mut update: Update) -> Result<Sql> {
+        let mut ctx = RenderContext::with_estimate(crate::estimate_update_render(&update));
+        render_update_body_mut!(&mut ctx, &mut update, '`', render_expr_owned, false, false);
+        ctx.finish()
+    }
+
     fn render_delete(&self, delete: &Delete) -> Result<Sql> {
         let mut ctx = RenderContext::with_estimate(crate::estimate_delete_render(delete));
         render_delete_body!(&mut ctx, delete, '`', render_expr, false);
+        ctx.finish()
+    }
+
+    fn render_delete_owned(&self, mut delete: Delete) -> Result<Sql> {
+        let mut ctx = RenderContext::with_estimate(crate::estimate_delete_render(&delete));
+        render_delete_body_mut!(&mut ctx, &mut delete, '`', render_expr_owned, false);
         ctx.finish()
     }
 }
@@ -59,6 +83,10 @@ impl RenderContext {
         self.sql.push('?');
     }
 
+    fn take_param(&mut self, value: &mut Value) {
+        self.push_param(std::mem::replace(value, Value::Null));
+    }
+
     fn fail(&mut self, message: impl Into<String>) {
         if self.error.is_none() {
             self.error = Some(Error::InvalidQuery(message.into()));
@@ -79,6 +107,10 @@ impl RenderContext {
 
 fn render_select_body(ctx: &mut RenderContext, select: &crate::Select) {
     render_select_body_core!(ctx, select, '`', render_expr, false, true);
+}
+
+fn render_select_body_owned(ctx: &mut RenderContext, select: &mut crate::Select) {
+    render_select_body_core_mut!(ctx, select, '`', render_expr_owned, false, true);
 }
 
 fn mysql_function_name(name: &str) -> &str {
@@ -103,6 +135,20 @@ fn render_case_filtered_aggregate(
     ctx.sql.push_str(" ELSE NULL END)");
 }
 
+fn render_case_filtered_aggregate_owned(
+    ctx: &mut RenderContext,
+    fn_name: &str,
+    arg: &mut Expr,
+    predicate: &mut Expr,
+) {
+    ctx.sql.push_str(fn_name);
+    ctx.sql.push_str("(CASE WHEN ");
+    render_expr_owned(ctx, predicate);
+    ctx.sql.push_str(" THEN ");
+    render_expr_owned(ctx, arg);
+    ctx.sql.push_str(" ELSE NULL END)");
+}
+
 fn render_filter(ctx: &mut RenderContext, expr: &Expr, predicate: &Expr) {
     let Expr::FunctionCall { name, args } = expr else {
         ctx.fail("MysqlDialect can only emulate FILTER for aggregate function calls");
@@ -118,6 +164,43 @@ fn render_filter(ctx: &mut RenderContext, expr: &Expr, predicate: &Expr) {
         }
         ("COUNT", [arg]) | ("SUM", [arg]) | ("AVG", [arg]) | ("MIN", [arg]) | ("MAX", [arg]) => {
             render_case_filtered_aggregate(ctx, upper.as_str(), arg, predicate);
+        }
+        ("JSON_AGG", [_]) => {
+            ctx.fail(
+                "MysqlDialect cannot emulate FILTER for json_agg without changing JSON null semantics",
+            );
+        }
+        (_, []) => {
+            ctx.fail(format!(
+                "MysqlDialect cannot emulate FILTER for function '{}' with zero arguments",
+                name
+            ));
+        }
+        _ => {
+            ctx.fail(format!(
+                "MysqlDialect cannot emulate FILTER for function '{}' with {} arguments",
+                name,
+                args.len()
+            ));
+        }
+    }
+}
+
+fn render_filter_owned(ctx: &mut RenderContext, expr: &mut Expr, predicate: &mut Expr) {
+    let Expr::FunctionCall { name, args } = expr else {
+        ctx.fail("MysqlDialect can only emulate FILTER for aggregate function calls");
+        return;
+    };
+
+    let upper = name.to_ascii_uppercase();
+    match (upper.as_str(), args.as_mut_slice()) {
+        ("COUNT", [Expr::Star]) => {
+            ctx.sql.push_str("COUNT(CASE WHEN ");
+            render_expr_owned(ctx, predicate);
+            ctx.sql.push_str(" THEN 1 ELSE NULL END)");
+        }
+        ("COUNT", [arg]) | ("SUM", [arg]) | ("AVG", [arg]) | ("MIN", [arg]) | ("MAX", [arg]) => {
+            render_case_filtered_aggregate_owned(ctx, upper.as_str(), arg, predicate);
         }
         ("JSON_AGG", [_]) => {
             ctx.fail(
@@ -220,6 +303,93 @@ fn render_expr(ctx: &mut RenderContext, expr: &Expr) {
         }
         Expr::Filter { expr, predicate } => {
             render_filter(ctx, expr, predicate);
+        }
+    });
+}
+
+fn render_expr_owned(ctx: &mut RenderContext, expr: &mut Expr) {
+    if ctx.error.is_some() {
+        return;
+    }
+
+    render_expr_common_mut!(ctx, expr, '`', render_expr_owned, render_select_body_owned, {
+        Expr::Param(value) => {
+            if matches!(value, Value::Null) {
+                ctx.sql.push_str("NULL");
+            } else {
+                ctx.take_param(value);
+            }
+        }
+        Expr::Binary { left, op, right } => {
+            if matches!(*op, BinaryOp::In | BinaryOp::NotIn) {
+                ctx.sql.push('(');
+                render_expr_owned(ctx, left.as_mut());
+                ctx.sql.push(' ');
+                ctx.sql
+                    .push_str(if matches!(*op, BinaryOp::In) { "IN" } else { "NOT IN" });
+                ctx.sql.push_str(" (");
+                if let Expr::List(exprs) = right.as_mut() {
+                    for (i, e) in exprs.iter_mut().enumerate() {
+                        if i > 0 {
+                            ctx.sql.push_str(", ");
+                        }
+                        render_expr_owned(ctx, e);
+                    }
+                } else {
+                    render_expr_owned(ctx, right.as_mut());
+                }
+                ctx.sql.push(')');
+                ctx.sql.push(')');
+            } else if matches!(
+                *op,
+                BinaryOp::ArrayContains | BinaryOp::ArrayContainedBy | BinaryOp::ArrayOverlaps
+            ) {
+                match *op {
+                    BinaryOp::ArrayContains => {
+                        ctx.sql.push_str("JSON_CONTAINS(");
+                        render_expr_owned(ctx, left.as_mut());
+                        ctx.sql.push_str(", ");
+                        render_expr_owned(ctx, right.as_mut());
+                        ctx.sql.push(')');
+                    }
+                    BinaryOp::ArrayContainedBy => {
+                        ctx.sql.push_str("JSON_CONTAINS(");
+                        render_expr_owned(ctx, right.as_mut());
+                        ctx.sql.push_str(", ");
+                        render_expr_owned(ctx, left.as_mut());
+                        ctx.sql.push(')');
+                    }
+                    BinaryOp::ArrayOverlaps => {
+                        ctx.fail(
+                            "MysqlDialect does not render ArrayOverlaps generically because JSON_OVERLAPS is unavailable on some supported MySQL-family backends",
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                ctx.sql.push('(');
+                render_expr_owned(ctx, left.as_mut());
+                ctx.sql.push(' ');
+                ctx.sql.push_str(crate::binary_op_sql(op));
+                ctx.sql.push(' ');
+                render_expr_owned(ctx, right.as_mut());
+                ctx.sql.push(')');
+            }
+        }
+        Expr::FunctionCall { name, args } => {
+            let mysql_name = mysql_function_name(name);
+            ctx.sql.push_str(mysql_name);
+            ctx.sql.push('(');
+            for (i, arg) in args.iter_mut().enumerate() {
+                if i > 0 {
+                    ctx.sql.push_str(", ");
+                }
+                render_expr_owned(ctx, arg);
+            }
+            ctx.sql.push(')');
+        }
+        Expr::Filter { expr, predicate } => {
+            render_filter_owned(ctx, expr.as_mut(), predicate.as_mut());
         }
     });
 }

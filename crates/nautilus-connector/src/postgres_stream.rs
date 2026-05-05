@@ -279,10 +279,8 @@ fn classify_pg_type(type_name: &str) -> PgTypeKind<'_> {
 fn classify_pg_array_type(type_name: &str) -> Option<PgTypeKind<'_>> {
     if let Some(element_type) = type_name.strip_suffix("[][]") {
         Some(PgTypeKind::Array2D(element_type))
-    } else if let Some(element_type) = type_name.strip_suffix("[]") {
-        Some(PgTypeKind::Array(element_type))
     } else {
-        None
+        type_name.strip_suffix("[]").map(PgTypeKind::Array)
     }
 }
 

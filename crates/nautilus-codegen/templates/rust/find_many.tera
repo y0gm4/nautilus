@@ -217,7 +217,7 @@ where
         }
 
         let select = builder.build()?;
-        let sql = client.dialect().render_select(&select)?;
+        let sql = client.dialect().render_select_owned(select)?;
 
         Ok((client, sql, row_hints, backward))
     }

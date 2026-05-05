@@ -100,7 +100,7 @@ where
         builder = builder.returning(returning_cols);
 
         let insert = builder.build()?;
-        let sql = self.client.dialect().render_insert(&insert)?;
+        let sql = self.client.dialect().render_insert_owned(insert)?;
 
         let rows = crate::execute_all(self.client.executor(), &sql)
             .await

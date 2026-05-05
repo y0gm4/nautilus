@@ -188,7 +188,7 @@ pub(super) async fn handle_group_by(
     let select = builder.build().map_err(|e| {
         ProtocolError::QueryPlanning(format!("Failed to build groupBy query: {}", e))
     })?;
-    let sql = state.dialect.render_select(&select).map_err(|e| {
+    let sql = state.dialect.render_select_owned(select).map_err(|e| {
         ProtocolError::QueryPlanning(format!("Failed to render groupBy query: {}", e))
     })?;
 

@@ -59,7 +59,7 @@ where
         }
 
         let insert = builder.build()?;
-        let sql = self.client.dialect().render_insert(&insert)?;
+        let sql = self.client.dialect().render_insert_owned(insert)?;
 
         let row: Row = crate::execute_one(self.client.executor(), &sql)
             .await
