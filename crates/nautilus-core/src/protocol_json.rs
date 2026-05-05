@@ -9,14 +9,11 @@ use crate::{
     BinaryOp, Error, Expr, FindManyArgs, IncludeRelation, OrderBy, OrderDir, Result, VectorNearest,
 };
 
-/// Convert [`FindManyArgs`] into the same JSON payload shape used by thin clients.
-///
-/// This helper is intentionally conservative: if it encounters an expression
-/// that cannot yet be represented in the engine wire format, it returns
-/// [`Error::InvalidQuery`] so callers can decide whether to fail or to fall
-/// back to a local execution path.
-pub fn find_many_args_to_protocol_json(args: &FindManyArgs) -> Result<JsonValue> {
-    let mut result = JsonMap::new();
+/// Convert [`FindManyArgs`] into an object map matching the engine wire format.
+pub fn find_many_args_to_protocol_object(
+    args: &FindManyArgs,
+) -> Result<JsonMap<String, JsonValue>> {
+    let mut result = JsonMap::with_capacity(find_many_args_field_count(args));
 
     if let Some(where_) = &args.where_ {
         result.insert("where".to_string(), expr_to_filter_json(where_)?);
@@ -25,12 +22,7 @@ pub fn find_many_args_to_protocol_json(args: &FindManyArgs) -> Result<JsonValue>
     if !args.order_by.is_empty() {
         result.insert(
             "orderBy".to_string(),
-            JsonValue::Array(
-                args.order_by
-                    .iter()
-                    .map(order_by_to_json)
-                    .collect::<Result<Vec<_>>>()?,
-            ),
+            JsonValue::Array(order_by_list_to_json(&args.order_by)?),
         );
     }
 
@@ -43,34 +35,30 @@ pub fn find_many_args_to_protocol_json(args: &FindManyArgs) -> Result<JsonValue>
     }
 
     if !args.include.is_empty() {
-        result.insert("include".to_string(), include_map_to_json(&args.include)?);
+        result.insert(
+            "include".to_string(),
+            JsonValue::Object(include_map_to_json_object(&args.include)?),
+        );
     }
 
     if !args.select.is_empty() {
-        let mut select = JsonMap::new();
-        for (field, enabled) in &args.select {
-            select.insert(field.clone(), JsonValue::Bool(*enabled));
-        }
-        result.insert("select".to_string(), JsonValue::Object(select));
+        result.insert(
+            "select".to_string(),
+            JsonValue::Object(select_map_to_json_object(&args.select)),
+        );
     }
 
     if let Some(cursor) = &args.cursor {
-        let mut wire_cursor = JsonMap::new();
-        for (field, value) in cursor {
-            wire_cursor.insert(strip_column_qualifier(field), value.to_json_plain());
-        }
-        result.insert("cursor".to_string(), JsonValue::Object(wire_cursor));
+        result.insert(
+            "cursor".to_string(),
+            JsonValue::Object(cursor_map_to_json_object(cursor)),
+        );
     }
 
     if !args.distinct.is_empty() {
         result.insert(
             "distinct".to_string(),
-            JsonValue::Array(
-                args.distinct
-                    .iter()
-                    .map(|field| JsonValue::String(strip_column_qualifier(field)))
-                    .collect(),
-            ),
+            JsonValue::Array(distinct_fields_to_json(&args.distinct)),
         );
     }
 
@@ -78,7 +66,17 @@ pub fn find_many_args_to_protocol_json(args: &FindManyArgs) -> Result<JsonValue>
         result.insert("nearest".to_string(), nearest_to_json(nearest));
     }
 
-    Ok(JsonValue::Object(result))
+    Ok(result)
+}
+
+/// Convert [`FindManyArgs`] into the same JSON payload shape used by thin clients.
+///
+/// This helper is intentionally conservative: if it encounters an expression
+/// that cannot yet be represented in the engine wire format, it returns
+/// [`Error::InvalidQuery`] so callers can decide whether to fail or to fall
+/// back to a local execution path.
+pub fn find_many_args_to_protocol_json(args: &FindManyArgs) -> Result<JsonValue> {
+    Ok(JsonValue::Object(find_many_args_to_protocol_object(args)?))
 }
 
 /// Convert a single Rust filter expression into the engine wire-format `"where"` object.
@@ -86,16 +84,113 @@ pub fn where_expr_to_protocol_json(expr: &Expr) -> Result<JsonValue> {
     expr_to_filter_json(expr)
 }
 
-fn include_map_to_json(include: &HashMap<String, IncludeRelation>) -> Result<JsonValue> {
-    let mut result = JsonMap::new();
-    for (field, relation) in include {
-        result.insert(field.clone(), include_relation_to_json(relation)?);
+fn find_many_args_field_count(args: &FindManyArgs) -> usize {
+    let mut count = 0;
+    if args.where_.is_some() {
+        count += 1;
     }
-    Ok(JsonValue::Object(result))
+    if !args.order_by.is_empty() {
+        count += 1;
+    }
+    if args.take.is_some() {
+        count += 1;
+    }
+    if args.skip.is_some() {
+        count += 1;
+    }
+    if !args.include.is_empty() {
+        count += 1;
+    }
+    if !args.select.is_empty() {
+        count += 1;
+    }
+    if args.cursor.is_some() {
+        count += 1;
+    }
+    if !args.distinct.is_empty() {
+        count += 1;
+    }
+    if args.nearest.is_some() {
+        count += 1;
+    }
+    count
 }
 
-fn include_relation_to_json(include: &IncludeRelation) -> Result<JsonValue> {
-    let mut result = JsonMap::new();
+fn include_relation_field_count(include: &IncludeRelation) -> usize {
+    let mut count = 0;
+    if include.where_.is_some() {
+        count += 1;
+    }
+    if !include.order_by.is_empty() {
+        count += 1;
+    }
+    if include.take.is_some() {
+        count += 1;
+    }
+    if include.skip.is_some() {
+        count += 1;
+    }
+    if include.cursor.is_some() {
+        count += 1;
+    }
+    if !include.distinct.is_empty() {
+        count += 1;
+    }
+    if !include.include.is_empty() {
+        count += 1;
+    }
+    count
+}
+
+fn order_by_list_to_json(order_by: &[OrderBy]) -> Result<Vec<JsonValue>> {
+    let mut result = Vec::with_capacity(order_by.len());
+    for order in order_by {
+        result.push(order_by_to_json(order)?);
+    }
+    Ok(result)
+}
+
+fn select_map_to_json_object(select: &HashMap<String, bool>) -> JsonMap<String, JsonValue> {
+    let mut result = JsonMap::with_capacity(select.len());
+    for (field, enabled) in select {
+        result.insert(field.clone(), JsonValue::Bool(*enabled));
+    }
+    result
+}
+
+fn cursor_map_to_json_object(cursor: &HashMap<String, crate::Value>) -> JsonMap<String, JsonValue> {
+    let mut result = JsonMap::with_capacity(cursor.len());
+    for (field, value) in cursor {
+        result.insert(strip_column_qualifier(field), value.to_json_plain());
+    }
+    result
+}
+
+fn distinct_fields_to_json(distinct: &[String]) -> Vec<JsonValue> {
+    let mut result = Vec::with_capacity(distinct.len());
+    for field in distinct {
+        result.push(JsonValue::String(strip_column_qualifier(field)));
+    }
+    result
+}
+
+fn include_map_to_json_object(
+    include: &HashMap<String, IncludeRelation>,
+) -> Result<JsonMap<String, JsonValue>> {
+    let mut result = JsonMap::with_capacity(include.len());
+    for (field, relation) in include {
+        result.insert(
+            field.clone(),
+            JsonValue::Object(include_relation_to_json_object(relation)?),
+        );
+    }
+    Ok(result)
+}
+
+fn include_relation_to_json_object(
+    include: &IncludeRelation,
+) -> Result<JsonMap<String, JsonValue>> {
+    let mut result = JsonMap::with_capacity(include_relation_field_count(include));
 
     if let Some(where_) = &include.where_ {
         result.insert("where".to_string(), expr_to_filter_json(where_)?);
@@ -104,13 +199,7 @@ fn include_relation_to_json(include: &IncludeRelation) -> Result<JsonValue> {
     if !include.order_by.is_empty() {
         result.insert(
             "orderBy".to_string(),
-            JsonValue::Array(
-                include
-                    .order_by
-                    .iter()
-                    .map(order_by_to_json)
-                    .collect::<Result<Vec<_>>>()?,
-            ),
+            JsonValue::Array(order_by_list_to_json(&include.order_by)?),
         );
     }
 
@@ -123,34 +212,27 @@ fn include_relation_to_json(include: &IncludeRelation) -> Result<JsonValue> {
     }
 
     if let Some(cursor) = &include.cursor {
-        let mut wire_cursor = JsonMap::new();
-        for (field, value) in cursor {
-            wire_cursor.insert(strip_column_qualifier(field), value.to_json_plain());
-        }
-        result.insert("cursor".to_string(), JsonValue::Object(wire_cursor));
+        result.insert(
+            "cursor".to_string(),
+            JsonValue::Object(cursor_map_to_json_object(cursor)),
+        );
     }
 
     if !include.distinct.is_empty() {
         result.insert(
             "distinct".to_string(),
-            JsonValue::Array(
-                include
-                    .distinct
-                    .iter()
-                    .map(|field| JsonValue::String(strip_column_qualifier(field)))
-                    .collect(),
-            ),
+            JsonValue::Array(distinct_fields_to_json(&include.distinct)),
         );
     }
 
     if !include.include.is_empty() {
         result.insert(
             "include".to_string(),
-            include_map_to_json(&include.include)?,
+            JsonValue::Object(include_map_to_json_object(&include.include)?),
         );
     }
 
-    Ok(JsonValue::Object(result))
+    Ok(result)
 }
 
 fn order_by_to_json(order: &OrderBy) -> Result<JsonValue> {
@@ -166,7 +248,7 @@ fn order_by_to_json(order: &OrderBy) -> Result<JsonValue> {
 }
 
 fn nearest_to_json(nearest: &VectorNearest) -> JsonValue {
-    let mut result = JsonMap::new();
+    let mut result = JsonMap::with_capacity(3);
     result.insert(
         "field".to_string(),
         JsonValue::String(strip_column_qualifier(&nearest.field)),
@@ -223,7 +305,7 @@ fn relation_predicate_to_json(
     op: RelationFilterOp,
     filter: &Expr,
 ) -> Result<JsonValue> {
-    let mut relation_spec = JsonMap::new();
+    let mut relation_spec = JsonMap::with_capacity(1);
     relation_spec.insert(
         match op {
             RelationFilterOp::Some => "some".to_string(),
@@ -233,19 +315,42 @@ fn relation_predicate_to_json(
         expr_to_filter_json(filter)?,
     );
 
-    let mut result = JsonMap::new();
+    let mut result = JsonMap::with_capacity(1);
     result.insert(field.to_string(), JsonValue::Object(relation_spec));
     Ok(JsonValue::Object(result))
 }
 
 fn logical_expr_to_json(name: &str, left: &Expr, right: &Expr) -> Result<JsonValue> {
-    let mut items = Vec::new();
+    let mut items =
+        Vec::with_capacity(logical_operand_count(name, left) + logical_operand_count(name, right));
     collect_logical_operands(name, left, &mut items)?;
     collect_logical_operands(name, right, &mut items)?;
 
-    let mut result = JsonMap::new();
+    let mut result = JsonMap::with_capacity(1);
     result.insert(name.to_string(), JsonValue::Array(items));
     Ok(JsonValue::Object(result))
+}
+
+fn logical_operand_count(name: &str, expr: &Expr) -> usize {
+    match (name, expr) {
+        (
+            "AND",
+            Expr::Binary {
+                left,
+                op: BinaryOp::And,
+                right,
+            },
+        ) => logical_operand_count(name, left) + logical_operand_count(name, right),
+        (
+            "OR",
+            Expr::Binary {
+                left,
+                op: BinaryOp::Or,
+                right,
+            },
+        ) => logical_operand_count(name, left) + logical_operand_count(name, right),
+        _ => 1,
+    }
 }
 
 fn collect_logical_operands(name: &str, expr: &Expr, out: &mut Vec<JsonValue>) -> Result<()> {
@@ -310,13 +415,13 @@ fn field_predicate_to_json(left: &Expr, op: &BinaryOp, right: &Expr) -> Result<J
         }
     };
 
-    let mut result = JsonMap::new();
+    let mut result = JsonMap::with_capacity(1);
     match operator {
         None => {
             result.insert(field, value);
         }
         Some(op_name) => {
-            let mut operators = JsonMap::new();
+            let mut operators = JsonMap::with_capacity(1);
             operators.insert(op_name.to_string(), value);
             result.insert(field, JsonValue::Object(operators));
         }
@@ -336,10 +441,10 @@ fn null_predicate_to_json(inner: &Expr, is_null: bool) -> Result<JsonValue> {
         }
     };
 
-    let mut operators = JsonMap::new();
+    let mut operators = JsonMap::with_capacity(1);
     operators.insert("isNull".to_string(), JsonValue::Bool(is_null));
 
-    let mut result = JsonMap::new();
+    let mut result = JsonMap::with_capacity(1);
     result.insert(field, JsonValue::Object(operators));
     Ok(JsonValue::Object(result))
 }
@@ -385,12 +490,12 @@ fn list_expr_to_json_array(expr: &Expr) -> Result<JsonValue> {
         )));
     };
 
-    Ok(JsonValue::Array(
-        items
-            .iter()
-            .map(expr_value_to_json)
-            .collect::<Result<Vec<_>>>()?,
-    ))
+    let mut values = Vec::with_capacity(items.len());
+    for item in items {
+        values.push(expr_value_to_json(item)?);
+    }
+
+    Ok(JsonValue::Array(values))
 }
 
 fn expr_value_to_json(expr: &Expr) -> Result<JsonValue> {
@@ -449,6 +554,8 @@ mod tests {
         };
 
         let json = find_many_args_to_protocol_json(&args).expect("serialization should succeed");
+        let object =
+            find_many_args_to_protocol_object(&args).expect("object serialization should succeed");
 
         assert_eq!(
             json,
@@ -487,6 +594,7 @@ mod tests {
                 }
             })
         );
+        assert_eq!(JsonValue::Object(object), json);
     }
 
     #[test]

@@ -12,8 +12,8 @@ use nautilus_dialect::Dialect;
 use nautilus_engine::{handlers, EngineState};
 use nautilus_protocol::error::ERR_RECORD_NOT_FOUND;
 use nautilus_protocol::{
-    CountParams, CreateManyParams, CreateParams, FindManyParams, GroupByParams, RpcId, RpcRequest,
-    UpdateParams, PROTOCOL_VERSION, QUERY_COUNT, QUERY_CREATE, QUERY_CREATE_MANY, QUERY_FIND_MANY,
+    CountParams, CreateManyParams, CreateParams, GroupByParams, RpcId, RpcRequest, UpdateParams,
+    PROTOCOL_VERSION, QUERY_COUNT, QUERY_CREATE, QUERY_CREATE_MANY, QUERY_FIND_MANY,
     QUERY_GROUP_BY, QUERY_UPDATE,
 };
 use nautilus_schema::validate_schema_source;
@@ -469,27 +469,34 @@ where
         return Ok(None);
     };
 
-    let args_json = match nautilus_core::find_many_args_to_protocol_json(args) {
+    let args_json = match nautilus_core::find_many_args_to_protocol_object(args) {
         Ok(value) => value,
         Err(_) => return Ok(None),
     };
 
-    let params = FindManyParams {
-        protocol_version: PROTOCOL_VERSION,
-        model: model.to_string(),
-        args: match &args_json {
-            JsonValue::Object(map) if map.is_empty() => None,
-            _ => Some(args_json),
-        },
-        transaction_id: client.transaction_id(),
-        chunk_size: None,
-    };
+    let transaction_id = client.transaction_id();
+    let mut params = serde_json::Map::with_capacity(
+        2 + if args_json.is_empty() { 0 } else { 1 } + if transaction_id.is_some() { 1 } else { 0 },
+    );
+    params.insert(
+        "protocolVersion".to_string(),
+        JsonValue::from(PROTOCOL_VERSION),
+    );
+    params.insert("model".to_string(), JsonValue::String(model.to_string()));
+    if !args_json.is_empty() {
+        params.insert("args".to_string(), JsonValue::Object(args_json));
+    }
+    if let Some(transaction_id) = transaction_id {
+        params.insert(
+            "transactionId".to_string(),
+            JsonValue::String(transaction_id),
+        );
+    }
 
     let response = execute_engine_request(
         state.as_ref(),
         QUERY_FIND_MANY,
-        serde_json::to_value(params)
-            .map_err(|e| Error::Other(format!("failed to serialize engine params: {}", e)))?,
+        JsonValue::Object(params),
     )
     .await?;
 

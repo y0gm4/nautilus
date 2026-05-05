@@ -33,7 +33,9 @@ pub use delete::{Delete, DeleteBuilder};
 pub use error::{Error, Result};
 pub use expr::{BinaryOp, Expr};
 pub use insert::{Insert, InsertBuilder};
-pub use protocol_json::{find_many_args_to_protocol_json, where_expr_to_protocol_json};
+pub use protocol_json::{
+    find_many_args_to_protocol_json, find_many_args_to_protocol_object, where_expr_to_protocol_json,
+};
 pub use select::{
     JoinClause, JoinType, OrderBy, OrderByItem, OrderDir, Select, SelectBuilder, SelectItem,
 };
