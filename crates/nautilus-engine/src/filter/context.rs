@@ -1,60 +1,92 @@
+use std::borrow::Cow;
+
 use super::*;
 
-pub(super) fn build_logical_to_db_map(model: &ModelIr) -> HashMap<String, String> {
-    model
-        .fields
-        .iter()
-        .filter(|f| !matches!(f.field_type, ResolvedFieldType::Relation(_)))
-        .flat_map(|f| {
-            let mut entries = vec![(f.logical_name.clone(), f.db_name.clone())];
-            if f.db_name != f.logical_name {
-                entries.push((f.db_name.clone(), f.db_name.clone()));
-            }
-            entries
-        })
-        .collect()
+pub(super) struct NestedIncludeContext<'a> {
+    pub(super) relations: Cow<'a, RelationMap>,
+    pub(super) field_types: Cow<'a, FieldTypeMap>,
+    pub(super) logical_to_db: Cow<'a, HashMap<String, String>>,
+    pub(super) target_table: Cow<'a, str>,
 }
 
-pub(super) type NestedIncludeContext = (RelationMap, FieldTypeMap, HashMap<String, String>, String);
-pub(super) type RelationFilterContext = (RelationMap, FieldTypeMap, HashMap<String, String>);
+pub(super) struct RelationFilterContext<'a> {
+    pub(super) relations: Cow<'a, RelationMap>,
+    pub(super) field_types: Cow<'a, FieldTypeMap>,
+    pub(super) logical_to_db: Cow<'a, HashMap<String, String>>,
+}
 
-pub(super) fn nested_include_context(
+pub(super) fn nested_include_context<'a>(
     field: &str,
-    relations: &RelationMap,
-    models: Option<&HashMap<String, ModelIr>>,
-) -> Result<Option<NestedIncludeContext>, ProtocolError> {
+    relations: &'a RelationMap,
+    schema_context: SchemaContext<'a>,
+) -> Result<Option<NestedIncludeContext<'a>>, ProtocolError> {
     let Some(rel_info) = relations.get(field) else {
         return Ok(None);
     };
-    let Some(all_models) = models else {
+
+    if let Some(state) = schema_context.state() {
+        let Some((target_model, target_metadata)) =
+            state.related_model(&rel_info.target_logical_name)
+        else {
+            return Ok(None);
+        };
+
+        return Ok(Some(NestedIncludeContext {
+            relations: Cow::Borrowed(state.relation_map_for_model(target_model)?),
+            field_types: Cow::Borrowed(target_metadata.field_types()),
+            logical_to_db: Cow::Borrowed(target_metadata.logical_to_db()),
+            target_table: Cow::Borrowed(rel_info.target_table.as_str()),
+        }));
+    }
+
+    let Some(all_models) = schema_context.models() else {
         return Ok(None);
     };
     let Some(target_model) = all_models.get(&rel_info.target_logical_name) else {
         return Ok(None);
     };
 
-    Ok(Some((
-        crate::handlers::build_relation_map(target_model, all_models)?,
-        crate::handlers::build_field_type_map(target_model),
-        build_logical_to_db_map(target_model),
-        rel_info.target_table.clone(),
-    )))
+    Ok(Some(NestedIncludeContext {
+        relations: Cow::Owned(crate::handlers::build_relation_map(
+            target_model,
+            all_models,
+        )?),
+        field_types: Cow::Owned(crate::metadata::build_field_type_map(target_model)),
+        logical_to_db: Cow::Owned(crate::metadata::build_logical_to_db_map(target_model)),
+        target_table: Cow::Owned(rel_info.target_table.clone()),
+    }))
 }
 
-pub(super) fn relation_filter_context(
+pub(super) fn relation_filter_context<'a>(
     rel: &RelationInfo,
-    models: Option<&HashMap<String, ModelIr>>,
-) -> Result<Option<RelationFilterContext>, ProtocolError> {
-    let Some(all_models) = models else {
+    schema_context: SchemaContext<'a>,
+) -> Result<Option<RelationFilterContext<'a>>, ProtocolError> {
+    if let Some(state) = schema_context.state() {
+        let Some((target_model, target_metadata)) = state.related_model(&rel.target_logical_name)
+        else {
+            return Ok(None);
+        };
+
+        return Ok(Some(RelationFilterContext {
+            relations: Cow::Borrowed(state.relation_map_for_model(target_model)?),
+            field_types: Cow::Borrowed(target_metadata.field_types()),
+            logical_to_db: Cow::Borrowed(target_metadata.logical_to_db()),
+        }));
+    }
+
+    let Some(all_models) = schema_context.models() else {
         return Ok(None);
     };
     let Some(target_model) = all_models.get(&rel.target_logical_name) else {
         return Ok(None);
     };
 
-    Ok(Some((
-        crate::handlers::build_relation_map(target_model, all_models)?,
-        crate::handlers::build_field_type_map(target_model),
-        build_logical_to_db_map(target_model),
-    )))
+    Ok(Some(RelationFilterContext {
+        relations: Cow::Owned(crate::handlers::build_relation_map(
+            target_model,
+            all_models,
+        )?),
+        field_types: Cow::Owned(crate::metadata::build_field_type_map(target_model)),
+        logical_to_db: Cow::Owned(crate::metadata::build_logical_to_db_map(target_model)),
+    }))
 }

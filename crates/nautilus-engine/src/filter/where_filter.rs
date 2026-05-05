@@ -5,7 +5,7 @@ pub(crate) fn parse_where_filter(
     where_value: &JsonValue,
     relations: &RelationMap,
     field_types: &FieldTypeMap,
-    models: Option<&HashMap<String, ModelIr>>,
+    schema_context: SchemaContext<'_>,
 ) -> Result<Expr, ProtocolError> {
     let where_obj = where_value
         .as_object()
@@ -17,14 +17,14 @@ pub(crate) fn parse_where_filter(
         ));
     }
 
-    parse_filter_object(where_obj, relations, field_types, models)
+    parse_filter_object(where_obj, relations, field_types, schema_context)
 }
 
 pub(super) fn parse_filter_object(
     obj: &serde_json::Map<String, JsonValue>,
     relations: &RelationMap,
     field_types: &FieldTypeMap,
-    models: Option<&HashMap<String, ModelIr>>,
+    schema_context: SchemaContext<'_>,
 ) -> Result<Expr, ProtocolError> {
     let mut conditions = Vec::new();
 
@@ -33,18 +33,23 @@ pub(super) fn parse_filter_object(
             and_value,
             relations,
             field_types,
-            models,
+            schema_context,
         )?);
     }
     if let Some(or_value) = obj.get("OR") {
-        conditions.push(parse_or_operator(or_value, relations, field_types, models)?);
+        conditions.push(parse_or_operator(
+            or_value,
+            relations,
+            field_types,
+            schema_context,
+        )?);
     }
     if let Some(not_value) = obj.get("NOT") {
         conditions.push(parse_not_operator(
             not_value,
             relations,
             field_types,
-            models,
+            schema_context,
         )?);
     }
 
@@ -53,7 +58,7 @@ pub(super) fn parse_filter_object(
             continue;
         }
         let condition = if let Some(rel_info) = relations.get(field) {
-            parse_relation_filter(rel_info, value, models)?
+            parse_relation_filter(rel_info, value, schema_context)?
         } else {
             parse_field_condition(field, value, field_types)?
         };
@@ -72,7 +77,7 @@ pub(super) fn parse_filter_object(
 pub(super) fn parse_relation_filter(
     rel: &RelationInfo,
     value: &JsonValue,
-    models: Option<&HashMap<String, ModelIr>>,
+    schema_context: SchemaContext<'_>,
 ) -> Result<Expr, ProtocolError> {
     let spec = value.as_object().ok_or_else(|| {
         ProtocolError::InvalidFilter(
@@ -83,7 +88,7 @@ pub(super) fn parse_relation_filter(
     let mut conditions = Vec::new();
     let empty_map = RelationMap::new();
     let empty_field_types = FieldTypeMap::new();
-    let child_ctx = relation_filter_context(rel, models)?;
+    let child_ctx = relation_filter_context(rel, schema_context)?;
 
     let join_cond = || {
         Expr::column(format!("{}__{}", rel.target_table, rel.fk_db))
@@ -91,16 +96,25 @@ pub(super) fn parse_relation_filter(
     };
 
     let parse_child_filter = |child_value: &JsonValue| -> Result<Expr, ProtocolError> {
-        if let Some((child_relations, child_field_types, child_logical_to_db)) = &child_ctx {
-            let parsed =
-                parse_where_filter(child_value, child_relations, child_field_types, models)?;
+        if let Some(child_ctx) = child_ctx.as_ref() {
+            let parsed = parse_where_filter(
+                child_value,
+                child_ctx.relations.as_ref(),
+                child_ctx.field_types.as_ref(),
+                schema_context,
+            )?;
             Ok(qualify_filter_columns(
                 parsed,
                 &rel.target_table,
-                child_logical_to_db,
+                child_ctx.logical_to_db.as_ref(),
             ))
         } else {
-            parse_where_filter(child_value, &empty_map, &empty_field_types, None)
+            parse_where_filter(
+                child_value,
+                &empty_map,
+                &empty_field_types,
+                SchemaContext::none(),
+            )
         }
     };
 
@@ -315,7 +329,7 @@ pub(super) fn parse_and_operator(
     value: &JsonValue,
     relations: &RelationMap,
     field_types: &FieldTypeMap,
-    models: Option<&HashMap<String, ModelIr>>,
+    schema_context: SchemaContext<'_>,
 ) -> Result<Expr, ProtocolError> {
     let arr = value
         .as_array()
@@ -332,7 +346,12 @@ pub(super) fn parse_and_operator(
         let obj = item.as_object().ok_or_else(|| {
             ProtocolError::InvalidFilter("AND array items must be objects".to_string())
         })?;
-        conditions.push(parse_filter_object(obj, relations, field_types, models)?);
+        conditions.push(parse_filter_object(
+            obj,
+            relations,
+            field_types,
+            schema_context,
+        )?);
     }
 
     combine_conditions(conditions, BinaryOp::And)
@@ -342,7 +361,7 @@ pub(super) fn parse_or_operator(
     value: &JsonValue,
     relations: &RelationMap,
     field_types: &FieldTypeMap,
-    models: Option<&HashMap<String, ModelIr>>,
+    schema_context: SchemaContext<'_>,
 ) -> Result<Expr, ProtocolError> {
     let arr = value
         .as_array()
@@ -359,7 +378,12 @@ pub(super) fn parse_or_operator(
         let obj = item.as_object().ok_or_else(|| {
             ProtocolError::InvalidFilter("OR array items must be objects".to_string())
         })?;
-        conditions.push(parse_filter_object(obj, relations, field_types, models)?);
+        conditions.push(parse_filter_object(
+            obj,
+            relations,
+            field_types,
+            schema_context,
+        )?);
     }
 
     combine_conditions(conditions, BinaryOp::Or)
@@ -369,10 +393,10 @@ pub(super) fn parse_not_operator(
     value: &JsonValue,
     relations: &RelationMap,
     field_types: &FieldTypeMap,
-    models: Option<&HashMap<String, ModelIr>>,
+    schema_context: SchemaContext<'_>,
 ) -> Result<Expr, ProtocolError> {
     if let Some(obj) = value.as_object() {
-        let inner = parse_filter_object(obj, relations, field_types, models)?;
+        let inner = parse_filter_object(obj, relations, field_types, schema_context)?;
         Ok(!inner)
     } else if let Some(arr) = value.as_array() {
         if arr.is_empty() {
@@ -386,7 +410,12 @@ pub(super) fn parse_not_operator(
             let obj = item.as_object().ok_or_else(|| {
                 ProtocolError::InvalidFilter("NOT array items must be objects".to_string())
             })?;
-            conditions.push(parse_filter_object(obj, relations, field_types, models)?);
+            conditions.push(parse_filter_object(
+                obj,
+                relations,
+                field_types,
+                schema_context,
+            )?);
         }
 
         let combined = combine_conditions(conditions, BinaryOp::And)?;

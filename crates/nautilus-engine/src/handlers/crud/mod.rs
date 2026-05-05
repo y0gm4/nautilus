@@ -11,15 +11,11 @@ use nautilus_protocol::{
     CountParams, CreateManyParams, CreateParams, DeleteParams, FindFirstParams, FindManyParams,
     FindUniqueParams, GroupByParams, ProtocolError, RpcRequest, RpcResponse, UpdateParams,
 };
-use nautilus_schema::ast::StorageStrategy;
-use nautilus_schema::ir::{DefaultValue, FieldIr, ModelIr, ResolvedFieldType, ScalarType};
+use nautilus_schema::ir::{DefaultValue, FieldIr, ModelIr, ResolvedFieldType};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use tokio::sync::mpsc;
 
-use super::{
-    build_field_type_map, build_relation_map, field_marker, get_model_or_error,
-    model_scalar_markers,
-};
+use super::{field_marker, get_model_or_error};
 use crate::conversion::{
     check_protocol_version, json_to_value, json_to_value_field, normalize_rows_with_hints,
     rows_to_raw_json, ValueHint,

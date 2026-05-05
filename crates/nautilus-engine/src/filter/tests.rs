@@ -77,11 +77,15 @@ model User {
     );
     let args = json!({ "orderBy": [{ "embedding": "asc" }] });
 
-    let err =
-        match QueryArgs::parse_with_context(Some(args), &relations, &field_types, Some(&models)) {
-            Ok(_) => panic!("expected Vector orderBy to be rejected"),
-            Err(err) => err,
-        };
+    let err = match QueryArgs::parse_with_context(
+        Some(args),
+        &relations,
+        &field_types,
+        SchemaContext::with_models(&models),
+    ) {
+        Ok(_) => panic!("expected Vector orderBy to be rejected"),
+        Err(err) => err,
+    };
     assert!(err
         .to_string()
         .contains("cannot be used with classic orderBy"));
@@ -105,7 +109,13 @@ model User {
     );
     let filter = json!({ "embedding": { "gt": [0.1, 0.2, 0.3] } });
 
-    let err = parse_where_filter(&filter, &RelationMap::new(), &field_types, None).unwrap_err();
+    let err = parse_where_filter(
+        &filter,
+        &RelationMap::new(),
+        &field_types,
+        SchemaContext::none(),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("not supported for Vector"));
 }
 
@@ -134,8 +144,13 @@ model User {
         "take": 5
     });
 
-    let parsed = QueryArgs::parse_with_context(Some(args), &relations, &field_types, Some(&models))
-        .expect("nearest query should parse");
+    let parsed = QueryArgs::parse_with_context(
+        Some(args),
+        &relations,
+        &field_types,
+        SchemaContext::with_models(&models),
+    )
+    .expect("nearest query should parse");
 
     let nearest = parsed.nearest.expect("nearest query missing");
     assert_eq!(nearest.field, "embedding");
@@ -168,8 +183,13 @@ model User {
         }
     });
 
-    let err = QueryArgs::parse_with_context(Some(args), &relations, &field_types, Some(&models))
-        .expect_err("nearest without take should fail");
+    let err = QueryArgs::parse_with_context(
+        Some(args),
+        &relations,
+        &field_types,
+        SchemaContext::with_models(&models),
+    )
+    .expect_err("nearest without take should fail");
     assert!(err.to_string().contains("requires a positive 'take'"));
 }
 
@@ -198,8 +218,13 @@ model User {
         "take": 3
     });
 
-    let err = QueryArgs::parse_with_context(Some(args), &relations, &field_types, Some(&models))
-        .expect_err("nearest on non-vector field should fail");
+    let err = QueryArgs::parse_with_context(
+        Some(args),
+        &relations,
+        &field_types,
+        SchemaContext::with_models(&models),
+    )
+    .expect_err("nearest on non-vector field should fail");
     assert!(err.to_string().contains("must reference a Vector field"));
 }
 
@@ -300,9 +325,13 @@ model Post {
         }
     });
 
-    let query_args =
-        QueryArgs::parse_with_context(Some(args), &relations, &field_types, Some(&models))
-            .expect("query args should parse");
+    let query_args = QueryArgs::parse_with_context(
+        Some(args),
+        &relations,
+        &field_types,
+        SchemaContext::with_models(&models),
+    )
+    .expect("query args should parse");
 
     let posts = query_args
         .include
@@ -367,9 +396,13 @@ model Comment {
         }
     });
 
-    let query_args =
-        QueryArgs::parse_with_context(Some(args), &relations, &field_types, Some(&models))
-            .expect("query args should parse");
+    let query_args = QueryArgs::parse_with_context(
+        Some(args),
+        &relations,
+        &field_types,
+        SchemaContext::with_models(&models),
+    )
+    .expect("query args should parse");
 
     let comments = query_args
         .include
@@ -420,7 +453,12 @@ model Post {
         "include": { "posts": true }
     });
 
-    match QueryArgs::parse_with_context(Some(args), &relations, &field_types, Some(&models)) {
+    match QueryArgs::parse_with_context(
+        Some(args),
+        &relations,
+        &field_types,
+        SchemaContext::with_models(&models),
+    ) {
         Err(ProtocolError::InvalidParams(message)) => {
             assert!(
                 message.contains("'select' and 'include' cannot be used together"),
@@ -494,9 +532,13 @@ model Report {
         }
     });
 
-    let query_args =
-        QueryArgs::parse_with_context(Some(args), &relations, &field_types, Some(&models))
-            .expect("query args should parse");
+    let query_args = QueryArgs::parse_with_context(
+        Some(args),
+        &relations,
+        &field_types,
+        SchemaContext::with_models(&models),
+    )
+    .expect("query args should parse");
 
     let filter = query_args.filter.expect("relation filter missing");
     assert!(matches!(filter, Expr::Exists(_)));

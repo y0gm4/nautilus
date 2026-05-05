@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 
 use crate::conversion::check_protocol_version;
 use crate::conversion::to_snake_case;
-use crate::filter::{FieldTypeMap, RelationInfo, RelationMap};
+use crate::filter::{RelationInfo, RelationMap};
 use crate::state::EngineState;
 
 mod crud;
@@ -36,30 +36,10 @@ pub(super) fn field_marker(model: &ModelIr, field: &FieldIr) -> ColumnMarker {
 }
 
 /// Build a map from logical field name -> resolved field type for a model.
-/// Used by the filter parser to emit `Value::Enum` for enum-typed fields.
-pub(super) fn build_field_type_map(model: &ModelIr) -> FieldTypeMap {
-    model
-        .fields
-        .iter()
-        .filter(|f| !matches!(f.field_type, ResolvedFieldType::Relation(_)))
-        .flat_map(|f| {
-            let mut entries = vec![(f.logical_name.clone(), f.field_type.clone())];
-            if f.db_name != f.logical_name {
-                entries.push((f.db_name.clone(), f.field_type.clone()));
-            }
-            entries
-        })
-        .collect()
-}
-
-/// Build column markers for all scalar (non-relation) fields of a model.
-pub(super) fn model_scalar_markers(model: &ModelIr) -> Vec<ColumnMarker> {
-    model
-        .fields
-        .iter()
-        .filter(|f| !matches!(f.field_type, ResolvedFieldType::Relation(_)))
-        .map(|f| field_marker(model, f))
-        .collect()
+/// Used by tests that exercise the filter parser in isolation.
+#[cfg(test)]
+pub(super) fn build_field_type_map(model: &ModelIr) -> crate::filter::FieldTypeMap {
+    crate::metadata::build_field_type_map(model)
 }
 
 /// Look up a model by logical name, returning a typed error on miss.

@@ -45,7 +45,7 @@ fn insert_path(map: &mut HashMap<String, IncludeNode>, segments: &[&str]) {
 pub(super) fn parse_include(
     include_value: &JsonValue,
     relations: &RelationMap,
-    models: Option<&HashMap<String, ModelIr>>,
+    schema_context: SchemaContext<'_>,
 ) -> Result<HashMap<String, IncludeNode>, ProtocolError> {
     if let Some(arr) = include_value.as_array() {
         if arr.iter().any(|v| v.as_str() == Some("*")) {
@@ -92,42 +92,36 @@ pub(super) fn parse_include(
             },
             JsonValue::Bool(false) => continue,
             JsonValue::Object(child_obj) => {
-                let child_ctx = nested_include_context(field, relations, models)?;
+                let child_ctx = nested_include_context(field, relations, schema_context)?;
                 let filter = if let Some(where_val) = child_obj.get("where") {
-                    if let Some((
-                        child_relations,
-                        child_field_types,
-                        child_logical_to_db,
-                        target_table,
-                    )) = &child_ctx
-                    {
+                    if let Some(child_ctx) = child_ctx.as_ref() {
                         let parsed = parse_where_filter(
                             where_val,
-                            child_relations,
-                            child_field_types,
-                            models,
+                            child_ctx.relations.as_ref(),
+                            child_ctx.field_types.as_ref(),
+                            schema_context,
                         )?;
                         Some(qualify_filter_columns(
                             parsed,
-                            target_table,
-                            child_logical_to_db,
+                            child_ctx.target_table.as_ref(),
+                            child_ctx.logical_to_db.as_ref(),
                         ))
                     } else {
                         Some(parse_where_filter(
                             where_val,
                             &RelationMap::new(),
                             &FieldTypeMap::new(),
-                            None,
+                            SchemaContext::none(),
                         )?)
                     }
                 } else {
                     None
                 };
                 let nested = if let Some(inc_val) = child_obj.get("include") {
-                    if let Some((child_relations, _, _, _)) = &child_ctx {
-                        parse_include(inc_val, child_relations, models)?
+                    if let Some(child_ctx) = child_ctx.as_ref() {
+                        parse_include(inc_val, child_ctx.relations.as_ref(), schema_context)?
                     } else {
-                        parse_include(inc_val, &RelationMap::new(), models)?
+                        parse_include(inc_val, &RelationMap::new(), SchemaContext::none())?
                     }
                 } else {
                     HashMap::new()
@@ -141,13 +135,13 @@ pub(super) fn parse_include(
                     .and_then(|v| v.as_u64())
                     .map(|v| v as u32);
                 let order_by = if let Some(ob_val) = child_obj.get("orderBy") {
-                    let child_field_types = child_ctx
-                        .as_ref()
-                        .map(|(_, child_field_types, _, _)| child_field_types);
+                    let child_field_types = child_ctx.as_ref().map(|ctx| ctx.field_types.as_ref());
                     let mut parsed = parse_order_by(ob_val, child_field_types)?;
-                    if let Some((_, _, child_logical_to_db, _)) = &child_ctx {
+                    if let Some(child_ctx) = child_ctx.as_ref() {
                         for order in &mut parsed {
-                            order.column = child_logical_to_db
+                            order.column = child_ctx
+                                .logical_to_db
+                                .as_ref()
                                 .get(order.column.as_str())
                                 .cloned()
                                 .unwrap_or_else(|| order.column.clone());

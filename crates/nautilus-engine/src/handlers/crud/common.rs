@@ -1,28 +1,11 @@
 use super::*;
 
-pub(super) fn model_logical_to_db(model: &ModelIr) -> std::collections::HashMap<String, String> {
-    model
-        .scalar_fields()
-        .flat_map(|field| {
-            let mut entries = vec![(field.logical_name.clone(), field.db_name.clone())];
-            if field.db_name != field.logical_name {
-                entries.push((field.db_name.clone(), field.db_name.clone()));
-            }
-            entries
-        })
-        .collect()
-}
-
-pub(super) fn model_db_to_logical(model: &ModelIr) -> std::collections::HashMap<String, String> {
-    model
-        .scalar_fields()
-        .map(|field| (field.db_name.clone(), field.logical_name.clone()))
-        .collect()
-}
-
-pub(super) fn qualify_model_filter(model: &ModelIr, filter: Option<Expr>) -> Option<Expr> {
-    let logical_to_db = model_logical_to_db(model);
-    filter.map(|expr| qualify_filter_columns(expr, &model.db_name, &logical_to_db))
+pub(super) fn qualify_model_filter(
+    model: &ModelIr,
+    logical_to_db: &std::collections::HashMap<String, String>,
+    filter: Option<Expr>,
+) -> Option<Expr> {
+    filter.map(|expr| qualify_filter_columns(expr, &model.db_name, logical_to_db))
 }
 
 fn protocol_filter_body(filter: &JsonValue) -> &JsonValue {
@@ -37,6 +20,7 @@ pub(super) fn parse_optional_model_filter(
     model: &ModelIr,
     filter: &JsonValue,
     field_types: &crate::filter::FieldTypeMap,
+    logical_to_db: &std::collections::HashMap<String, String>,
 ) -> Result<Option<Expr>, ProtocolError> {
     let filter = protocol_filter_body(filter);
     let JsonValue::Object(filter_obj) = filter else {
@@ -53,13 +37,12 @@ pub(super) fn parse_optional_model_filter(
         filter,
         &crate::filter::RelationMap::new(),
         field_types,
-        None,
+        crate::filter::SchemaContext::none(),
     )?;
-    let logical_to_db = model_logical_to_db(model);
     Ok(Some(qualify_filter_columns(
         parsed,
         &model.db_name,
-        &logical_to_db,
+        logical_to_db,
     )))
 }
 
@@ -67,34 +50,10 @@ pub(super) fn parse_and_qualify_model_filter(
     model: &ModelIr,
     filter: &JsonValue,
     field_types: &crate::filter::FieldTypeMap,
+    logical_to_db: &std::collections::HashMap<String, String>,
 ) -> Result<Expr, ProtocolError> {
-    parse_optional_model_filter(model, filter, field_types)?
+    parse_optional_model_filter(model, filter, field_types, logical_to_db)?
         .ok_or_else(|| ProtocolError::InvalidFilter("where cannot be empty".to_string()))
-}
-
-pub(super) fn field_value_hint(field: &FieldIr) -> Option<ValueHint> {
-    if field.is_array && field.storage_strategy == Some(StorageStrategy::Json) {
-        return Some(ValueHint::Json);
-    }
-
-    match &field.field_type {
-        ResolvedFieldType::Scalar(ScalarType::Decimal { .. }) => Some(ValueHint::Decimal),
-        ResolvedFieldType::Scalar(ScalarType::DateTime) => Some(ValueHint::DateTime),
-        ResolvedFieldType::Scalar(ScalarType::Json | ScalarType::Jsonb) => Some(ValueHint::Json),
-        ResolvedFieldType::Scalar(ScalarType::Uuid) => Some(ValueHint::Uuid),
-        ResolvedFieldType::Scalar(ScalarType::Geometry) => Some(ValueHint::Geometry),
-        ResolvedFieldType::Scalar(ScalarType::Geography) => Some(ValueHint::Geography),
-        ResolvedFieldType::CompositeType { .. }
-            if field.storage_strategy == Some(StorageStrategy::Json) =>
-        {
-            Some(ValueHint::Json)
-        }
-        _ => None,
-    }
-}
-
-pub(super) fn model_scalar_value_hints(model: &ModelIr) -> Vec<Option<ValueHint>> {
-    model.scalar_fields().map(field_value_hint).collect()
 }
 
 pub(super) fn wrap_result(
@@ -141,14 +100,14 @@ pub(super) async fn finish_mutation(
     sql: &Sql,
     exec_tag: &'static str,
     tx_id: Option<&str>,
-    model: &ModelIr,
+    scalar_hints: &[Option<ValueHint>],
     return_data: bool,
     result_label: &str,
 ) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
     if return_data {
         let rows = normalize_rows_with_hints(
             state.execute_query_on(sql, exec_tag, tx_id).await?,
-            &model_scalar_value_hints(model),
+            scalar_hints,
         )?;
         wrap_mutation_result(&rows, result_label)
     } else {

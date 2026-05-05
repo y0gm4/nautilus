@@ -90,6 +90,7 @@ pub(super) async fn handle_create(
 ) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
     let (params, model) = parse_params!(state, request, CreateParams, "create");
     let tx_id = params.transaction_id;
+    let metadata = state.model_metadata(model);
 
     let data_obj = params
         .data
@@ -112,7 +113,7 @@ pub(super) async fn handle_create(
 
     builder = builder.columns(columns).values(values);
     if params.return_data {
-        builder = builder.returning(model_scalar_markers(model));
+        builder = builder.returning(metadata.scalar_markers().to_vec());
     }
 
     let insert = builder
@@ -129,7 +130,7 @@ pub(super) async fn handle_create(
         &sql,
         "Insert",
         tx_id.as_deref(),
-        model,
+        metadata.scalar_hints(),
         params.return_data,
         "create result",
     )
@@ -143,6 +144,7 @@ pub(super) async fn handle_create_many(
 ) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
     let (params, model) = parse_params!(state, request, CreateManyParams, "createMany");
     let tx_id = params.transaction_id;
+    let metadata = state.model_metadata(model);
 
     if params.data.is_empty() {
         return Err(ProtocolError::InvalidParams(
@@ -214,7 +216,7 @@ pub(super) async fn handle_create_many(
         builder = builder.values(row);
     }
     if params.return_data {
-        builder = builder.returning(model_scalar_markers(model));
+        builder = builder.returning(metadata.scalar_markers().to_vec());
     }
 
     let insert = builder
@@ -231,7 +233,7 @@ pub(super) async fn handle_create_many(
         &sql,
         "Insert",
         tx_id.as_deref(),
-        model,
+        metadata.scalar_hints(),
         params.return_data,
         "createMany result",
     )
@@ -245,9 +247,14 @@ pub(super) async fn handle_update(
 ) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
     let (params, model) = parse_params!(state, request, UpdateParams, "update");
     let tx_id = params.transaction_id;
+    let metadata = state.model_metadata(model);
 
-    let field_type_map = build_field_type_map(model);
-    let qualified_filter = parse_optional_model_filter(model, &params.filter, &field_type_map)?;
+    let qualified_filter = parse_optional_model_filter(
+        model,
+        &params.filter,
+        metadata.field_types(),
+        metadata.logical_to_db(),
+    )?;
 
     let data_obj = params
         .data
@@ -270,7 +277,7 @@ pub(super) async fn handle_update(
     }
 
     if params.return_data {
-        builder = builder.returning(model_scalar_markers(model));
+        builder = builder.returning(metadata.scalar_markers().to_vec());
     }
 
     let update = builder
@@ -287,7 +294,7 @@ pub(super) async fn handle_update(
         &sql,
         "Update",
         tx_id.as_deref(),
-        model,
+        metadata.scalar_hints(),
         params.return_data,
         "update result",
     )
@@ -301,9 +308,14 @@ pub(super) async fn handle_delete(
 ) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
     let (params, model) = parse_params!(state, request, DeleteParams, "delete");
     let tx_id = params.transaction_id;
+    let metadata = state.model_metadata(model);
 
-    let field_type_map = build_field_type_map(model);
-    let qualified_filter = parse_optional_model_filter(model, &params.filter, &field_type_map)?;
+    let qualified_filter = parse_optional_model_filter(
+        model,
+        &params.filter,
+        metadata.field_types(),
+        metadata.logical_to_db(),
+    )?;
 
     let mut builder = Delete::from_table(&model.db_name);
     if let Some(filter) = qualified_filter {
@@ -311,7 +323,7 @@ pub(super) async fn handle_delete(
     }
 
     if params.return_data {
-        builder = builder.returning(model_scalar_markers(model));
+        builder = builder.returning(metadata.scalar_markers().to_vec());
     }
 
     let delete = builder
@@ -328,7 +340,7 @@ pub(super) async fn handle_delete(
         &sql,
         "Delete",
         tx_id.as_deref(),
-        model,
+        metadata.scalar_hints(),
         params.return_data,
         "delete result",
     )

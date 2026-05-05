@@ -20,6 +20,7 @@ pub(crate) use ordering::{parse_group_by_order_by, parse_having, GroupByOrderIte
 pub(crate) use where_filter::{parse_where_filter, qualify_filter_columns};
 
 use crate::conversion::{json_to_value, json_to_value_field};
+use crate::state::EngineState;
 
 /// Map from a model's logical field name to its resolved field type.
 /// Used during filter parsing to emit `Value::Enum` for enum-typed fields.
@@ -45,6 +46,44 @@ pub struct RelationInfo {
 /// A map from relation *field* name (logical, as used in the `where` / `include` payload)
 /// to its join metadata. Pass an empty map when no schema context is available.
 pub type RelationMap = HashMap<String, RelationInfo>;
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct SchemaContext<'a> {
+    models: Option<&'a HashMap<String, ModelIr>>,
+    state: Option<&'a EngineState>,
+}
+
+impl<'a> SchemaContext<'a> {
+    pub(crate) const fn none() -> Self {
+        Self {
+            models: None,
+            state: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn with_models(models: &'a HashMap<String, ModelIr>) -> Self {
+        Self {
+            models: Some(models),
+            state: None,
+        }
+    }
+
+    pub(crate) fn with_state(state: &'a EngineState) -> Self {
+        Self {
+            models: Some(&state.models),
+            state: Some(state),
+        }
+    }
+
+    pub(super) const fn models(self) -> Option<&'a HashMap<String, ModelIr>> {
+        self.models
+    }
+
+    pub(super) const fn state(self) -> Option<&'a EngineState> {
+        self.state
+    }
+}
 
 /// A node in the include tree for one relation.
 #[derive(Debug, Clone)]
@@ -98,7 +137,12 @@ pub struct QueryArgs {
 impl QueryArgs {
     /// Parse with no relation or field-type context (backward-compatible).
     pub fn parse(args: Option<JsonValue>) -> Result<Self, ProtocolError> {
-        Self::parse_with_context(args, &RelationMap::new(), &FieldTypeMap::new(), None)
+        Self::parse_with_context(
+            args,
+            &RelationMap::new(),
+            &FieldTypeMap::new(),
+            SchemaContext::none(),
+        )
     }
 
     /// Parse without relation context but with field-type context.
@@ -109,7 +153,12 @@ impl QueryArgs {
         args: Option<JsonValue>,
         field_types: &FieldTypeMap,
     ) -> Result<Self, ProtocolError> {
-        Self::parse_with_context(args, &RelationMap::new(), field_types, None)
+        Self::parse_with_context(
+            args,
+            &RelationMap::new(),
+            field_types,
+            SchemaContext::none(),
+        )
     }
 
     /// Parse with relation context so that `some` / `none` / `every` predicates
@@ -119,7 +168,7 @@ impl QueryArgs {
         relations: &RelationMap,
         field_types: &FieldTypeMap,
     ) -> Result<Self, ProtocolError> {
-        Self::parse_with_context(args, relations, field_types, None)
+        Self::parse_with_context(args, relations, field_types, SchemaContext::none())
     }
 
     /// Parse with relation context and full schema access so nested include
@@ -128,7 +177,7 @@ impl QueryArgs {
         args: Option<JsonValue>,
         relations: &RelationMap,
         field_types: &FieldTypeMap,
-        models: Option<&HashMap<String, ModelIr>>,
+        schema_context: SchemaContext<'_>,
     ) -> Result<Self, ProtocolError> {
         let args = match args {
             Some(JsonValue::Object(map)) => map,
@@ -158,7 +207,7 @@ impl QueryArgs {
                 where_value,
                 relations,
                 field_types,
-                models,
+                schema_context,
             )?)
         } else {
             None
@@ -201,7 +250,7 @@ impl QueryArgs {
         };
 
         let include = if let Some(include_value) = args.get("include") {
-            parse_include(include_value, relations, models)?
+            parse_include(include_value, relations, schema_context)?
         } else {
             HashMap::new()
         };

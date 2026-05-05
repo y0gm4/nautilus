@@ -1,4 +1,4 @@
-use super::common::{model_db_to_logical, model_logical_to_db, wrap_result};
+use super::common::wrap_result;
 use super::*;
 
 fn collect_agg_fields(model: &ModelIr, value: &serde_json::Value) -> Vec<String> {
@@ -31,9 +31,10 @@ pub(super) async fn handle_group_by(
     let tx_id = params.transaction_id;
 
     let model = get_model_or_error(state, &params.model)?;
-    let field_type_map = build_field_type_map(model);
-    let logical_to_db = model_logical_to_db(model);
-    let db_to_logical = model_db_to_logical(model);
+    let metadata = state.model_metadata(model);
+    let field_type_map = metadata.field_types();
+    let logical_to_db = metadata.logical_to_db();
+    let db_to_logical = metadata.db_to_logical();
     let args = params.args.as_ref();
 
     let by_fields: Vec<String> = args
@@ -59,16 +60,16 @@ pub(super) async fn handle_group_by(
             crate::filter::parse_where_filter(
                 where_val,
                 &crate::filter::RelationMap::new(),
-                &field_type_map,
-                None,
+                field_type_map,
+                crate::filter::SchemaContext::none(),
             )
-            .map(|expr| qualify_filter_columns(expr, &model.db_name, &logical_to_db))
+            .map(|expr| qualify_filter_columns(expr, &model.db_name, logical_to_db))
         })
         .transpose()?;
 
     let having_expr = args
         .and_then(|value| value.get("having"))
-        .map(|value| parse_having(value, &model.db_name, &logical_to_db))
+        .map(|value| parse_having(value, &model.db_name, logical_to_db))
         .transpose()?;
 
     let take_val = args
@@ -140,7 +141,7 @@ pub(super) async fn handle_group_by(
 
     let group_orders = args
         .and_then(|value| value.get("orderBy"))
-        .map(|value| parse_group_by_order_by(value, &model.db_name, &logical_to_db))
+        .map(|value| parse_group_by_order_by(value, &model.db_name, logical_to_db))
         .transpose()?
         .unwrap_or_default();
 

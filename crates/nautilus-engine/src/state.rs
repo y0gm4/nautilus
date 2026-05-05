@@ -13,6 +13,9 @@ use nautilus_migrate::DatabaseProvider;
 use nautilus_protocol::ProtocolError;
 use nautilus_schema::ir::{ModelIr, SchemaIr};
 
+use crate::filter::RelationMap;
+use crate::metadata::ModelMetadata;
+
 const EXPIRED_TRANSACTION_RETENTION: Duration = Duration::from_secs(60);
 
 /// Convert a [`nautilus_connector::ConnectorError`] to the appropriate [`ProtocolError`],
@@ -37,6 +40,8 @@ fn connector_to_protocol(e: nautilus_connector::ConnectorError, context: &str) -
 pub struct EngineState {
     /// Model lookup map (logical name -> IR).
     pub models: HashMap<String, ModelIr>,
+    /// Cached per-model metadata reused by the hot query paths.
+    model_metadata: HashMap<String, ModelMetadata>,
     /// The full validated schema IR.
     pub schema: SchemaIr,
     /// SQL dialect renderer.
@@ -173,6 +178,10 @@ impl EngineState {
         pool_options: ConnectorPoolOptions,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let models = schema.models.clone();
+        let model_metadata = models
+            .iter()
+            .map(|(name, model)| (name.clone(), ModelMetadata::new(model)))
+            .collect();
 
         let datasource = schema
             .datasource
@@ -195,6 +204,7 @@ impl EngineState {
 
         Ok(EngineState {
             models,
+            model_metadata,
             schema,
             dialect,
             client,
@@ -202,6 +212,29 @@ impl EngineState {
             transactions: Arc::new(Mutex::new(HashMap::new())),
             expired_transactions: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    /// Return cached metadata for a validated model.
+    pub(crate) fn model_metadata(&self, model: &ModelIr) -> &ModelMetadata {
+        self.model_metadata
+            .get(&model.logical_name)
+            .expect("engine metadata missing for validated model")
+    }
+
+    /// Return the lazily cached relation map for a validated model.
+    pub(crate) fn relation_map_for_model(
+        &self,
+        model: &ModelIr,
+    ) -> Result<&RelationMap, ProtocolError> {
+        self.model_metadata(model).relation_map(model, &self.models)
+    }
+
+    /// Look up a related model together with its cached metadata.
+    pub(crate) fn related_model(&self, model_name: &str) -> Option<(&ModelIr, &ModelMetadata)> {
+        Some((
+            self.models.get(model_name)?,
+            self.model_metadata.get(model_name)?,
+        ))
     }
 
     /// Execute raw DDL SQL statements against the database.

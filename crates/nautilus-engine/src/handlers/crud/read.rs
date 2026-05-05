@@ -1,5 +1,4 @@
 use super::common::{
-    field_value_hint, model_logical_to_db, model_scalar_value_hints,
     parse_and_qualify_model_filter, qualify_model_filter, wrap_data_result, wrap_result,
 };
 use super::*;
@@ -108,7 +107,7 @@ async fn hydrate_rows_with_includes(
         return Ok(rows);
     }
 
-    let relation_map = build_relation_map(model, &state.models)?;
+    let relation_map = state.relation_map_for_model(model)?;
     let mut hydrated = Vec::with_capacity(rows.len());
 
     for row in rows {
@@ -146,48 +145,33 @@ async fn execute_find_many_rows(
         nearest,
     } = query_args;
 
-    let logical_to_db = model_logical_to_db(model);
+    let metadata = state.model_metadata(model);
+    let logical_to_db = metadata.logical_to_db();
     let qualified_filter =
-        filter.map(|expr| qualify_filter_columns(expr, &model.db_name, &logical_to_db));
+        filter.map(|expr| qualify_filter_columns(expr, &model.db_name, logical_to_db));
 
     let mut builder = Select::from_table(&model.db_name);
     let mut row_hints = Vec::new();
 
-    let pk_field_names = model.primary_key.fields();
+    let pk_fields = metadata.primary_key_fields();
 
-    for field in &model.fields {
-        if matches!(field.field_type, ResolvedFieldType::Relation(_)) {
-            continue;
-        }
+    for field in metadata.scalar_fields() {
         if !select.is_empty()
-            && !select.contains(&field.logical_name)
-            && !pk_field_names.contains(&field.logical_name.as_str())
+            && !select.contains(field.logical_name())
+            && !pk_fields
+                .iter()
+                .any(|pk_field| pk_field.logical_name() == field.logical_name())
         {
             continue;
         }
-        builder = builder.item(SelectItem::from(field_marker(model, field)));
-        row_hints.push(field_value_hint(field));
+        builder = builder.item(SelectItem::from(field.marker().clone()));
+        row_hints.push(field.hint());
     }
 
     let combined_filter = if let Some(ref cursor_map) = cursor {
-        let pk_info: Vec<(String, String)> = pk_field_names
+        let pk_refs: Vec<(&str, &str)> = pk_fields
             .iter()
-            .filter_map(|logical| {
-                model
-                    .scalar_fields()
-                    .find(|field| field.logical_name.as_str() == *logical)
-                    .map(|field| {
-                        (
-                            field.logical_name.clone(),
-                            format!("{}__{}", model.db_name, field.db_name),
-                        )
-                    })
-            })
-            .collect();
-
-        let pk_refs: Vec<(&str, &str)> = pk_info
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .map(|field| (field.logical_name(), field.qualified_column()))
             .collect();
 
         let cursor_pred = build_cursor_predicate(&pk_refs, cursor_map, backward)
@@ -195,18 +179,14 @@ async fn execute_find_many_rows(
 
         let existing_order_cols: std::collections::HashSet<&str> =
             order_by.iter().map(|order| order.column.as_str()).collect();
-        for (_, db_col_ref) in &pk_info {
-            let db_col = db_col_ref
-                .split_once("__")
-                .map(|(_, column)| column)
-                .unwrap_or(db_col_ref);
-            if !existing_order_cols.contains(db_col) {
+        for pk_field in pk_fields {
+            if !existing_order_cols.contains(pk_field.db_name()) {
                 let dir = if backward {
                     OrderDir::Desc
                 } else {
                     OrderDir::Asc
                 };
-                builder = builder.order_by(db_col.to_string(), dir);
+                builder = builder.order_by(pk_field.db_name().to_string(), dir);
             }
         }
 
@@ -331,13 +311,13 @@ pub(super) async fn handle_find_many(
 
     let model = get_model_or_error(state, &params.model)?;
 
-    let relation_map = build_relation_map(model, &state.models)?;
-    let field_type_map = build_field_type_map(model);
+    let metadata = state.model_metadata(model);
+    let relation_map = state.relation_map_for_model(model)?;
     let query_args = QueryArgs::parse_with_context(
         params.args,
-        &relation_map,
-        &field_type_map,
-        Some(&state.models),
+        relation_map,
+        metadata.field_types(),
+        crate::filter::SchemaContext::with_state(state),
     )?;
     let rows = execute_find_many_rows(state, model, query_args, tx_id.as_deref()).await?;
 
@@ -421,12 +401,17 @@ pub(super) async fn handle_find_unique(
     let tx_id = params.transaction_id;
 
     let model = get_model_or_error(state, &params.model)?;
-    let field_type_map = build_field_type_map(model);
-    let qualified_filter = parse_and_qualify_model_filter(model, &params.filter, &field_type_map)?;
+    let metadata = state.model_metadata(model);
+    let qualified_filter = parse_and_qualify_model_filter(
+        model,
+        &params.filter,
+        metadata.field_types(),
+        metadata.logical_to_db(),
+    )?;
 
     let mut builder = Select::from_table(&model.db_name);
-    for marker in model_scalar_markers(model) {
-        builder = builder.item(SelectItem::from(marker));
+    for marker in metadata.scalar_markers() {
+        builder = builder.item(SelectItem::from(marker.clone()));
     }
 
     builder = builder.filter(qualified_filter);
@@ -445,7 +430,7 @@ pub(super) async fn handle_find_unique(
         state
             .execute_query_on(&sql, "Query", tx_id.as_deref())
             .await?,
-        &model_scalar_value_hints(model),
+        metadata.scalar_hints(),
     )?;
     wrap_data_result(&rows, "findUnique result")
 }
@@ -504,9 +489,9 @@ pub(super) async fn handle_count(
     let tx_id = params.transaction_id;
 
     let model = get_model_or_error(state, &params.model)?;
-    let field_type_map = build_field_type_map(model);
-    let query_args = QueryArgs::parse_typed(params.args, &field_type_map)?;
-    let qualified_filter = qualify_model_filter(model, query_args.filter);
+    let metadata = state.model_metadata(model);
+    let query_args = QueryArgs::parse_typed(params.args, metadata.field_types())?;
+    let qualified_filter = qualify_model_filter(model, metadata.logical_to_db(), query_args.filter);
 
     let has_pagination = query_args.take.is_some() || query_args.skip.is_some();
 
