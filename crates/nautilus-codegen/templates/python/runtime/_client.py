@@ -21,7 +21,7 @@ _STDERR_DRAIN_TIMEOUT_S: float = 1.0
 _SYNC_CONNECT_TIMEOUT_S: int = 35
 _SYNC_LOOP_JOIN_TIMEOUT_S: int = 10
 
-from .engine import EngineProcess  # type: ignore
+from .engine import EnginePoolOptions, EngineProcess  # type: ignore
 from ..errors.errors import HandshakeError, ProtocolError, TransactionError, TransactionTimeoutError  # type: ignore
 from .protocol import JsonRpcRequest, JsonRpcResponse  # type: ignore
 from .transaction import IsolationLevel, TransactionClient  # type: ignore
@@ -88,7 +88,14 @@ class NautilusClient:
     and provides the base RPC layer for generated model delegates.
     """
 
-    def __init__(self, schema_path: str, engine_path: Optional[str] = None, migrate: bool = False, auto_register: bool = False) -> None:
+    def __init__(
+        self,
+        schema_path: str,
+        engine_path: Optional[str] = None,
+        migrate: bool = False,
+        auto_register: bool = False,
+        pool_options: Optional[EnginePoolOptions] = None,
+    ) -> None:
         """Initialize the Nautilus client.
 
         Args:
@@ -96,9 +103,10 @@ class NautilusClient:
             engine_path: Optional path to nautilus-engine binary.
             migrate: If True, run DDL migrations on engine startup.
             auto_register: If True, register this instance globally for model.nautilus access.
+            pool_options: Optional engine-level pool overrides for the subprocess.
         """
         self.schema_path = schema_path
-        self.engine = EngineProcess(engine_path, migrate=migrate)
+        self.engine = EngineProcess(engine_path, migrate=migrate, pool_options=pool_options)
 
         self._request_id = 0
         self._pending: Dict[int, asyncio.Future] = {}

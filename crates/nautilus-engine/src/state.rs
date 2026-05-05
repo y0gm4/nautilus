@@ -15,6 +15,7 @@ use nautilus_schema::ir::{ModelIr, SchemaIr};
 
 use crate::filter::RelationMap;
 use crate::metadata::ModelMetadata;
+use crate::pool_options::EnginePoolOptions;
 
 const EXPIRED_TRANSACTION_RETENTION: Duration = Duration::from_secs(60);
 
@@ -125,22 +126,24 @@ impl EngineState {
     async fn build_client(
         provider: DatabaseProvider,
         url: &str,
-        pool_options: ConnectorPoolOptions,
+        pool_options: EnginePoolOptions,
     ) -> Result<(Arc<dyn Dialect + Send + Sync>, DatabaseClient), Box<dyn std::error::Error>> {
+        let connector_pool_options = pool_options.to_connector_pool_options();
         match provider {
             DatabaseProvider::Postgres => {
-                let pg_client = Client::postgres_with_options(url, pool_options).await?;
+                let pg_client = Client::postgres_with_options(url, connector_pool_options).await?;
                 Ok((
                     Arc::new(PostgresDialect),
                     DatabaseClient::Postgres(pg_client),
                 ))
             }
             DatabaseProvider::Mysql => {
-                let mysql_client = Client::mysql_with_options(url, pool_options).await?;
+                let mysql_client = Client::mysql_with_options(url, connector_pool_options).await?;
                 Ok((Arc::new(MysqlDialect), DatabaseClient::Mysql(mysql_client)))
             }
             DatabaseProvider::Sqlite => {
-                let sqlite_client = Client::sqlite_with_options(url, pool_options).await?;
+                let sqlite_client =
+                    Client::sqlite_with_options(url, connector_pool_options).await?;
                 Ok((
                     Arc::new(SqliteDialect),
                     DatabaseClient::Sqlite(sqlite_client),
@@ -158,11 +161,11 @@ impl EngineState {
         database_url: String,
         direct_url: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::new_with_pool_options(
+        Self::new_with_engine_pool_options(
             schema,
             database_url,
             direct_url,
-            ConnectorPoolOptions::default(),
+            EnginePoolOptions::default(),
         )
         .await
     }
@@ -176,6 +179,22 @@ impl EngineState {
         database_url: String,
         direct_url: Option<String>,
         pool_options: ConnectorPoolOptions,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_with_engine_pool_options(
+            schema,
+            database_url,
+            direct_url,
+            EnginePoolOptions::from_connector_pool_options(pool_options),
+        )
+        .await
+    }
+
+    /// Create a new engine state with explicit engine-level pool overrides.
+    pub async fn new_with_engine_pool_options(
+        schema: SchemaIr,
+        database_url: String,
+        direct_url: Option<String>,
+        pool_options: EnginePoolOptions,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let models = schema.models.clone();
         let model_metadata = models

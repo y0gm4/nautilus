@@ -651,6 +651,37 @@ fn test_python_runtime_stays_on_protocol_v1_and_preserves_error_data() {
 }
 
 #[test]
+fn test_python_runtime_exposes_engine_pool_options() {
+    let ir = validate(
+        r#"
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let client = generate_python_client(&ir.models, "schema.nautilus", false);
+    let runtime = python_runtime_files();
+    let engine_runtime = runtime
+        .iter()
+        .find(|(name, _)| *name == "_engine.py")
+        .expect("missing Python runtime engine")
+        .1;
+
+    assert!(
+        client.contains("pool_options: EnginePoolOptions | None = None"),
+        "expected generated Python client to expose pool_options:\n{client}"
+    );
+    assert!(
+        engine_runtime.contains("class EnginePoolOptions:")
+            && engine_runtime.contains("--max-connections")
+            && engine_runtime.contains("--disable-idle-timeout")
+            && engine_runtime.contains("--test-before-acquire"),
+        "expected Python runtime engine to forward pool options to the CLI:\n{engine_runtime}"
+    );
+}
+
+#[test]
 fn test_python_create_many_normalizes_mapped_fields() {
     let ir = validate(
         r#"
@@ -1030,6 +1061,48 @@ model User {
 }
 
 #[test]
+fn test_js_runtime_exposes_engine_pool_options() {
+    let ir = validate(
+        r#"
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let (_client_js, client_dts) = generate_js_client(&ir.models, "schema.nautilus");
+    let runtime = js_runtime_files();
+    let client_runtime = runtime
+        .iter()
+        .find(|(name, _)| *name == "_client.d.ts")
+        .expect("missing JS runtime client declarations")
+        .1;
+    let engine_runtime_dts = runtime
+        .iter()
+        .find(|(name, _)| *name == "_engine.d.ts")
+        .expect("missing JS runtime engine declarations")
+        .1;
+    let engine_runtime = runtime
+        .iter()
+        .find(|(name, _)| *name == "_engine.js")
+        .expect("missing JS runtime engine")
+        .1;
+
+    assert!(
+        client_dts.contains("constructor(options?: NautilusClientOptions);")
+            && client_runtime.contains("pool?: EnginePoolOptions;"),
+        "expected generated JS declarations to expose engine pool options:\n{client_dts}"
+    );
+    assert!(
+        engine_runtime_dts.contains("export interface EnginePoolOptions")
+            && engine_runtime.contains("--max-connections")
+            && engine_runtime.contains("--disable-idle-timeout")
+            && engine_runtime.contains("--test-before-acquire"),
+        "expected JS runtime engine to forward pool options to the CLI:\n{engine_runtime}"
+    );
+}
+
+#[test]
 fn test_java_sync_generation_exposes_model_delegate_and_autoregister_accessor() {
     let ir = validate(
         r#"
@@ -1151,6 +1224,45 @@ model User {
     assert!(
         engine_process.contains("Optional<String> localBinary = findLocalBinary(schemaPath);"),
         "expected generated Java runtime to prefer a local nautilus binary before PATH lookup:\n{engine_process}"
+    );
+}
+
+#[test]
+fn test_java_runtime_exposes_engine_pool_options() {
+    let ir = validate(
+        r#"
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+  interface   = "sync"
+}
+
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let files =
+        generate_java_client(&ir, "schema.nautilus", false).expect("generate_java_client failed");
+    let options = generated_java_file(&files, "client/NautilusOptions.java");
+    let engine_process = generated_java_file(&files, "internal/EngineProcess.java");
+
+    assert!(
+        options.contains("public NautilusOptions maxConnections(Integer maxConnections)")
+            && options
+                .contains("public NautilusOptions disableIdleTimeout(boolean disableIdleTimeout)")
+            && options.contains("public Boolean testBeforeAcquire()"),
+        "expected generated Java options to expose engine pool settings:\n{options}"
+    );
+    assert!(
+        engine_process.contains("command.add(\"--max-connections\");")
+            && engine_process.contains("command.add(\"--disable-idle-timeout\");")
+            && engine_process.contains("command.add(\"--test-before-acquire\");"),
+        "expected generated Java runtime engine to forward pool options to the CLI:\n{engine_process}"
     );
 }
 

@@ -1,17 +1,22 @@
 // Runtime file — do not edit manually.
 
 import { IsolationLevel, TransactionClient } from './_transaction.js';
-import type { EngineProcess } from './_engine.js';
+import type { EngineProcess, EnginePoolOptions } from './_engine.js';
 
 export interface TransactionBatchOperation {
   method: string;
   params: Record<string, unknown>;
 }
 
+export interface NautilusClientOptions {
+  migrate?: boolean;
+  pool?: EnginePoolOptions;
+}
+
 export declare class NautilusClient {
   protected readonly engine: EngineProcess;
   _delegates: Record<string, unknown>;
-  constructor(schemaPath: string, options?: { migrate?: boolean });
+  constructor(schemaPath: string, options?: NautilusClientOptions);
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   _rpc(method: string, params: Record<string, unknown>): Promise<unknown>;

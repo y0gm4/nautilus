@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import os
 import platform
 import signal
@@ -21,21 +22,63 @@ _BINARY_NAME = "nautilus.exe" if platform.system() == "Windows" else "nautilus"
 _LEGACY_BINARY_NAME = "nautilus-engine.exe" if platform.system() == "Windows" else "nautilus-engine"
 
 
+@dataclass(frozen=True)
+class EnginePoolOptions:
+    """Engine-level connection-pool overrides for subprocess clients."""
+
+    max_connections: Optional[int] = None
+    min_connections: Optional[int] = None
+    acquire_timeout_ms: Optional[int] = None
+    idle_timeout_ms: Optional[int] = None
+    disable_idle_timeout: bool = False
+    test_before_acquire: Optional[bool] = None
+
+    def to_cli_args(self) -> list[str]:
+        if self.disable_idle_timeout and self.idle_timeout_ms is not None:
+            raise ValueError(
+                "idle_timeout_ms and disable_idle_timeout cannot be set together"
+            )
+
+        args: list[str] = []
+        if self.max_connections is not None:
+            args.extend(["--max-connections", str(self.max_connections)])
+        if self.min_connections is not None:
+            args.extend(["--min-connections", str(self.min_connections)])
+        if self.acquire_timeout_ms is not None:
+            args.extend(["--acquire-timeout-ms", str(self.acquire_timeout_ms)])
+        if self.disable_idle_timeout:
+            args.append("--disable-idle-timeout")
+        elif self.idle_timeout_ms is not None:
+            args.extend(["--idle-timeout-ms", str(self.idle_timeout_ms)])
+        if self.test_before_acquire is not None:
+            args.extend(
+                ["--test-before-acquire", "true" if self.test_before_acquire else "false"]
+            )
+        return args
+
+
 class EngineProcess:
     """Manages the nautilus engine subprocess via asyncio."""
 
-    def __init__(self, engine_path: Optional[str] = None, migrate: bool = False) -> None:
+    def __init__(
+        self,
+        engine_path: Optional[str] = None,
+        migrate: bool = False,
+        pool_options: Optional[EnginePoolOptions] = None,
+    ) -> None:
         """Initialize engine process manager.
 
         Args:
             engine_path: Path to the 'nautilus' binary. If None, will auto-detect or download.
             migrate: If True, pass --migrate flag to run DDL migrations on startup.
+            pool_options: Optional engine-level pool overrides.
         """
         self._resolved = engine_path
         self._is_legacy = bool(
             engine_path and os.path.basename(engine_path).startswith("nautilus-engine")
         )
         self.migrate = migrate
+        self.pool_options = pool_options or EnginePoolOptions()
         self._process: Optional[asyncio.subprocess.Process] = None
         self._stderr_drain_task: Optional[asyncio.Task] = None
         self._stderr_buffer: list = []
@@ -59,14 +102,17 @@ class EngineProcess:
             self._resolved = self._find_or_download_engine(schema_path)
             self._is_legacy = os.path.basename(self._resolved).startswith("nautilus-engine")
 
+        pool_args = self.pool_options.to_cli_args()
         if self._is_legacy:
             cmd = [self._resolved, "--schema", schema_path]
             if self.migrate:
                 cmd.append("--migrate")
+            cmd.extend(pool_args)
         else:
             cmd = [self._resolved, "engine", "serve", "--schema", schema_path]
             if self.migrate:
                 cmd.append("--migrate")
+            cmd.extend(pool_args)
 
         self._process = await asyncio.create_subprocess_exec(
             *cmd,

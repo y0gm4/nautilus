@@ -2,8 +2,16 @@
 
 import { Writable, Readable } from 'stream';
 
+export interface EnginePoolOptions {
+  maxConnections?: number;
+  minConnections?: number;
+  acquireTimeoutMs?: number;
+  idleTimeoutMs?: number | null;
+  testBeforeAcquire?: boolean;
+}
+
 export declare class EngineProcess {
-  constructor(enginePath?: string, migrate?: boolean);
+  constructor(enginePath?: string, migrate?: boolean, poolOptions?: EnginePoolOptions);
   spawn(schemaPath: string): void;
   get stdin(): Writable | null;
   get stdout(): Readable | null;

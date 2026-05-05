@@ -4,6 +4,12 @@ public final class NautilusOptions {
     private boolean migrate;
     private boolean autoRegister;
     private String enginePath;
+    private Integer maxConnections;
+    private Integer minConnections;
+    private Long acquireTimeoutMs;
+    private Long idleTimeoutMs;
+    private boolean disableIdleTimeout;
+    private Boolean testBeforeAcquire;
 
     public NautilusOptions migrate(boolean migrate) {
         this.migrate = migrate;
@@ -20,6 +26,42 @@ public final class NautilusOptions {
         return this;
     }
 
+    public NautilusOptions maxConnections(Integer maxConnections) {
+        this.maxConnections = maxConnections;
+        return this;
+    }
+
+    public NautilusOptions minConnections(Integer minConnections) {
+        this.minConnections = minConnections;
+        return this;
+    }
+
+    public NautilusOptions acquireTimeoutMs(Long acquireTimeoutMs) {
+        this.acquireTimeoutMs = acquireTimeoutMs;
+        return this;
+    }
+
+    public NautilusOptions idleTimeoutMs(Long idleTimeoutMs) {
+        this.idleTimeoutMs = idleTimeoutMs;
+        if (idleTimeoutMs != null) {
+            this.disableIdleTimeout = false;
+        }
+        return this;
+    }
+
+    public NautilusOptions disableIdleTimeout(boolean disableIdleTimeout) {
+        this.disableIdleTimeout = disableIdleTimeout;
+        if (disableIdleTimeout) {
+            this.idleTimeoutMs = null;
+        }
+        return this;
+    }
+
+    public NautilusOptions testBeforeAcquire(Boolean testBeforeAcquire) {
+        this.testBeforeAcquire = testBeforeAcquire;
+        return this;
+    }
+
     public boolean migrate() {
         return this.migrate;
     }
@@ -30,5 +72,29 @@ public final class NautilusOptions {
 
     public String enginePath() {
         return this.enginePath;
+    }
+
+    public Integer maxConnections() {
+        return this.maxConnections;
+    }
+
+    public Integer minConnections() {
+        return this.minConnections;
+    }
+
+    public Long acquireTimeoutMs() {
+        return this.acquireTimeoutMs;
+    }
+
+    public Long idleTimeoutMs() {
+        return this.idleTimeoutMs;
+    }
+
+    public boolean disableIdleTimeout() {
+        return this.disableIdleTimeout;
+    }
+
+    public Boolean testBeforeAcquire() {
+        return this.testBeforeAcquire;
     }
 }

@@ -9,6 +9,7 @@ pub mod conversion;
 pub mod filter;
 pub mod handlers;
 mod metadata;
+pub mod pool_options;
 pub mod state;
 pub mod transport;
 
@@ -16,6 +17,7 @@ use nautilus_migrate::{DatabaseProvider, DdlGenerator};
 use nautilus_schema::{ir::SchemaIr, validate_schema_source};
 
 pub use args::CliArgs;
+pub use pool_options::EnginePoolOptions;
 pub use state::EngineState;
 
 fn eprint_warning(message: &str) {
@@ -56,9 +58,10 @@ pub async fn run_engine_with_schema_resolution(
     schema_path: Option<String>,
     database_url: Option<String>,
     migrate: bool,
+    pool_options: EnginePoolOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let schema_path = resolve_schema_path_arg(schema_path)?;
-    run_engine(schema_path, database_url, migrate).await
+    run_engine(schema_path, database_url, migrate, pool_options).await
 }
 
 /// Run the engine with explicit parameters.
@@ -69,6 +72,7 @@ pub async fn run_engine(
     schema_path: String,
     database_url: Option<String>,
     migrate: bool,
+    pool_options: EnginePoolOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let schema_source = std::fs::read_to_string(&schema_path)?;
     let schema_ir = validate_schema_source(&schema_source)?.ir;
@@ -92,7 +96,13 @@ pub async fn run_engine(
         let migration_url = resolve_engine_migration_url(database_url.as_deref(), &schema_ir)?;
         let generator = DdlGenerator::new(db_provider);
         let statements = generator.generate_create_tables(&schema_ir)?;
-        let migration_state = EngineState::new(schema_ir.clone(), migration_url, None).await?;
+        let migration_state = EngineState::new_with_engine_pool_options(
+            schema_ir.clone(),
+            migration_url,
+            None,
+            pool_options,
+        )
+        .await?;
         migration_state.execute_ddl_sql(statements).await?;
 
         eprintln!("[engine] Migrations applied successfully");
@@ -123,7 +133,13 @@ pub async fn run_engine(
         None
     };
 
-    let state = EngineState::new(schema_ir.clone(), runtime_url, direct_url).await?;
+    let state = EngineState::new_with_engine_pool_options(
+        schema_ir.clone(),
+        runtime_url,
+        direct_url,
+        pool_options,
+    )
+    .await?;
 
     eprintln!("[engine] Engine initialized, entering request loop");
 
@@ -136,7 +152,13 @@ pub async fn run_engine(
 /// Convenience entry point for the standalone binary: parses argv then calls [`run_engine`].
 pub async fn run_engine_from_cli() -> Result<(), Box<dyn std::error::Error>> {
     let args = CliArgs::parse()?;
-    run_engine_with_schema_resolution(args.schema_path, args.database_url, args.migrate).await
+    run_engine_with_schema_resolution(
+        args.schema_path,
+        args.database_url,
+        args.migrate,
+        args.pool_options,
+    )
+    .await
 }
 
 fn resolve_engine_runtime_url(

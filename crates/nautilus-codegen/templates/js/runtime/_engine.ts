@@ -15,6 +15,14 @@ type ResolvedEngine =
   | { kind: 'binary'; path: string }
   | { kind: 'npx' };
 
+export interface EnginePoolOptions {
+  maxConnections?: number;
+  minConnections?: number;
+  acquireTimeoutMs?: number;
+  idleTimeoutMs?: number | null;
+  testBeforeAcquire?: boolean;
+}
+
 /**
  * Manages the `nautilus engine serve` subprocess.
  *
@@ -31,6 +39,7 @@ export class EngineProcess {
   constructor(
     private readonly enginePath?: string,
     private readonly migrate: boolean = false,
+    private readonly poolOptions: EnginePoolOptions = {},
   ) {}
 
   // Public interface
@@ -53,6 +62,7 @@ export class EngineProcess {
       'engine', 'serve',
       '--schema', schemaPath,
       ...(this.migrate ? ['--migrate'] : []),
+      ...this._poolArgs(),
     ];
 
     let command: string;
@@ -86,6 +96,38 @@ export class EngineProcess {
     this.proc.stderr!.on('data', (chunk: Buffer) => {
       this.stderrChunks.push(chunk);
     });
+  }
+
+  private _poolArgs(): string[] {
+    const args: string[] = [];
+
+    if (this.poolOptions.maxConnections != null) {
+      args.push('--max-connections', String(this.poolOptions.maxConnections));
+    }
+    if (this.poolOptions.minConnections != null) {
+      args.push('--min-connections', String(this.poolOptions.minConnections));
+    }
+    if (this.poolOptions.acquireTimeoutMs != null) {
+      args.push('--acquire-timeout-ms', String(this.poolOptions.acquireTimeoutMs));
+    }
+
+    if (Object.prototype.hasOwnProperty.call(this.poolOptions, 'idleTimeoutMs')) {
+      const idleTimeoutMs = this.poolOptions.idleTimeoutMs;
+      if (idleTimeoutMs === null) {
+        args.push('--disable-idle-timeout');
+      } else if (idleTimeoutMs != null) {
+        args.push('--idle-timeout-ms', String(idleTimeoutMs));
+      }
+    }
+
+    if (this.poolOptions.testBeforeAcquire != null) {
+      args.push(
+        '--test-before-acquire',
+        String(this.poolOptions.testBeforeAcquire),
+      );
+    }
+
+    return args;
   }
 
   get stdin(): Writable | null {

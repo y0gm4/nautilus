@@ -8,9 +8,10 @@ const BINARY_NAME        = process.platform === 'win32' ? 'nautilus.exe'        
 const LEGACY_BINARY_NAME = process.platform === 'win32' ? 'nautilus-engine.exe' : 'nautilus-engine';
 
 export class EngineProcess {
-  constructor(enginePath, migrate = false) {
+  constructor(enginePath, migrate = false, poolOptions = {}) {
     this.enginePath = enginePath;
     this.migrate = migrate;
+    this.poolOptions = poolOptions;
     this.proc = null;
     this.stderrChunks = [];
   }
@@ -25,10 +26,11 @@ export class EngineProcess {
 
     const resolved = this.enginePath ?? this._findEngine(schemaPath);
     const isLegacy = path.basename(resolved).startsWith('nautilus-engine');
+    const poolArgs = this._poolArgs();
 
     const args = isLegacy
-      ? ['--schema', schemaPath, ...(this.migrate ? ['--migrate'] : [])]
-      : ['engine', 'serve', '--schema', schemaPath, ...(this.migrate ? ['--migrate'] : [])];
+      ? ['--schema', schemaPath, ...(this.migrate ? ['--migrate'] : []), ...poolArgs]
+      : ['engine', 'serve', '--schema', schemaPath, ...(this.migrate ? ['--migrate'] : []), ...poolArgs];
 
     this.proc = cp.spawn(resolved, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -37,6 +39,35 @@ export class EngineProcess {
     this.proc.stderr.on('data', (chunk) => {
       this.stderrChunks.push(chunk);
     });
+  }
+
+  _poolArgs() {
+    const args = [];
+
+    if (this.poolOptions.maxConnections != null) {
+      args.push('--max-connections', String(this.poolOptions.maxConnections));
+    }
+    if (this.poolOptions.minConnections != null) {
+      args.push('--min-connections', String(this.poolOptions.minConnections));
+    }
+    if (this.poolOptions.acquireTimeoutMs != null) {
+      args.push('--acquire-timeout-ms', String(this.poolOptions.acquireTimeoutMs));
+    }
+
+    if (Object.prototype.hasOwnProperty.call(this.poolOptions, 'idleTimeoutMs')) {
+      const idleTimeoutMs = this.poolOptions.idleTimeoutMs;
+      if (idleTimeoutMs === null) {
+        args.push('--disable-idle-timeout');
+      } else if (idleTimeoutMs != null) {
+        args.push('--idle-timeout-ms', String(idleTimeoutMs));
+      }
+    }
+
+    if (this.poolOptions.testBeforeAcquire != null) {
+      args.push('--test-before-acquire', String(this.poolOptions.testBeforeAcquire));
+    }
+
+    return args;
   }
 
   get stdin() {

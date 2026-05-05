@@ -52,6 +52,7 @@ public final class EngineProcess {
         if (this.options.migrate()) {
             command.add("--migrate");
         }
+        appendPoolOptions(command);
 
         ProcessBuilder builder = new ProcessBuilder(command);
         loadDotenv(builder.environment(), schemaPath);
@@ -88,6 +89,31 @@ public final class EngineProcess {
 
     public synchronized String stderrOutput() {
         return this.stderrBuffer.toString();
+    }
+
+    private void appendPoolOptions(List<String> command) {
+        if (this.options.maxConnections() != null) {
+            command.add("--max-connections");
+            command.add(this.options.maxConnections().toString());
+        }
+        if (this.options.minConnections() != null) {
+            command.add("--min-connections");
+            command.add(this.options.minConnections().toString());
+        }
+        if (this.options.acquireTimeoutMs() != null) {
+            command.add("--acquire-timeout-ms");
+            command.add(this.options.acquireTimeoutMs().toString());
+        }
+        if (this.options.disableIdleTimeout()) {
+            command.add("--disable-idle-timeout");
+        } else if (this.options.idleTimeoutMs() != null) {
+            command.add("--idle-timeout-ms");
+            command.add(this.options.idleTimeoutMs().toString());
+        }
+        if (this.options.testBeforeAcquire() != null) {
+            command.add("--test-before-acquire");
+            command.add(this.options.testBeforeAcquire().toString());
+        }
     }
 
     private void startStderrReader() {

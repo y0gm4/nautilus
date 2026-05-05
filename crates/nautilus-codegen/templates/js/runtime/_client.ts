@@ -4,7 +4,7 @@ import * as readline from 'readline';
 
 const RPC_TIMEOUT_MS        = 30_000;
 const DEFAULT_TX_TIMEOUT_MS =  5_000;
-import { EngineProcess } from './_engine';
+import { EngineProcess, type EnginePoolOptions } from './_engine';
 import type { JsonRpcResponse } from './_protocol';
 import { IsolationLevel, TransactionClient } from './_transaction';
 import { errorFromCode, HandshakeError, ProtocolError } from './_errors';
@@ -12,6 +12,11 @@ import { errorFromCode, HandshakeError, ProtocolError } from './_errors';
 export interface TransactionBatchOperation {
   method: string;
   params: Record<string, unknown>;
+}
+
+export interface NautilusClientOptions {
+  migrate?: boolean;
+  pool?: EnginePoolOptions;
 }
 
 interface PendingRequest {
@@ -46,9 +51,13 @@ export class NautilusClient {
 
   constructor(
     private readonly schemaPath: string,
-    options?: { migrate?: boolean },
+    options?: NautilusClientOptions,
   ) {
-    this.engine = new EngineProcess(undefined, options?.migrate ?? false);
+    this.engine = new EngineProcess(
+      undefined,
+      options?.migrate ?? false,
+      options?.pool,
+    );
   }
 
   /** Connect to the engine and perform the protocol handshake. */

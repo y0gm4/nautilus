@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Awaitable, Callable, TypeVar
 
 from ._internal.client import NautilusClient as BaseClient, _AsyncTransactionContext, _SyncTransactionContext
+from ._internal.engine import EnginePoolOptions
 from ._internal.transaction import IsolationLevel
 
 T = TypeVar("T")
@@ -21,14 +22,25 @@ _SCHEMA_PATH = "{{ schema_path }}"
 class Nautilus(BaseClient):
     """Nautilus client with generated model delegates."""
 
-    def __init__(self, migrate: bool = False, auto_register: bool = False) -> None:
+    def __init__(
+        self,
+        migrate: bool = False,
+        auto_register: bool = False,
+        pool_options: EnginePoolOptions | None = None,
+    ) -> None:
         """Initialize the Nautilus client.
 
         Args:
             migrate: If True, run DDL migrations on engine startup.
             auto_register: If True, register globally for Model.nautilus access.
+            pool_options: Optional engine-level pool overrides for the subprocess.
         """
-        super().__init__(_SCHEMA_PATH, migrate=migrate, auto_register=auto_register)
+        super().__init__(
+            _SCHEMA_PATH,
+            migrate=migrate,
+            auto_register=auto_register,
+            pool_options=pool_options,
+        )
 
 {%- for model in models %}
         self.{{ model.snake_name }} = {{ model.delegate_name }}(self)

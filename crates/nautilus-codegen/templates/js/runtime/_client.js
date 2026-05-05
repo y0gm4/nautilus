@@ -8,7 +8,11 @@ import { errorFromCode, HandshakeError, ProtocolError } from './_errors.js';
 export class NautilusClient {
   constructor(schemaPath, options) {
     this.schemaPath = schemaPath;
-    this.engine = new EngineProcess(undefined, options?.migrate ?? false);
+    this.engine = new EngineProcess(
+      undefined,
+      options?.migrate ?? false,
+      options?.pool,
+    );
     this.nextId = 0;
     this.pending = new Map();
     this.partialData = new Map();
