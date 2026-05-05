@@ -1,4 +1,7 @@
-use super::common::{finish_mutation, parse_optional_model_filter};
+use super::common::{
+    execute_mutation_result, finish_mutation, parse_optional_model_filter, wrap_count_result,
+    wrap_mutation_result, MutationResultData,
+};
 use super::*;
 
 /// Parse `request.params` into the given type, check the protocol version,
@@ -83,13 +86,25 @@ fn create_many_effective_fields<'a>(
         .collect()
 }
 
-/// Handle `query.create`.
-pub(super) async fn handle_create(
+fn mutation_rows_or_internal(
+    result: MutationResultData,
+    context: &str,
+) -> Result<Vec<Row>, ProtocolError> {
+    match result {
+        MutationResultData::Rows(rows) => Ok(rows),
+        MutationResultData::Count(_) => Err(ProtocolError::Internal(format!(
+            "{context} embedded path expected returned rows"
+        ))),
+    }
+}
+
+async fn execute_create(
     state: &EngineState,
-    request: RpcRequest,
-) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
-    let (params, model) = parse_params!(state, request, CreateParams, "create");
+    params: CreateParams,
+) -> Result<MutationResultData, ProtocolError> {
+    check_protocol_version(params.protocol_version)?;
     let tx_id = params.transaction_id;
+    let model = get_model_or_error(state, &params.model)?;
     let metadata = state.model_metadata(model);
 
     let data_obj = params
@@ -132,25 +147,24 @@ pub(super) async fn handle_create(
         .render_insert_owned(insert)
         .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
 
-    finish_mutation(
+    execute_mutation_result(
         state,
         &sql,
         "Insert",
         tx_id.as_deref(),
         metadata.scalar_hints(),
         params.return_data,
-        "create result",
     )
     .await
 }
 
-/// Handle `query.createMany`.
-pub(super) async fn handle_create_many(
+async fn execute_create_many(
     state: &EngineState,
-    request: RpcRequest,
-) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
-    let (params, model) = parse_params!(state, request, CreateManyParams, "createMany");
+    params: CreateManyParams,
+) -> Result<MutationResultData, ProtocolError> {
+    check_protocol_version(params.protocol_version)?;
     let tx_id = params.transaction_id;
+    let model = get_model_or_error(state, &params.model)?;
     let metadata = state.model_metadata(model);
 
     if params.data.is_empty() {
@@ -239,25 +253,24 @@ pub(super) async fn handle_create_many(
         .render_insert_owned(insert)
         .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
 
-    finish_mutation(
+    execute_mutation_result(
         state,
         &sql,
         "Insert",
         tx_id.as_deref(),
         metadata.scalar_hints(),
         params.return_data,
-        "createMany result",
     )
     .await
 }
 
-/// Handle `query.update`.
-pub(super) async fn handle_update(
+async fn execute_update(
     state: &EngineState,
-    request: RpcRequest,
-) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
-    let (params, model) = parse_params!(state, request, UpdateParams, "update");
+    params: UpdateParams,
+) -> Result<MutationResultData, ProtocolError> {
+    check_protocol_version(params.protocol_version)?;
     let tx_id = params.transaction_id;
+    let model = get_model_or_error(state, &params.model)?;
     let metadata = state.model_metadata(model);
 
     let qualified_filter = parse_optional_model_filter(
@@ -307,16 +320,84 @@ pub(super) async fn handle_update(
         .render_update_owned(update)
         .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
 
-    finish_mutation(
+    execute_mutation_result(
         state,
         &sql,
         "Update",
         tx_id.as_deref(),
         metadata.scalar_hints(),
         params.return_data,
-        "update result",
     )
     .await
+}
+
+/// Handle `query.create`.
+pub(super) async fn handle_create(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
+    let params: CreateParams = serde_json::from_value(request.params)
+        .map_err(|e| ProtocolError::InvalidParams(format!("Invalid create params: {}", e)))?;
+
+    match execute_create(state, params).await? {
+        MutationResultData::Rows(rows) => wrap_mutation_result(&rows, "create result"),
+        MutationResultData::Count(count) => wrap_count_result(count, "create result"),
+    }
+}
+
+pub(super) async fn handle_create_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Vec<Row>, ProtocolError> {
+    let params: CreateParams = serde_json::from_value(request.params)
+        .map_err(|e| ProtocolError::InvalidParams(format!("Invalid create params: {}", e)))?;
+    mutation_rows_or_internal(execute_create(state, params).await?, "create")
+}
+
+/// Handle `query.createMany`.
+pub(super) async fn handle_create_many(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
+    let params: CreateManyParams = serde_json::from_value(request.params)
+        .map_err(|e| ProtocolError::InvalidParams(format!("Invalid createMany params: {}", e)))?;
+
+    match execute_create_many(state, params).await? {
+        MutationResultData::Rows(rows) => wrap_mutation_result(&rows, "createMany result"),
+        MutationResultData::Count(count) => wrap_count_result(count, "createMany result"),
+    }
+}
+
+pub(super) async fn handle_create_many_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Vec<Row>, ProtocolError> {
+    let params: CreateManyParams = serde_json::from_value(request.params)
+        .map_err(|e| ProtocolError::InvalidParams(format!("Invalid createMany params: {}", e)))?;
+    mutation_rows_or_internal(execute_create_many(state, params).await?, "createMany")
+}
+
+/// Handle `query.update`.
+pub(super) async fn handle_update(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
+    let params: UpdateParams = serde_json::from_value(request.params)
+        .map_err(|e| ProtocolError::InvalidParams(format!("Invalid update params: {}", e)))?;
+
+    match execute_update(state, params).await? {
+        MutationResultData::Rows(rows) => wrap_mutation_result(&rows, "update result"),
+        MutationResultData::Count(count) => wrap_count_result(count, "update result"),
+    }
+}
+
+pub(super) async fn handle_update_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Vec<Row>, ProtocolError> {
+    let params: UpdateParams = serde_json::from_value(request.params)
+        .map_err(|e| ProtocolError::InvalidParams(format!("Invalid update params: {}", e)))?;
+    mutation_rows_or_internal(execute_update(state, params).await?, "update")
 }
 
 /// Handle `query.delete`.

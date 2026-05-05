@@ -1,4 +1,4 @@
-use super::common::wrap_result;
+use super::common::wrap_data_result;
 use super::*;
 
 fn collect_agg_fields(model: &ModelIr, value: &serde_json::Value) -> Vec<String> {
@@ -17,15 +17,11 @@ fn collect_agg_fields(model: &ModelIr, value: &serde_json::Value) -> Vec<String>
     }
 }
 
-/// Handle `query.groupBy`.
-pub(super) async fn handle_group_by(
+pub(super) async fn execute_group_by_rows(
     state: &EngineState,
-    request: RpcRequest,
-) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
+    params: GroupByParams,
+) -> Result<Vec<Row>, ProtocolError> {
     use nautilus_core::ColumnMarker;
-
-    let params: GroupByParams = serde_json::from_value(request.params)
-        .map_err(|e| ProtocolError::InvalidParams(format!("Invalid groupBy params: {}", e)))?;
 
     check_protocol_version(params.protocol_version)?;
     let tx_id = params.transaction_id;
@@ -207,64 +203,81 @@ pub(super) async fn handle_group_by(
         .execute_query_on(&sql, "GroupBy", tx_id.as_deref())
         .await?;
 
-    let mut data: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let mut obj = serde_json::Map::new();
+    let mut shaped_rows = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut columns = Vec::with_capacity(row.len());
         let mut count_map = serde_json::Map::new();
         let mut avg_map = serde_json::Map::new();
         let mut sum_map = serde_json::Map::new();
         let mut min_map = serde_json::Map::new();
         let mut max_map = serde_json::Map::new();
 
-        for (col_name, value) in row.iter() {
-            let json_value = value.to_json_plain();
-
+        for (col_name, value) in row.into_columns() {
             if let Some(rest) = col_name.strip_prefix("_count__") {
                 let key = if rest == "_all" { "_all" } else { rest };
-                count_map.insert(key.to_string(), json_value);
+                count_map.insert(key.to_string(), value.to_json_plain());
             } else if let Some(rest) = col_name.strip_prefix("_avg_") {
-                avg_map.insert(rest.to_string(), json_value);
+                avg_map.insert(rest.to_string(), value.to_json_plain());
             } else if let Some(rest) = col_name.strip_prefix("_sum_") {
-                sum_map.insert(rest.to_string(), json_value);
+                sum_map.insert(rest.to_string(), value.to_json_plain());
             } else if let Some(rest) = col_name.strip_prefix("_min_") {
-                min_map.insert(rest.to_string(), json_value);
+                min_map.insert(rest.to_string(), value.to_json_plain());
             } else if let Some(rest) = col_name.strip_prefix("_max_") {
-                max_map.insert(rest.to_string(), json_value);
+                max_map.insert(rest.to_string(), value.to_json_plain());
             } else {
                 let field_key = col_name
                     .split_once("__")
                     .map(|(_, col_part)| col_part)
-                    .unwrap_or(col_name);
+                    .unwrap_or(col_name.as_str());
                 let field_key = db_to_logical
                     .get(field_key)
                     .cloned()
                     .unwrap_or_else(|| field_key.to_string());
-                obj.insert(field_key, json_value);
+                columns.push((field_key, value));
             }
         }
 
         if !count_map.is_empty() {
-            obj.insert("_count".to_string(), serde_json::Value::Object(count_map));
+            columns.push((
+                "_count".to_string(),
+                Value::Json(JsonValue::Object(count_map)),
+            ));
         }
         if !avg_map.is_empty() {
-            obj.insert("_avg".to_string(), serde_json::Value::Object(avg_map));
+            columns.push(("_avg".to_string(), Value::Json(JsonValue::Object(avg_map))));
         }
         if !sum_map.is_empty() {
-            obj.insert("_sum".to_string(), serde_json::Value::Object(sum_map));
+            columns.push(("_sum".to_string(), Value::Json(JsonValue::Object(sum_map))));
         }
         if !min_map.is_empty() {
-            obj.insert("_min".to_string(), serde_json::Value::Object(min_map));
+            columns.push(("_min".to_string(), Value::Json(JsonValue::Object(min_map))));
         }
         if !max_map.is_empty() {
-            obj.insert("_max".to_string(), serde_json::Value::Object(max_map));
+            columns.push(("_max".to_string(), Value::Json(JsonValue::Object(max_map))));
         }
 
-        data.push(serde_json::Value::Object(obj));
+        shaped_rows.push(Row::new(columns));
     }
 
-    let result_json = serde_json::json!({ "data": data });
-    let result_str = serde_json::to_string(&result_json).map_err(|e| {
-        ProtocolError::Internal(format!("Failed to serialize groupBy result: {}", e))
-    })?;
-    wrap_result(result_str, "groupBy result")
+    Ok(shaped_rows)
+}
+
+/// Handle `query.groupBy`.
+pub(super) async fn handle_group_by(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
+    let params: GroupByParams = serde_json::from_value(request.params)
+        .map_err(|e| ProtocolError::InvalidParams(format!("Invalid groupBy params: {}", e)))?;
+    let rows = execute_group_by_rows(state, params).await?;
+    wrap_data_result(&rows, "groupBy result")
+}
+
+pub(super) async fn handle_group_by_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Vec<Row>, ProtocolError> {
+    let params: GroupByParams = serde_json::from_value(request.params)
+        .map_err(|e| ProtocolError::InvalidParams(format!("Invalid groupBy params: {}", e)))?;
+    execute_group_by_rows(state, params).await
 }

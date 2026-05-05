@@ -1,5 +1,10 @@
 use super::*;
 
+pub(super) enum MutationResultData {
+    Count(usize),
+    Rows(Vec<Row>),
+}
+
 pub(super) fn qualify_model_filter(
     model: &ModelIr,
     logical_to_db: &std::collections::HashMap<String, String>,
@@ -90,6 +95,26 @@ pub(super) fn wrap_mutation_result(
     )
 }
 
+pub(super) async fn execute_mutation_result(
+    state: &EngineState,
+    sql: &Sql,
+    exec_tag: &'static str,
+    tx_id: Option<&str>,
+    scalar_hints: &[Option<ValueHint>],
+    return_data: bool,
+) -> Result<MutationResultData, ProtocolError> {
+    if return_data {
+        let rows = normalize_rows_with_hints(
+            state.execute_query_on(sql, exec_tag, tx_id).await?,
+            scalar_hints,
+        )?;
+        Ok(MutationResultData::Rows(rows))
+    } else {
+        let count = state.execute_affected_on(sql, exec_tag, tx_id).await?;
+        Ok(MutationResultData::Count(count))
+    }
+}
+
 /// Execute the SQL for a mutation and wrap the result.
 ///
 /// When `return_data` is true, runs `execute_query_on` with the model's value
@@ -104,14 +129,8 @@ pub(super) async fn finish_mutation(
     return_data: bool,
     result_label: &str,
 ) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
-    if return_data {
-        let rows = normalize_rows_with_hints(
-            state.execute_query_on(sql, exec_tag, tx_id).await?,
-            scalar_hints,
-        )?;
-        wrap_mutation_result(&rows, result_label)
-    } else {
-        let count = state.execute_affected_on(sql, exec_tag, tx_id).await?;
-        wrap_count_result(count, result_label)
+    match execute_mutation_result(state, sql, exec_tag, tx_id, scalar_hints, return_data).await? {
+        MutationResultData::Rows(rows) => wrap_mutation_result(&rows, result_label),
+        MutationResultData::Count(count) => wrap_count_result(count, result_label),
     }
 }

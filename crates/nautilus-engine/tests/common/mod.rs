@@ -59,6 +59,25 @@ pub async fn call_rpc_response(
 }
 
 #[allow(dead_code)]
+pub async fn call_embedded(
+    state: &EngineState,
+    method: &str,
+    params: serde_json::Value,
+) -> handlers::EmbeddedResponse {
+    handlers::handle_request_embedded(
+        state,
+        RpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            method: method.to_string(),
+            params,
+        },
+    )
+    .await
+    .unwrap_or_else(|error| panic!("embedded {method} failed: {error}"))
+}
+
+#[allow(dead_code)]
 pub async fn call_rpc_json(
     state: &EngineState,
     method: &str,

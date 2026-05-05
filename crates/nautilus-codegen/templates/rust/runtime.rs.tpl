@@ -10,11 +10,10 @@ use nautilus_connector::{
 use nautilus_core::{Error, FindManyArgs, Value};
 use nautilus_dialect::Dialect;
 use nautilus_engine::{handlers, EngineState};
-use nautilus_protocol::error::ERR_RECORD_NOT_FOUND;
 use nautilus_protocol::{
-    CountParams, CreateManyParams, CreateParams, GroupByParams, RpcId, RpcRequest, UpdateParams,
-    PROTOCOL_VERSION, QUERY_COUNT, QUERY_CREATE, QUERY_CREATE_MANY, QUERY_FIND_MANY,
-    QUERY_GROUP_BY, QUERY_UPDATE,
+    CountParams, CreateManyParams, CreateParams, GroupByParams, ProtocolError, UpdateParams,
+    PROTOCOL_VERSION, QUERY_COUNT, QUERY_CREATE, QUERY_CREATE_MANY, QUERY_FIND_MANY, QUERY_GROUP_BY,
+    QUERY_UPDATE,
 };
 use nautilus_schema::validate_schema_source;
 use serde_json::Value as JsonValue;
@@ -493,21 +492,16 @@ where
         );
     }
 
-    let response = execute_engine_request(
+    let rows = execute_engine_rows_request(
         state.as_ref(),
         QUERY_FIND_MANY,
         JsonValue::Object(params),
     )
     .await?;
 
-    let rows = response
-        .get("data")
-        .and_then(JsonValue::as_array)
-        .ok_or_else(|| Error::Other("engine findMany response is missing a data array".to_string()))?;
-
     let mut decoded = Vec::with_capacity(rows.len());
     for row in rows {
-        decoded.push(M::from_row(&row_from_wire_json(row)?)?);
+        decoded.push(M::from_row(&row)?);
     }
 
     Ok(Some(decoded))
@@ -536,18 +530,13 @@ where
         transaction_id: client.transaction_id(),
     };
 
-    let response = execute_engine_request(
+    let count = execute_engine_count_request(
         state.as_ref(),
         QUERY_COUNT,
         serde_json::to_value(params)
             .map_err(|e| Error::Other(format!("failed to serialize engine count params: {}", e)))?,
     )
     .await?;
-
-    let count = response
-        .get("count")
-        .and_then(JsonValue::as_i64)
-        .ok_or_else(|| Error::Other("engine count response is missing a count".to_string()))?;
 
     Ok(Some(count))
 }
@@ -575,7 +564,7 @@ where
         transaction_id: client.transaction_id(),
     };
 
-    let response = execute_engine_request(
+    let rows = execute_engine_rows_request(
         state.as_ref(),
         QUERY_GROUP_BY,
         serde_json::to_value(params).map_err(|e| {
@@ -587,17 +576,7 @@ where
     )
     .await?;
 
-    let rows = response
-        .get("data")
-        .and_then(JsonValue::as_array)
-        .ok_or_else(|| Error::Other("engine groupBy response is missing a data array".to_string()))?;
-
-    let mut decoded = Vec::with_capacity(rows.len());
-    for row in rows {
-        decoded.push(row_from_wire_json(row)?);
-    }
-
-    Ok(Some(decoded))
+    Ok(Some(rows))
 }
 
 pub(crate) async fn try_create_via_engine<E, M>(
@@ -723,69 +702,80 @@ where
     E: Executor,
     M: crate::FromRow,
 {
-    let response = execute_engine_request(state, method, params).await?;
-    let rows = response
-        .get("data")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-
+    let rows = execute_engine_rows_request(state, method, params).await?;
     let mut decoded = Vec::with_capacity(rows.len());
     for row in &rows {
-        decoded.push(M::from_row(&row_from_wire_json(row)?)?);
+        decoded.push(M::from_row(row)?);
     }
 
     Ok(Some(decoded))
 }
 
-async fn execute_engine_request(
+async fn execute_engine_embedded_request(
     state: &EngineState,
     method: &str,
     params: JsonValue,
-) -> nautilus_core::Result<JsonValue> {
-    let response = handlers::handle_request_inline(
+) -> nautilus_core::Result<handlers::EmbeddedResponse> {
+    handlers::handle_request_embedded(
         state,
-        RpcRequest {
+        nautilus_protocol::RpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: Some(RpcId::String(format!("generated-rust-{}", method))),
+            id: None,
             method: method.to_string(),
             params,
         },
     )
-    .await;
+    .await
+    .map_err(map_engine_protocol_error)
+}
 
-    if let Some(error) = response.error {
-        return Err(match error.code {
-            ERR_RECORD_NOT_FOUND => Error::NotFound(error.message),
-            _ => Error::Other(error.message),
-        });
+async fn execute_engine_rows_request(
+    state: &EngineState,
+    method: &str,
+    params: JsonValue,
+) -> nautilus_core::Result<Vec<crate::Row>> {
+    match execute_engine_embedded_request(state, method, params).await? {
+        handlers::EmbeddedResponse::Rows(rows) => Ok(rows),
+        handlers::EmbeddedResponse::Count(_) => Err(Error::Other(format!(
+            "engine returned a count for row-oriented method {}",
+            method
+        ))),
+        handlers::EmbeddedResponse::Json(_) => Err(Error::Other(format!(
+            "engine returned raw JSON for row-oriented method {}",
+            method
+        ))),
     }
+}
 
-    let raw = response
-        .result
-        .ok_or_else(|| Error::Other(format!("engine returned no result for method {}", method)))?;
+async fn execute_engine_count_request(
+    state: &EngineState,
+    method: &str,
+    params: JsonValue,
+) -> nautilus_core::Result<i64> {
+    match execute_engine_embedded_request(state, method, params).await? {
+        handlers::EmbeddedResponse::Count(count) => Ok(count),
+        handlers::EmbeddedResponse::Rows(_) => Err(Error::Other(format!(
+            "engine returned rows for count-oriented method {}",
+            method
+        ))),
+        handlers::EmbeddedResponse::Json(_) => Err(Error::Other(format!(
+            "engine returned raw JSON for count-oriented method {}",
+            method
+        ))),
+    }
+}
 
-    serde_json::from_str(raw.get())
-        .map_err(|e| Error::Other(format!("failed to parse engine response: {}", e)))
+fn map_engine_protocol_error(error: ProtocolError) -> Error {
+    match error {
+        ProtocolError::RecordNotFound(message) => Error::NotFound(message),
+        other => Error::Other(other.to_string()),
+    }
 }
 
 fn parse_generated_schema() -> nautilus_core::Result<nautilus_schema::ir::SchemaIr> {
     validate_schema_source(crate::SCHEMA_SOURCE)
         .map(|validated| validated.ir)
         .map_err(|e| Error::Other(format!("failed to validate embedded schema: {}", e)))
-}
-
-pub(crate) fn row_from_wire_json(value: &JsonValue) -> nautilus_core::Result<crate::Row> {
-    let object = value.as_object().ok_or_else(|| {
-        Error::Other("engine returned a row that is not a JSON object".to_string())
-    })?;
-
-    let columns = object
-        .iter()
-        .map(|(name, value)| (name.clone(), wire_value_to_core_value(name, value)))
-        .collect();
-
-    Ok(crate::Row::new(columns))
 }
 
 pub(crate) fn wire_value_to_core_value(name: &str, value: &JsonValue) -> Value {

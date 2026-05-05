@@ -295,6 +295,26 @@ async fn execute_find_many_rows(
     hydrate_rows_with_includes(state, model, rows, &include, tx_id).await
 }
 
+pub(super) async fn execute_find_many_params(
+    state: &EngineState,
+    params: FindManyParams,
+) -> Result<Vec<Row>, ProtocolError> {
+    check_protocol_version(params.protocol_version)?;
+    let tx_id = params.transaction_id;
+
+    let model = get_model_or_error(state, &params.model)?;
+    let metadata = state.model_metadata(model);
+    let relation_map = state.relation_map_for_model(model)?;
+    let query_args = QueryArgs::parse_with_context(
+        params.args,
+        relation_map,
+        metadata.field_types(),
+        crate::filter::SchemaContext::with_state(state),
+    )?;
+
+    execute_find_many_rows(state, model, query_args, tx_id.as_deref()).await
+}
+
 /// Handle `query.findMany`.
 ///
 /// Builds a SELECT for the requested model, applying optional `where`, `orderBy`,
@@ -310,21 +330,8 @@ pub(super) async fn handle_find_many(
     let params: FindManyParams = serde_json::from_value(request.params)
         .map_err(|e| ProtocolError::InvalidParams(format!("Invalid findMany params: {}", e)))?;
 
-    check_protocol_version(params.protocol_version)?;
-    let tx_id = params.transaction_id;
     let chunk_size = params.chunk_size;
-
-    let model = get_model_or_error(state, &params.model)?;
-
-    let metadata = state.model_metadata(model);
-    let relation_map = state.relation_map_for_model(model)?;
-    let query_args = QueryArgs::parse_with_context(
-        params.args,
-        relation_map,
-        metadata.field_types(),
-        crate::filter::SchemaContext::with_state(state),
-    )?;
-    let rows = execute_find_many_rows(state, model, query_args, tx_id.as_deref()).await?;
+    let rows = execute_find_many_params(state, params).await?;
 
     if let (Some(size), Some(channel)) = (chunk_size, sender) {
         let size = size.max(1);
@@ -353,6 +360,15 @@ pub(super) async fn handle_find_many(
     }
 
     wrap_data_result(&rows, "findMany result")
+}
+
+pub(super) async fn handle_find_many_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Vec<Row>, ProtocolError> {
+    let params: FindManyParams = serde_json::from_value(request.params)
+        .map_err(|e| ProtocolError::InvalidParams(format!("Invalid findMany params: {}", e)))?;
+    execute_find_many_params(state, params).await
 }
 
 /// Handle `query.findFirst` and delegate to [`handle_find_many`] with `take=1`.
@@ -493,6 +509,14 @@ pub(super) async fn handle_count(
     let params: CountParams = serde_json::from_value(request.params)
         .map_err(|e| ProtocolError::InvalidParams(format!("Invalid count params: {}", e)))?;
 
+    let count = execute_count_params(state, params).await?;
+    wrap_result(format!("{{\"count\":{}}}", count), "count result")
+}
+
+async fn execute_count_params(
+    state: &EngineState,
+    params: CountParams,
+) -> Result<i64, ProtocolError> {
     check_protocol_version(params.protocol_version)?;
     let tx_id = params.transaction_id;
 
@@ -566,5 +590,14 @@ pub(super) async fn handle_count(
         })
         .unwrap_or(0);
 
-    wrap_result(format!("{{\"count\":{}}}", count), "count result")
+    Ok(count)
+}
+
+pub(super) async fn handle_count_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<i64, ProtocolError> {
+    let params: CountParams = serde_json::from_value(request.params)
+        .map_err(|e| ProtocolError::InvalidParams(format!("Invalid count params: {}", e)))?;
+    execute_count_params(state, params).await
 }

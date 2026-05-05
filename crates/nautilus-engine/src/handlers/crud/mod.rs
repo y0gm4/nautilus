@@ -41,6 +41,13 @@ pub(super) async fn handle_find_many(
     read::handle_find_many(state, request, sender).await
 }
 
+pub(super) async fn handle_find_many_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Vec<Row>, ProtocolError> {
+    read::handle_find_many_embedded(state, request).await
+}
+
 pub(super) async fn handle_find_first(
     state: &EngineState,
     request: RpcRequest,
@@ -76,6 +83,13 @@ pub(super) async fn handle_create(
     mutations::handle_create(state, request).await
 }
 
+pub(super) async fn handle_create_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Vec<Row>, ProtocolError> {
+    mutations::handle_create_embedded(state, request).await
+}
+
 pub(super) async fn handle_create_many(
     state: &EngineState,
     request: RpcRequest,
@@ -83,11 +97,25 @@ pub(super) async fn handle_create_many(
     mutations::handle_create_many(state, request).await
 }
 
+pub(super) async fn handle_create_many_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Vec<Row>, ProtocolError> {
+    mutations::handle_create_many_embedded(state, request).await
+}
+
 pub(super) async fn handle_update(
     state: &EngineState,
     request: RpcRequest,
 ) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
     mutations::handle_update(state, request).await
+}
+
+pub(super) async fn handle_update_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Vec<Row>, ProtocolError> {
+    mutations::handle_update_embedded(state, request).await
 }
 
 pub(super) async fn handle_delete(
@@ -104,11 +132,25 @@ pub(super) async fn handle_count(
     read::handle_count(state, request).await
 }
 
+pub(super) async fn handle_count_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<i64, ProtocolError> {
+    read::handle_count_embedded(state, request).await
+}
+
 pub(super) async fn handle_group_by(
     state: &EngineState,
     request: RpcRequest,
 ) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
     aggregation::handle_group_by(state, request).await
+}
+
+pub(super) async fn handle_group_by_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<Vec<Row>, ProtocolError> {
+    aggregation::handle_group_by_embedded(state, request).await
 }
 
 pub(super) async fn handle_raw_query(

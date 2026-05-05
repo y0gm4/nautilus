@@ -30,6 +30,13 @@ use crate::state::EngineState;
 mod crud;
 mod transactions;
 
+#[derive(Debug)]
+pub enum EmbeddedResponse {
+    Rows(Vec<nautilus_connector::Row>),
+    Count(i64),
+    Json(Box<serde_json::value::RawValue>),
+}
+
 /// Build a `ColumnMarker` for a scalar field.
 pub(super) fn field_marker(model: &ModelIr, field: &FieldIr) -> ColumnMarker {
     ColumnMarker::new(&model.db_name, &field.db_name)
@@ -224,6 +231,37 @@ pub async fn handle_request(
 pub async fn handle_request_inline(state: &EngineState, request: RpcRequest) -> RpcResponse {
     let id = request.id.clone();
     response_from_result(id, dispatch(state, request).await)
+}
+
+/// Handle an in-process request and return typed rows/counts when possible.
+///
+/// This is intended for embedded Rust callers that can consume modeled results
+/// directly without serializing them through the public JSON-RPC wire shape.
+pub async fn handle_request_embedded(
+    state: &EngineState,
+    request: RpcRequest,
+) -> Result<EmbeddedResponse, ProtocolError> {
+    match request.method.as_str() {
+        QUERY_FIND_MANY => crud::handle_find_many_embedded(state, request)
+            .await
+            .map(EmbeddedResponse::Rows),
+        QUERY_CREATE => crud::handle_create_embedded(state, request)
+            .await
+            .map(EmbeddedResponse::Rows),
+        QUERY_CREATE_MANY => crud::handle_create_many_embedded(state, request)
+            .await
+            .map(EmbeddedResponse::Rows),
+        QUERY_UPDATE => crud::handle_update_embedded(state, request)
+            .await
+            .map(EmbeddedResponse::Rows),
+        QUERY_COUNT => crud::handle_count_embedded(state, request)
+            .await
+            .map(EmbeddedResponse::Count),
+        QUERY_GROUP_BY => crud::handle_group_by_embedded(state, request)
+            .await
+            .map(EmbeddedResponse::Rows),
+        _ => dispatch(state, request).await.map(EmbeddedResponse::Json),
+    }
 }
 
 fn response_from_result(

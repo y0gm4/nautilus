@@ -1,6 +1,8 @@
 mod common;
 
-use common::{call_rpc_json, sqlite_state};
+use common::{call_embedded, call_rpc_json, sqlite_state};
+use nautilus_core::Value;
+use nautilus_engine::handlers::EmbeddedResponse;
 use nautilus_protocol::{
     PROTOCOL_VERSION, QUERY_COUNT, QUERY_CREATE, QUERY_DELETE, QUERY_FIND_MANY, QUERY_FIND_UNIQUE,
     QUERY_GROUP_BY, QUERY_RAW, QUERY_UPDATE,
@@ -168,6 +170,80 @@ async fn sqlite_modeled_reads_apply_schema_aware_hints() {
 }
 
 #[tokio::test]
+async fn sqlite_embedded_modeled_paths_return_typed_rows_and_counts() {
+    let (state, temp_dir) = sqlite_state("schema-aware-tests", schema_source()).await;
+
+    let created = call_embedded(
+        &state,
+        QUERY_CREATE,
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "model": "User",
+            "data": {
+                "tags": ["orm", "sqlite"]
+            }
+        }),
+    )
+    .await;
+
+    match created {
+        EmbeddedResponse::Rows(rows) => {
+            assert_eq!(rows.len(), 1);
+            assert_eq!(
+                rows[0]
+                    .get("User__tags")
+                    .expect("create should return the projected json column")
+                    .to_json_plain(),
+                json!(["orm", "sqlite"])
+            );
+        }
+        other => panic!("expected embedded create to return rows, got {other:?}"),
+    }
+
+    let found_many = call_embedded(
+        &state,
+        QUERY_FIND_MANY,
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "model": "User"
+        }),
+    )
+    .await;
+
+    match found_many {
+        EmbeddedResponse::Rows(rows) => {
+            assert_eq!(rows.len(), 1);
+            assert_eq!(
+                rows[0]
+                    .get("User__tags")
+                    .expect("findMany should preserve typed json values")
+                    .to_json_plain(),
+                json!(["orm", "sqlite"])
+            );
+        }
+        other => panic!("expected embedded findMany to return rows, got {other:?}"),
+    }
+
+    let counted = call_embedded(
+        &state,
+        QUERY_COUNT,
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "model": "User"
+        }),
+    )
+    .await;
+
+    match counted {
+        EmbeddedResponse::Count(count) => assert_eq!(count, 1),
+        other => panic!("expected embedded count to return a count, got {other:?}"),
+    }
+
+    drop(state);
+    drop(temp_dir);
+}
+
+#[tokio::test]
 async fn sqlite_raw_query_keeps_jsonish_columns_raw() {
     let (state, temp_dir) = sqlite_state("schema-aware-tests", schema_source()).await;
 
@@ -274,6 +350,79 @@ async fn sqlite_group_by_returns_logical_names_for_mapped_fields() {
         .expect("missing ADMIN group");
     assert_eq!(admin_group["_count"]["_all"], json!(1));
     assert_eq!(admin_group["_count"]["display_name"], json!(1));
+
+    drop(state);
+    drop(temp_dir);
+}
+
+#[tokio::test]
+async fn sqlite_embedded_group_by_returns_shaped_rows() {
+    let (state, temp_dir) =
+        sqlite_state("schema-aware-tests", mapped_group_by_schema_source()).await;
+
+    for (email, display_name, account_role) in [
+        ("admin@example.com", "Admin User", "ADMIN"),
+        ("member@example.com", "Member User", "USER"),
+    ] {
+        let _ = call_rpc_json(
+            &state,
+            QUERY_CREATE,
+            json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "model": "User",
+                "data": {
+                    "email": email,
+                    "display_name": display_name,
+                    "account_role": account_role
+                }
+            }),
+        )
+        .await;
+    }
+
+    let grouped = call_embedded(
+        &state,
+        QUERY_GROUP_BY,
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "model": "User",
+            "args": {
+                "by": ["account_role"],
+                "count": {
+                    "_all": true,
+                    "display_name": true
+                },
+                "orderBy": [
+                    { "account_role": "asc" }
+                ]
+            }
+        }),
+    )
+    .await;
+
+    match grouped {
+        EmbeddedResponse::Rows(rows) => {
+            assert_eq!(rows.len(), 2);
+            let admin = rows
+                .iter()
+                .find(|row| {
+                    row.get("account_role").map(Value::to_json_plain) == Some(json!("ADMIN"))
+                })
+                .expect("missing ADMIN group");
+            assert_eq!(
+                admin
+                    .get("_count")
+                    .expect("groupBy should expose _count as shaped JSON")
+                    .to_json_plain(),
+                json!({
+                    "_all": 1,
+                    "display_name": 1
+                })
+            );
+            assert!(admin.get("account_role_db").is_none());
+        }
+        other => panic!("expected embedded groupBy to return rows, got {other:?}"),
+    }
 
     drop(state);
     drop(temp_dir);
