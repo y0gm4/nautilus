@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 
 use super::from_value::FromValue;
-use super::marker::ColumnMarker;
+use super::marker::{build_column_alias, ColumnMarker};
 use super::row_access::RowAccess;
 use crate::error::Result;
 use crate::expr::Expr;
@@ -64,9 +64,9 @@ impl<T> Column<T> {
 
     /// Returns a column marker for this column.
     ///
-    /// This allocates owned `String` copies of the table and column names.
+    /// Static generated columns borrow their metadata without allocating.
     pub fn marker(&self) -> ColumnMarker {
-        ColumnMarker::new(self.table, self.name)
+        ColumnMarker::from_static(self.table, self.name)
     }
 
     /// Returns the join-safe alias for this column.
@@ -85,7 +85,7 @@ impl<T> Column<T> {
     /// assert_eq!(id.alias(), "users__id");
     /// ```
     pub fn alias(&self) -> String {
-        format!("{}__{}", self.table, self.name)
+        build_column_alias(self.table, self.name)
     }
 
     /// Creates an equality comparison (`=`).
@@ -169,7 +169,10 @@ impl Column<String> {
     /// ```
     #[must_use]
     pub fn ends_with(self, suffix: impl Into<String>) -> Expr {
-        let pattern = format!("%{}", suffix.into());
+        let suffix = suffix.into();
+        let mut pattern = String::with_capacity(suffix.len() + 1);
+        pattern.push('%');
+        pattern.push_str(&suffix);
         Expr::column(self.alias()).like(Expr::param(Value::String(pattern)))
     }
 
@@ -187,7 +190,10 @@ impl Column<String> {
     /// ```
     #[must_use]
     pub fn starts_with(self, prefix: impl Into<String>) -> Expr {
-        let pattern = format!("{}%", prefix.into());
+        let prefix = prefix.into();
+        let mut pattern = String::with_capacity(prefix.len() + 1);
+        pattern.push_str(&prefix);
+        pattern.push('%');
         Expr::column(self.alias()).like(Expr::param(Value::String(pattern)))
     }
 
@@ -205,7 +211,11 @@ impl Column<String> {
     /// ```
     #[must_use]
     pub fn contains(self, substring: impl Into<String>) -> Expr {
-        let pattern = format!("%{}%", substring.into());
+        let substring = substring.into();
+        let mut pattern = String::with_capacity(substring.len() + 2);
+        pattern.push('%');
+        pattern.push_str(&substring);
+        pattern.push('%');
         Expr::column(self.alias()).like(Expr::param(Value::String(pattern)))
     }
 }

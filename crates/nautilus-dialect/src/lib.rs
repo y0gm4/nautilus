@@ -984,7 +984,7 @@ pub(crate) fn push_column_alias(
 ) {
     push_quoted_identifier_segments(
         sql,
-        &[column.table.as_str(), "__", column.name.as_str()],
+        &[column.table.as_ref(), "__", column.name.as_ref()],
         quote,
     );
 }

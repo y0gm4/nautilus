@@ -12,6 +12,8 @@ pub use typed::{Column, SelectColumns};
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::*;
     use crate::expr::Expr;
     use crate::select::OrderDir;
@@ -43,6 +45,8 @@ mod tests {
         let marker = col.marker();
         assert_eq!(marker.table, "users");
         assert_eq!(marker.name, "id");
+        assert!(matches!(marker.table, Cow::Borrowed("users")));
+        assert!(matches!(marker.name, Cow::Borrowed("id")));
     }
 
     #[test]
@@ -208,6 +212,16 @@ mod tests {
 
         let marker = ColumnMarker::new("posts", "title");
         assert_eq!(marker.alias(), "posts__title");
+    }
+
+    #[test]
+    fn test_dynamic_column_marker_owns_runtime_strings() {
+        let table = String::from("users");
+        let name = String::from("email");
+        let marker = ColumnMarker::new(table, name);
+
+        assert!(matches!(marker.table, Cow::Owned(_)));
+        assert!(matches!(marker.name, Cow::Owned(_)));
     }
 
     struct MockRow {
