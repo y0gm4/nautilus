@@ -13,7 +13,7 @@ pub use nautilus_connector::TransactionExecutor;
 pub(crate) const SCHEMA_SOURCE: &str = {{ schema_source_literal }};
 
 mod runtime;
-pub use runtime::Client;
+pub use runtime::{Client, EngineMode};
 
 {% if has_extensions %}pub mod extensions;
 {% endif %}{% if has_composite_types %}pub mod types;

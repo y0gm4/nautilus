@@ -214,6 +214,10 @@ fn test_write_rust_code_lib_rs_contains_template_exports() {
         "lib.rs should re-export ConnectorPoolOptions for runtime tuning:\n{lib_content}"
     );
     assert!(
+        lib_content.contains("pub use runtime::{Client, EngineMode};"),
+        "lib.rs should re-export EngineMode alongside Client:\n{lib_content}"
+    );
+    assert!(
         lib_content
             .contains("pub use nautilus_connector::{execute_all, execute_one, execute_optional};"),
         "lib.rs should re-export execute helpers for generated fast paths:\n{lib_content}"
@@ -270,6 +274,18 @@ fn test_write_rust_code_runtime_exposes_pool_options_for_embedded_and_direct_pat
     assert!(
         runtime_content.contains("pool_options: ConnectorPoolOptions"),
         "runtime.rs should store pool options on the generated client:\n{runtime_content}"
+    );
+    assert!(
+        runtime_content.contains("pub enum EngineMode"),
+        "runtime.rs should expose EngineMode so callers can pick Auto/Always/Never:\n{runtime_content}"
+    );
+    assert!(
+        runtime_content.contains("pub fn with_engine_mode"),
+        "runtime.rs should let callers override EngineMode on generated clients:\n{runtime_content}"
+    );
+    assert!(
+        runtime_content.contains("EngineMode::Auto"),
+        "runtime.rs should default connector-backed generated clients to EngineMode::Auto:\n{runtime_content}"
     );
 }
 

@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::ConnectorPoolOptions;
 use nautilus_connector::{
@@ -19,13 +20,73 @@ use nautilus_schema::validate_schema_source;
 use serde_json::Value as JsonValue;
 use tokio::sync::OnceCell;
 
+/// Controls when the generated Rust client routes queries through the embedded engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineMode {
+    /// Use the direct connector path for simple CRUD and reserve the engine for
+    /// includes and aggregate-style operations that still need engine semantics.
+    Auto,
+    /// Always route supported operations through the embedded engine.
+    Always,
+    /// Never initialize or use the embedded engine.
+    Never,
+}
+
+impl EngineMode {
+    fn allows_engine(self) -> bool {
+        !matches!(self, Self::Never)
+    }
+
+    fn uses_engine_for_simple_crud(self) -> bool {
+        matches!(self, Self::Always)
+    }
+}
+
+struct EmbeddedTransactionContext {
+    client: ConnectorClient<TransactionExecutor>,
+    timeout: Duration,
+    registration: OnceCell<()>,
+}
+
+impl EmbeddedTransactionContext {
+    fn new(client: ConnectorClient<TransactionExecutor>, timeout: Duration) -> Self {
+        Self {
+            client,
+            timeout,
+            registration: OnceCell::new(),
+        }
+    }
+
+    async fn ensure_registered(
+        &self,
+        state: &EngineState,
+        transaction_id: &str,
+    ) -> nautilus_core::Result<()> {
+        let client = self.client.clone();
+        let timeout = self.timeout;
+        let transaction_id = transaction_id.to_string();
+
+        self.registration
+            .get_or_try_init(|| async move {
+                state
+                    .register_external_transaction(transaction_id, client, timeout)
+                    .await;
+                Ok::<(), Error>(())
+            })
+            .await?;
+
+        Ok(())
+    }
+}
+
 pub struct Client<E: Executor> {
     inner: ConnectorClient<E>,
     database_url: Arc<String>,
     engine_state: Arc<OnceCell<Arc<EngineState>>>,
     pool_options: ConnectorPoolOptions,
-    engine_reads_enabled: bool,
+    engine_mode: EngineMode,
     transaction_id: Option<String>,
+    embedded_transaction: Option<Arc<EmbeddedTransactionContext>>,
 }
 
 impl<E> Clone for Client<E>
@@ -38,8 +99,9 @@ where
             database_url: Arc::clone(&self.database_url),
             engine_state: Arc::clone(&self.engine_state),
             pool_options: self.pool_options,
-            engine_reads_enabled: self.engine_reads_enabled,
+            engine_mode: self.engine_mode,
             transaction_id: self.transaction_id.clone(),
+            embedded_transaction: self.embedded_transaction.clone(),
         }
     }
 }
@@ -57,8 +119,9 @@ where
             database_url: Arc::new(String::new()),
             engine_state: Arc::new(OnceCell::new()),
             pool_options: ConnectorPoolOptions::default(),
-            engine_reads_enabled: false,
+            engine_mode: EngineMode::Never,
             transaction_id: None,
+            embedded_transaction: None,
         }
     }
 
@@ -67,16 +130,18 @@ where
         database_url: Arc<String>,
         engine_state: Arc<OnceCell<Arc<EngineState>>>,
         pool_options: ConnectorPoolOptions,
-        engine_reads_enabled: bool,
+        engine_mode: EngineMode,
         transaction_id: Option<String>,
+        embedded_transaction: Option<Arc<EmbeddedTransactionContext>>,
     ) -> Self {
         Self {
             inner,
             database_url,
             engine_state,
             pool_options,
-            engine_reads_enabled,
+            engine_mode,
             transaction_id,
+            embedded_transaction,
         }
     }
 
@@ -88,8 +153,24 @@ where
         self.inner.executor()
     }
 
+    /// Return the current embedded-engine routing policy.
+    pub fn engine_mode(&self) -> EngineMode {
+        self.engine_mode
+    }
+
+    /// Update the embedded-engine routing policy in place.
+    pub fn set_engine_mode(&mut self, engine_mode: EngineMode) {
+        self.engine_mode = engine_mode;
+    }
+
+    /// Return a clone of this client with a different embedded-engine routing policy.
+    pub fn with_engine_mode(mut self, engine_mode: EngineMode) -> Self {
+        self.engine_mode = engine_mode;
+        self
+    }
+
     async fn engine_state(&self) -> nautilus_core::Result<Option<Arc<EngineState>>> {
-        if !self.engine_reads_enabled || self.database_url.is_empty() {
+        if !self.engine_mode.allows_engine() || self.database_url.is_empty() {
             return Ok(None);
         }
 
@@ -113,11 +194,36 @@ where
             })
             .await?;
 
+        if let (Some(transaction_id), Some(embedded_transaction)) = (
+            self.transaction_id.as_deref(),
+            self.embedded_transaction.as_ref(),
+        ) {
+            embedded_transaction
+                .ensure_registered(state.as_ref(), transaction_id)
+                .await?;
+        }
+
         Ok(Some(Arc::clone(state)))
     }
 
     fn transaction_id(&self) -> Option<String> {
         self.transaction_id.clone()
+    }
+
+    fn should_try_engine_for_find_many(&self, args: &FindManyArgs) -> bool {
+        match self.engine_mode {
+            EngineMode::Always => true,
+            EngineMode::Auto => !args.include.is_empty(),
+            EngineMode::Never => false,
+        }
+    }
+
+    fn should_try_engine_for_mutation(&self) -> bool {
+        self.engine_mode.uses_engine_for_simple_crud()
+    }
+
+    fn should_try_engine_for_aggregate(&self) -> bool {
+        self.engine_mode.allows_engine()
     }
 }
 
@@ -136,7 +242,8 @@ impl Client<PgExecutor> {
             Arc::new(url.to_string()),
             Arc::new(OnceCell::new()),
             pool_options,
-            true,
+            EngineMode::Auto,
+            None,
             None,
         ))
     }
@@ -154,15 +261,11 @@ impl Client<PgExecutor> {
         let database_url = Arc::clone(&self.database_url);
         let engine_state = Arc::clone(&self.engine_state);
         let pool_options = self.pool_options;
-        let embedded_state = self
-            .engine_state()
-            .await
-            .map_err(connector_error_from_core)?;
-        let tx_id = embedded_state
-            .as_ref()
-            .map(|_| uuid::Uuid::new_v4().to_string());
+        let engine_mode = self.engine_mode;
+        let tx_id = engine_mode
+            .allows_engine()
+            .then(|| uuid::Uuid::new_v4().to_string());
         let timeout = opts.timeout;
-        let state_for_cleanup = embedded_state.clone();
         let tx_id_for_cleanup = tx_id.clone();
 
         let result = self
@@ -170,30 +273,29 @@ impl Client<PgExecutor> {
             .transaction(opts, move |tx| {
                 let database_url = Arc::clone(&database_url);
                 let engine_state = Arc::clone(&engine_state);
-                let embedded_state = embedded_state.clone();
                 let tx_id = tx_id.clone();
+                let embedded_transaction = tx_id.as_ref().map(|_| {
+                    Arc::new(EmbeddedTransactionContext::new(tx.clone(), timeout))
+                });
                 async move {
-                    if let (Some(state), Some(id)) = (embedded_state.as_ref(), tx_id.as_ref()) {
-                        state
-                            .register_external_transaction(id.clone(), tx.clone(), timeout)
-                            .await;
-                    }
-
                     let wrapped = Client::from_connector(
                         tx,
                         database_url,
                         engine_state,
                         pool_options,
-                        embedded_state.is_some(),
+                        engine_mode,
                         tx_id,
+                        embedded_transaction,
                     );
                     f(wrapped).await
                 }
             })
             .await;
 
-        if let (Some(state), Some(id)) = (state_for_cleanup.as_ref(), tx_id_for_cleanup.as_deref()) {
-            state.unregister_external_transaction(id).await;
+        if let Some(id) = tx_id_for_cleanup.as_deref() {
+            if let Some(state) = self.engine_state.get() {
+                state.unregister_external_transaction(id).await;
+            }
         }
 
         result
@@ -215,7 +317,8 @@ impl Client<MysqlExecutor> {
             Arc::new(url.to_string()),
             Arc::new(OnceCell::new()),
             pool_options,
-            true,
+            EngineMode::Auto,
+            None,
             None,
         ))
     }
@@ -233,15 +336,11 @@ impl Client<MysqlExecutor> {
         let database_url = Arc::clone(&self.database_url);
         let engine_state = Arc::clone(&self.engine_state);
         let pool_options = self.pool_options;
-        let embedded_state = self
-            .engine_state()
-            .await
-            .map_err(connector_error_from_core)?;
-        let tx_id = embedded_state
-            .as_ref()
-            .map(|_| uuid::Uuid::new_v4().to_string());
+        let engine_mode = self.engine_mode;
+        let tx_id = engine_mode
+            .allows_engine()
+            .then(|| uuid::Uuid::new_v4().to_string());
         let timeout = opts.timeout;
-        let state_for_cleanup = embedded_state.clone();
         let tx_id_for_cleanup = tx_id.clone();
 
         let result = self
@@ -249,30 +348,29 @@ impl Client<MysqlExecutor> {
             .transaction(opts, move |tx| {
                 let database_url = Arc::clone(&database_url);
                 let engine_state = Arc::clone(&engine_state);
-                let embedded_state = embedded_state.clone();
                 let tx_id = tx_id.clone();
+                let embedded_transaction = tx_id.as_ref().map(|_| {
+                    Arc::new(EmbeddedTransactionContext::new(tx.clone(), timeout))
+                });
                 async move {
-                    if let (Some(state), Some(id)) = (embedded_state.as_ref(), tx_id.as_ref()) {
-                        state
-                            .register_external_transaction(id.clone(), tx.clone(), timeout)
-                            .await;
-                    }
-
                     let wrapped = Client::from_connector(
                         tx,
                         database_url,
                         engine_state,
                         pool_options,
-                        embedded_state.is_some(),
+                        engine_mode,
                         tx_id,
+                        embedded_transaction,
                     );
                     f(wrapped).await
                 }
             })
             .await;
 
-        if let (Some(state), Some(id)) = (state_for_cleanup.as_ref(), tx_id_for_cleanup.as_deref()) {
-            state.unregister_external_transaction(id).await;
+        if let Some(id) = tx_id_for_cleanup.as_deref() {
+            if let Some(state) = self.engine_state.get() {
+                state.unregister_external_transaction(id).await;
+            }
         }
 
         result
@@ -294,7 +392,8 @@ impl Client<SqliteExecutor> {
             Arc::new(url.to_string()),
             Arc::new(OnceCell::new()),
             pool_options,
-            true,
+            EngineMode::Auto,
+            None,
             None,
         ))
     }
@@ -312,15 +411,11 @@ impl Client<SqliteExecutor> {
         let database_url = Arc::clone(&self.database_url);
         let engine_state = Arc::clone(&self.engine_state);
         let pool_options = self.pool_options;
-        let embedded_state = self
-            .engine_state()
-            .await
-            .map_err(connector_error_from_core)?;
-        let tx_id = embedded_state
-            .as_ref()
-            .map(|_| uuid::Uuid::new_v4().to_string());
+        let engine_mode = self.engine_mode;
+        let tx_id = engine_mode
+            .allows_engine()
+            .then(|| uuid::Uuid::new_v4().to_string());
         let timeout = opts.timeout;
-        let state_for_cleanup = embedded_state.clone();
         let tx_id_for_cleanup = tx_id.clone();
 
         let result = self
@@ -328,30 +423,29 @@ impl Client<SqliteExecutor> {
             .transaction(opts, move |tx| {
                 let database_url = Arc::clone(&database_url);
                 let engine_state = Arc::clone(&engine_state);
-                let embedded_state = embedded_state.clone();
                 let tx_id = tx_id.clone();
+                let embedded_transaction = tx_id.as_ref().map(|_| {
+                    Arc::new(EmbeddedTransactionContext::new(tx.clone(), timeout))
+                });
                 async move {
-                    if let (Some(state), Some(id)) = (embedded_state.as_ref(), tx_id.as_ref()) {
-                        state
-                            .register_external_transaction(id.clone(), tx.clone(), timeout)
-                            .await;
-                    }
-
                     let wrapped = Client::from_connector(
                         tx,
                         database_url,
                         engine_state,
                         pool_options,
-                        embedded_state.is_some(),
+                        engine_mode,
                         tx_id,
+                        embedded_transaction,
                     );
                     f(wrapped).await
                 }
             })
             .await;
 
-        if let (Some(state), Some(id)) = (state_for_cleanup.as_ref(), tx_id_for_cleanup.as_deref()) {
-            state.unregister_external_transaction(id).await;
+        if let Some(id) = tx_id_for_cleanup.as_deref() {
+            if let Some(state) = self.engine_state.get() {
+                state.unregister_external_transaction(id).await;
+            }
         }
 
         result
@@ -367,6 +461,10 @@ where
     E: Executor,
     M: crate::FromRow,
 {
+    if !client.should_try_engine_for_find_many(args) {
+        return Ok(None);
+    }
+
     let Some(state) = client.engine_state().await? else {
         return Ok(None);
     };
@@ -416,6 +514,10 @@ pub(crate) async fn try_count_via_engine<E>(
 where
     E: Executor,
 {
+    if !client.should_try_engine_for_aggregate() {
+        return Ok(None);
+    }
+
     let Some(state) = client.engine_state().await? else {
         return Ok(None);
     };
@@ -451,6 +553,10 @@ pub(crate) async fn try_group_by_rows_via_engine<E>(
 where
     E: Executor,
 {
+    if !client.should_try_engine_for_aggregate() {
+        return Ok(None);
+    }
+
     let Some(state) = client.engine_state().await? else {
         return Ok(None);
     };
@@ -496,6 +602,10 @@ where
     E: Executor,
     M: crate::FromRow,
 {
+    if !client.should_try_engine_for_mutation() {
+        return Ok(None);
+    }
+
     let Some(state) = client.engine_state().await? else {
         return Ok(None);
     };
@@ -529,6 +639,10 @@ where
     E: Executor,
     M: crate::FromRow,
 {
+    if !client.should_try_engine_for_mutation() {
+        return Ok(None);
+    }
+
     let Some(state) = client.engine_state().await? else {
         return Ok(None);
     };
@@ -565,6 +679,10 @@ where
     E: Executor,
     M: crate::FromRow,
 {
+    if !client.should_try_engine_for_mutation() {
+        return Ok(None);
+    }
+
     let Some(state) = client.engine_state().await? else {
         return Ok(None);
     };
@@ -648,13 +766,6 @@ fn parse_generated_schema() -> nautilus_core::Result<nautilus_schema::ir::Schema
     validate_schema_source(crate::SCHEMA_SOURCE)
         .map(|validated| validated.ir)
         .map_err(|e| Error::Other(format!("failed to validate embedded schema: {}", e)))
-}
-
-fn connector_error_from_core(err: Error) -> nautilus_connector::ConnectorError {
-    nautilus_connector::ConnectorError::database_msg(format!(
-        "failed to initialize embedded engine: {}",
-        err
-    ))
 }
 
 pub(crate) fn row_from_wire_json(value: &JsonValue) -> nautilus_core::Result<crate::Row> {
