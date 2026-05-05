@@ -154,6 +154,27 @@ impl TransactionExecutor {
         tx_arc.lock().await.is_some()
     }
 
+    fn bind_query<'q, DB, Bind>(
+        sql_text: &'q str,
+        params: &'q [Value],
+        bind: Bind,
+    ) -> Result<sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>>
+    where
+        DB: sqlx::Database,
+        for<'q2> <DB as sqlx::Database>::Arguments<'q2>: sqlx::IntoArguments<'q2, DB>,
+        Bind: Fn(
+            sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>,
+            &'q Value,
+        )
+            -> Result<sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>>,
+    {
+        let mut query = sqlx::query(sql_text);
+        for param in params {
+            query = bind(query, param)?;
+        }
+        Ok(query)
+    }
+
     fn execute_affected_on<DB, Bind, RowsAffected>(
         tx_arc: TxHandle<DB>,
         sql_text: String,
@@ -176,14 +197,11 @@ impl TransactionExecutor {
         RowsAffected: Fn(<DB as sqlx::Database>::QueryResult) -> u64 + Copy + Send + 'static,
     {
         Box::pin(async move {
+            let query = Self::bind_query::<DB, Bind>(&sql_text, &params, bind)?;
             let mut guard = tx_arc.lock().await;
             let tx = guard
                 .as_mut()
                 .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
-            let mut query = sqlx::query(&sql_text);
-            for param in &params {
-                query = bind(query, param)?;
-            }
 
             use sqlx::Executor as _;
             let result = (&mut **tx)
@@ -217,15 +235,11 @@ impl TransactionExecutor {
         Decode: Fn(<DB as sqlx::Database>::Row) -> Result<Row> + Copy + Send + 'static,
     {
         Box::pin(async move {
+            let query = Self::bind_query::<DB, Bind>(&sql_text, &params, bind)?;
             let mut guard = tx_arc.lock().await;
             let tx = guard
                 .as_mut()
                 .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
-
-            let mut query = sqlx::query(&sql_text);
-            for param in &params {
-                query = bind(query, param)?;
-            }
 
             use sqlx::Executor as _;
             let rows = (&mut **tx)
@@ -262,26 +276,19 @@ impl TransactionExecutor {
         Decode: Fn(<DB as sqlx::Database>::Row) -> Result<Row> + Copy + Send + 'static,
     {
         Box::pin(async move {
+            let mutation_query =
+                Self::bind_query::<DB, Bind>(&mutation_text, &mutation_params, bind)?;
+            let fetch_query = Self::bind_query::<DB, Bind>(&fetch_text, &fetch_params, bind)?;
             let mut guard = tx_arc.lock().await;
             let tx = guard
                 .as_mut()
                 .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
-
-            let mut mutation_query = sqlx::query(&mutation_text);
-            for param in &mutation_params {
-                mutation_query = bind(mutation_query, param)?;
-            }
 
             use sqlx::Executor as _;
             (&mut **tx)
                 .execute(mutation_query)
                 .await
                 .map_err(|e| Error::database(e, "Mutation failed"))?;
-
-            let mut fetch_query = sqlx::query(&fetch_text);
-            for param in &fetch_params {
-                fetch_query = bind(fetch_query, param)?;
-            }
 
             let rows = (&mut **tx)
                 .fetch_all(fetch_query)
