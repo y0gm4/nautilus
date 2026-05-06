@@ -292,6 +292,20 @@ fn test_write_rust_code_runtime_exposes_pool_options_for_embedded_and_direct_pat
         "runtime.rs should default connector-backed generated clients to EngineMode::Auto:\n{runtime_content}"
     );
     assert!(
+        runtime_content.contains("EngineMode::Auto => !args.include.is_empty()"),
+        "runtime.rs should keep simple findMany/findFirst/findUnique queries on the direct path in EngineMode::Auto:\n{runtime_content}"
+    );
+    assert!(
+        runtime_content.contains("fn uses_engine_for_simple_crud(self) -> bool")
+            && runtime_content.contains("matches!(self, Self::Always)"),
+        "runtime.rs should reserve embedded-engine mutations for EngineMode::Always so Auto stays on the direct CRUD path:\n{runtime_content}"
+    );
+    assert!(
+        runtime_content.contains("fn should_try_engine_for_aggregate(&self) -> bool")
+            && runtime_content.contains("self.engine_mode.allows_engine()"),
+        "runtime.rs should keep aggregate queries on the embedded-engine path whenever engine usage is allowed:\n{runtime_content}"
+    );
+    assert!(
         runtime_content.contains("handlers::handle_find_many_typed")
             && runtime_content.contains("handlers::handle_create_typed")
             && runtime_content.contains("handlers::handle_count_typed"),
@@ -304,6 +318,37 @@ fn test_write_rust_code_runtime_exposes_pool_options_for_embedded_and_direct_pat
     assert!(
         !runtime_content.contains("nautilus_protocol::RpcRequest"),
         "runtime.rs should no longer build JSON-RPC envelopes for typed embedded engine calls:\n{runtime_content}"
+    );
+}
+
+#[test]
+fn test_write_rust_code_auto_engine_mode_keeps_direct_and_engine_paths_separate() {
+    let ir = validate(RELATION_SCHEMA);
+    let models = generate_all_models(&ir, false);
+    let tmp = tempfile::TempDir::new().expect("failed to create temp dir");
+    let path = tmp.path().to_str().unwrap();
+
+    write_rust_code(path, &models, None, None, &[], RELATION_SCHEMA, false)
+        .expect("write_rust_code failed");
+
+    let user_content =
+        std::fs::read_to_string(tmp.path().join("src").join("user.rs")).expect("missing user.rs");
+
+    assert!(
+        user_content.contains("include queries require the embedded engine path in the generated Rust client"),
+        "generated delegates should keep include-heavy reads on the embedded engine path:\n{user_content}"
+    );
+    assert!(
+        user_content.contains(
+            "count queries require the embedded engine path in the generated Rust client"
+        ),
+        "generated delegates should keep count() on the embedded engine path:\n{user_content}"
+    );
+    assert!(
+        user_content.contains(
+            "groupBy queries require the embedded engine path in the generated Rust client"
+        ),
+        "generated delegates should keep group_by() on the embedded engine path:\n{user_content}"
     );
 }
 
