@@ -12,7 +12,7 @@ use nautilus_dialect::Dialect;
 use nautilus_engine::{handlers, EngineState};
 use nautilus_protocol::{
     CountParams, CreateManyParams, CreateParams, GroupByParams, ProtocolError, UpdateParams,
-    PROTOCOL_VERSION, QUERY_COUNT, QUERY_CREATE, QUERY_CREATE_MANY, QUERY_GROUP_BY, QUERY_UPDATE,
+    PROTOCOL_VERSION,
 };
 use nautilus_schema::validate_schema_source;
 use serde_json::Value as JsonValue;
@@ -508,13 +508,9 @@ where
         transaction_id: client.transaction_id(),
     };
 
-    let count = execute_engine_count_request(
-        state.as_ref(),
-        QUERY_COUNT,
-        serde_json::to_value(params)
-            .map_err(|e| Error::Other(format!("failed to serialize engine count params: {}", e)))?,
-    )
-    .await?;
+    let count = handlers::handle_count_typed(state.as_ref(), params)
+        .await
+        .map_err(map_engine_protocol_error)?;
 
     Ok(Some(count))
 }
@@ -542,17 +538,9 @@ where
         transaction_id: client.transaction_id(),
     };
 
-    let rows = execute_engine_rows_request(
-        state.as_ref(),
-        QUERY_GROUP_BY,
-        serde_json::to_value(params).map_err(|e| {
-            Error::Other(format!(
-                "failed to serialize engine groupBy params: {}",
-                e
-            ))
-        })?,
-    )
-    .await?;
+    let rows = handlers::handle_group_by_typed(state.as_ref(), params)
+        .await
+        .map_err(map_engine_protocol_error)?;
 
     Ok(Some(rows))
 }
@@ -582,17 +570,12 @@ where
         return_data: true,
     };
 
-    let rows = execute_engine_mutation::<E, M>(
-        client,
-        state.as_ref(),
-        QUERY_CREATE,
-        serde_json::to_value(params)
-            .map_err(|e| Error::Other(format!("failed to serialize engine create params: {}", e)))?,
-        decode_row,
-    )
-    .await?;
+    let rows = handlers::handle_create_typed(state.as_ref(), params)
+        .await
+        .map_err(map_engine_protocol_error)?;
+    let decoded = decode_engine_rows(rows, decode_row)?;
 
-    Ok(rows.and_then(|mut rows| rows.drain(..).next()))
+    Ok(decoded.into_iter().next())
 }
 
 pub(crate) async fn try_create_many_via_engine<E, M>(
@@ -620,19 +603,11 @@ where
         return_data: true,
     };
 
-    execute_engine_mutation::<E, M>(
-        client,
-        state.as_ref(),
-        QUERY_CREATE_MANY,
-        serde_json::to_value(params).map_err(|e| {
-            Error::Other(format!(
-                "failed to serialize engine createMany params: {}",
-                e
-            ))
-        })?,
-        decode_row,
-    )
-    .await
+    let rows = handlers::handle_create_many_typed(state.as_ref(), params)
+        .await
+        .map_err(map_engine_protocol_error)?;
+
+    decode_engine_rows(rows, decode_row).map(Some)
 }
 
 pub(crate) async fn try_update_via_engine<E, M>(
@@ -662,88 +637,23 @@ where
         return_data: true,
     };
 
-    execute_engine_mutation::<E, M>(
-        client,
-        state.as_ref(),
-        QUERY_UPDATE,
-        serde_json::to_value(params)
-            .map_err(|e| Error::Other(format!("failed to serialize engine update params: {}", e)))?,
-        decode_row,
-    )
-    .await
+    let rows = handlers::handle_update_typed(state.as_ref(), params)
+        .await
+        .map_err(map_engine_protocol_error)?;
+
+    decode_engine_rows(rows, decode_row).map(Some)
 }
 
-async fn execute_engine_mutation<E, M>(
-    _client: &Client<E>,
-    state: &EngineState,
-    method: &str,
-    params: JsonValue,
+fn decode_engine_rows<M>(
+    rows: Vec<crate::Row>,
     mut decode_row: impl FnMut(crate::Row) -> nautilus_core::Result<M>,
-) -> nautilus_core::Result<Option<Vec<M>>>
-where
-    E: Executor,
-{
-    let rows = execute_engine_rows_request(state, method, params).await?;
+) -> nautilus_core::Result<Vec<M>> {
     let mut decoded = Vec::with_capacity(rows.len());
     for row in rows {
         decoded.push(decode_row(row)?);
     }
 
-    Ok(Some(decoded))
-}
-
-async fn execute_engine_embedded_request(
-    state: &EngineState,
-    method: &str,
-    params: JsonValue,
-) -> nautilus_core::Result<handlers::EmbeddedResponse> {
-    handlers::handle_request_embedded(
-        state,
-        nautilus_protocol::RpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            method: method.to_string(),
-            params,
-        },
-    )
-    .await
-    .map_err(map_engine_protocol_error)
-}
-
-async fn execute_engine_rows_request(
-    state: &EngineState,
-    method: &str,
-    params: JsonValue,
-) -> nautilus_core::Result<Vec<crate::Row>> {
-    match execute_engine_embedded_request(state, method, params).await? {
-        handlers::EmbeddedResponse::Rows(rows) => Ok(rows),
-        handlers::EmbeddedResponse::Count(_) => Err(Error::Other(format!(
-            "engine returned a count for row-oriented method {}",
-            method
-        ))),
-        handlers::EmbeddedResponse::Json(_) => Err(Error::Other(format!(
-            "engine returned raw JSON for row-oriented method {}",
-            method
-        ))),
-    }
-}
-
-async fn execute_engine_count_request(
-    state: &EngineState,
-    method: &str,
-    params: JsonValue,
-) -> nautilus_core::Result<i64> {
-    match execute_engine_embedded_request(state, method, params).await? {
-        handlers::EmbeddedResponse::Count(count) => Ok(count),
-        handlers::EmbeddedResponse::Rows(_) => Err(Error::Other(format!(
-            "engine returned rows for count-oriented method {}",
-            method
-        ))),
-        handlers::EmbeddedResponse::Json(_) => Err(Error::Other(format!(
-            "engine returned raw JSON for count-oriented method {}",
-            method
-        ))),
-    }
+    Ok(decoded)
 }
 
 fn map_engine_protocol_error(error: ProtocolError) -> Error {

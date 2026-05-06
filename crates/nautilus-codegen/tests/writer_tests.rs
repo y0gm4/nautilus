@@ -288,12 +288,18 @@ fn test_write_rust_code_runtime_exposes_pool_options_for_embedded_and_direct_pat
         "runtime.rs should default connector-backed generated clients to EngineMode::Auto:\n{runtime_content}"
     );
     assert!(
-        runtime_content.contains("handlers::handle_request_embedded"),
-        "runtime.rs should use the embedded typed handler fast path instead of re-parsing raw JSON:\n{runtime_content}"
+        runtime_content.contains("handlers::handle_find_many_typed")
+            && runtime_content.contains("handlers::handle_create_typed")
+            && runtime_content.contains("handlers::handle_count_typed"),
+        "runtime.rs should call typed embedded engine handlers directly for Rust in-process paths:\n{runtime_content}"
     );
     assert!(
         !runtime_content.contains("row_from_wire_json"),
         "runtime.rs should no longer round-trip engine rows through JSON objects:\n{runtime_content}"
+    );
+    assert!(
+        !runtime_content.contains("nautilus_protocol::RpcRequest"),
+        "runtime.rs should no longer build JSON-RPC envelopes for typed embedded engine calls:\n{runtime_content}"
     );
 }
 

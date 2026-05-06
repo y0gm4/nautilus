@@ -97,6 +97,13 @@ pub(super) async fn handle_create_embedded(
     mutations::handle_create_embedded(state, request).await
 }
 
+pub(super) async fn handle_create_typed(
+    state: &EngineState,
+    params: CreateParams,
+) -> Result<Vec<Row>, ProtocolError> {
+    mutations::handle_create_typed(state, params).await
+}
+
 pub(super) async fn handle_create_many(
     state: &EngineState,
     request: RpcRequest,
@@ -111,6 +118,13 @@ pub(super) async fn handle_create_many_embedded(
     mutations::handle_create_many_embedded(state, request).await
 }
 
+pub(super) async fn handle_create_many_typed(
+    state: &EngineState,
+    params: CreateManyParams,
+) -> Result<Vec<Row>, ProtocolError> {
+    mutations::handle_create_many_typed(state, params).await
+}
+
 pub(super) async fn handle_update(
     state: &EngineState,
     request: RpcRequest,
@@ -123,6 +137,13 @@ pub(super) async fn handle_update_embedded(
     request: RpcRequest,
 ) -> Result<Vec<Row>, ProtocolError> {
     mutations::handle_update_embedded(state, request).await
+}
+
+pub(super) async fn handle_update_typed(
+    state: &EngineState,
+    params: UpdateParams,
+) -> Result<Vec<Row>, ProtocolError> {
+    mutations::handle_update_typed(state, params).await
 }
 
 pub(super) async fn handle_delete(
@@ -146,6 +167,13 @@ pub(super) async fn handle_count_embedded(
     read::handle_count_embedded(state, request).await
 }
 
+pub(super) async fn handle_count_typed(
+    state: &EngineState,
+    params: CountParams,
+) -> Result<i64, ProtocolError> {
+    read::handle_count_typed(state, params).await
+}
+
 pub(super) async fn handle_group_by(
     state: &EngineState,
     request: RpcRequest,
@@ -158,6 +186,13 @@ pub(super) async fn handle_group_by_embedded(
     request: RpcRequest,
 ) -> Result<Vec<Row>, ProtocolError> {
     aggregation::handle_group_by_embedded(state, request).await
+}
+
+pub(super) async fn handle_group_by_typed(
+    state: &EngineState,
+    params: GroupByParams,
+) -> Result<Vec<Row>, ProtocolError> {
+    aggregation::handle_group_by_typed(state, params).await
 }
 
 pub(super) async fn handle_raw_query(

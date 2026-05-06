@@ -354,6 +354,13 @@ pub(super) async fn handle_create_embedded(
     mutation_rows_or_internal(execute_create(state, params).await?, "create")
 }
 
+pub(super) async fn handle_create_typed(
+    state: &EngineState,
+    params: CreateParams,
+) -> Result<Vec<Row>, ProtocolError> {
+    mutation_rows_or_internal(execute_create(state, params).await?, "create")
+}
+
 /// Handle `query.createMany`.
 pub(super) async fn handle_create_many(
     state: &EngineState,
@@ -377,6 +384,13 @@ pub(super) async fn handle_create_many_embedded(
     mutation_rows_or_internal(execute_create_many(state, params).await?, "createMany")
 }
 
+pub(super) async fn handle_create_many_typed(
+    state: &EngineState,
+    params: CreateManyParams,
+) -> Result<Vec<Row>, ProtocolError> {
+    mutation_rows_or_internal(execute_create_many(state, params).await?, "createMany")
+}
+
 /// Handle `query.update`.
 pub(super) async fn handle_update(
     state: &EngineState,
@@ -397,6 +411,13 @@ pub(super) async fn handle_update_embedded(
 ) -> Result<Vec<Row>, ProtocolError> {
     let params: UpdateParams = serde_json::from_value(request.params)
         .map_err(|e| ProtocolError::InvalidParams(format!("Invalid update params: {}", e)))?;
+    mutation_rows_or_internal(execute_update(state, params).await?, "update")
+}
+
+pub(super) async fn handle_update_typed(
+    state: &EngineState,
+    params: UpdateParams,
+) -> Result<Vec<Row>, ProtocolError> {
     mutation_rows_or_internal(execute_update(state, params).await?, "update")
 }
 

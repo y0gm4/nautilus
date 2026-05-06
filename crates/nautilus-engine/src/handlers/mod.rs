@@ -11,12 +11,13 @@ use std::collections::HashMap;
 use nautilus_core::ColumnMarker;
 use nautilus_protocol::wire::{err, ok};
 use nautilus_protocol::{
-    HandshakeParams, HandshakeResult, ProtocolError, RpcError, RpcRequest, RpcResponse,
-    SchemaValidateParams, SchemaValidateResult, ENGINE_HANDSHAKE, PROTOCOL_VERSION, QUERY_COUNT,
-    QUERY_CREATE, QUERY_CREATE_MANY, QUERY_DELETE, QUERY_FIND_FIRST, QUERY_FIND_FIRST_OR_THROW,
-    QUERY_FIND_MANY, QUERY_FIND_UNIQUE, QUERY_FIND_UNIQUE_OR_THROW, QUERY_GROUP_BY, QUERY_RAW,
-    QUERY_RAW_STMT, QUERY_UPDATE, SCHEMA_VALIDATE, TRANSACTION_BATCH, TRANSACTION_COMMIT,
-    TRANSACTION_ROLLBACK, TRANSACTION_START,
+    CountParams, CreateManyParams, CreateParams, GroupByParams, HandshakeParams, HandshakeResult,
+    ProtocolError, RpcError, RpcRequest, RpcResponse, SchemaValidateParams, SchemaValidateResult,
+    UpdateParams, ENGINE_HANDSHAKE, PROTOCOL_VERSION, QUERY_COUNT, QUERY_CREATE, QUERY_CREATE_MANY,
+    QUERY_DELETE, QUERY_FIND_FIRST, QUERY_FIND_FIRST_OR_THROW, QUERY_FIND_MANY, QUERY_FIND_UNIQUE,
+    QUERY_FIND_UNIQUE_OR_THROW, QUERY_GROUP_BY, QUERY_RAW, QUERY_RAW_STMT, QUERY_UPDATE,
+    SCHEMA_VALIDATE, TRANSACTION_BATCH, TRANSACTION_COMMIT, TRANSACTION_ROLLBACK,
+    TRANSACTION_START,
 };
 use nautilus_schema::ir::{FieldIr, ModelIr, ResolvedFieldType};
 use nautilus_schema::{analyze, Severity};
@@ -273,6 +274,46 @@ pub async fn handle_find_many_typed(
     transaction_id: Option<&str>,
 ) -> Result<Vec<nautilus_connector::Row>, ProtocolError> {
     crud::handle_find_many_typed(state, model_name, args, transaction_id).await
+}
+
+/// Handle a typed Rust `create` request in-process without an RPC envelope.
+pub async fn handle_create_typed(
+    state: &EngineState,
+    params: CreateParams,
+) -> Result<Vec<nautilus_connector::Row>, ProtocolError> {
+    crud::handle_create_typed(state, params).await
+}
+
+/// Handle a typed Rust `createMany` request in-process without an RPC envelope.
+pub async fn handle_create_many_typed(
+    state: &EngineState,
+    params: CreateManyParams,
+) -> Result<Vec<nautilus_connector::Row>, ProtocolError> {
+    crud::handle_create_many_typed(state, params).await
+}
+
+/// Handle a typed Rust `update` request in-process without an RPC envelope.
+pub async fn handle_update_typed(
+    state: &EngineState,
+    params: UpdateParams,
+) -> Result<Vec<nautilus_connector::Row>, ProtocolError> {
+    crud::handle_update_typed(state, params).await
+}
+
+/// Handle a typed Rust `count` request in-process without an RPC envelope.
+pub async fn handle_count_typed(
+    state: &EngineState,
+    params: CountParams,
+) -> Result<i64, ProtocolError> {
+    crud::handle_count_typed(state, params).await
+}
+
+/// Handle a typed Rust `groupBy` request in-process without an RPC envelope.
+pub async fn handle_group_by_typed(
+    state: &EngineState,
+    params: GroupByParams,
+) -> Result<Vec<nautilus_connector::Row>, ProtocolError> {
+    crud::handle_group_by_typed(state, params).await
 }
 
 fn response_from_result(

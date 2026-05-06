@@ -490,3 +490,10 @@ pub(super) async fn handle_count_embedded(
         .map_err(|e| ProtocolError::InvalidParams(format!("Invalid count params: {}", e)))?;
     execute_count_params(state, params).await
 }
+
+pub(super) async fn handle_count_typed(
+    state: &EngineState,
+    params: CountParams,
+) -> Result<i64, ProtocolError> {
+    execute_count_params(state, params).await
+}

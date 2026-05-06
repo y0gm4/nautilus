@@ -281,3 +281,10 @@ pub(super) async fn handle_group_by_embedded(
         .map_err(|e| ProtocolError::InvalidParams(format!("Invalid groupBy params: {}", e)))?;
     execute_group_by_rows(state, params).await
 }
+
+pub(super) async fn handle_group_by_typed(
+    state: &EngineState,
+    params: GroupByParams,
+) -> Result<Vec<Row>, ProtocolError> {
+    execute_group_by_rows(state, params).await
+}
