@@ -77,16 +77,6 @@ fn decode_model_row_with_hints(
         )));
     }
 
-    let row = crate::normalize_row_with_hints(row, hints).map_err(|e| {
-        nautilus_core::Error::Other(format!("Failed to normalize {{ model_name }} row: {}", e))
-    })?;
-    decode_model_row_positionally(&row, decode_slots)
-}
-
-fn decode_model_row_positionally(
-    row: &crate::Row,
-    decode_slots: &[usize],
-) -> nautilus_core::Result<{{ model_name }}> {
     if row.len() < decode_slots.len() {
         return Err(nautilus_core::Error::TypeError(format!(
             "expected at least {} projected scalar columns for {{ model_name }}, got {}",
@@ -96,30 +86,67 @@ fn decode_model_row_positionally(
     }
 
 {%- for field in scalar_fields %}
-{%- if field.is_pk %}
     let mut {{ field.name }}: Option<{{ field.rust_type }}> = None;
+{%- endfor %}
+{%- for rel in relations %}
+{%- if rel.is_array %}
+    let mut {{ rel.field_name }} = vec![];
 {%- else %}
-    let mut {{ field.name }}: Option<{{ field.rust_type }}> = None;
+    let mut {{ rel.field_name }} = None;
 {%- endif %}
 {%- endfor %}
 
-    for (column_idx, field_slot) in decode_slots.iter().copied().enumerate() {
-        let value = row.get_by_pos(column_idx).ok_or_else(|| {
-            nautilus_core::Error::TypeError(format!(
-                "missing projected scalar column at position {} for {{ model_name }}",
-                column_idx
-            ))
-        })?;
+    for (column_idx, (column_name, value)) in row.into_columns().into_iter().enumerate() {
+        if column_idx >= decode_slots.len() {
+{%- if relations | length > 0 %}
+            match column_name.as_str() {
+{%- for rel in relations %}
+                "{{ rel.field_name }}_json" => {
+{%- if rel.is_array %}
+                    {{ rel.field_name }} = match value {
+                        nautilus_core::Value::Json(json) => {
+                            serde_json::from_value::<Vec<{{ rel.target_model }}>>(json)
+                                .unwrap_or_else(|_| vec![])
+                        }
+                        nautilus_core::Value::Null => vec![],
+                        _ => vec![],
+                    };
+{%- else %}
+                    {{ rel.field_name }} = match value {
+                        nautilus_core::Value::Json(json) => serde_json::from_value::<{{ rel.target_model }}>(json)
+                            .ok()
+                            .map(Box::new),
+                        _ => None,
+                    };
+{%- endif %}
+                }
+{%- endfor %}
+                _ => {}
+            }
+{%- endif %}
+            continue;
+        }
 
-        match field_slot {
+        let value = match hints[column_idx] {
+            Some(hint) => crate::normalize_value_with_hint(&column_name, column_idx, value, hint)
+                .map_err(|e| {
+                    nautilus_core::Error::Other(format!(
+                        "Failed to normalize {{ model_name }} row: {}",
+                        e
+                    ))
+                })?,
+            None => value,
+        };
+
+        match decode_slots[column_idx] {
 {%- for field in scalar_fields %}
             {{ loop.index0 }} => {
 {%- if field.is_pk %}
-                {{ field.name }} = Some(nautilus_core::FromValue::from_value(value)?);
+                {{ field.name }} = Some(nautilus_core::FromValue::from_value_owned(value)?);
 {%- else %}
                 {{ field.name }} = match value {
                     nautilus_core::Value::Null => None,
-                    other => nautilus_core::FromValue::from_value(other).ok(),
+                    other => nautilus_core::FromValue::from_value_owned(other).ok(),
                 };
 {%- endif %}
             }
@@ -132,31 +159,6 @@ fn decode_model_row_positionally(
             }
         }
     }
-
-        // Decode relation fields from JSON (if included via .include()).
-{%- for rel in relations %}
-{%- if rel.is_array %}
-    let {{ rel.field_name }} = row.get("{{ rel.field_name }}_json")
-        .and_then(|v| match v {
-            nautilus_core::Value::Json(json) => {
-                serde_json::from_value::<Vec<{{ rel.target_model }}>>(json.clone()).ok()
-            }
-            nautilus_core::Value::Null => Some(vec![]),
-            _ => None,
-        })
-        .unwrap_or_else(|| vec![]);
-{%- else %}
-    let {{ rel.field_name }} = row.get("{{ rel.field_name }}_json")
-        .and_then(|v| match v {
-            nautilus_core::Value::Json(json) => {
-                serde_json::from_value::<{{ rel.target_model }}>(json.clone())
-                    .ok()
-                    .map(Box::new)
-            }
-            _ => None,
-        });
-{%- endif %}
-{%- endfor %}
 
     Ok({{ model_name }} {
 {%- for field in scalar_fields %}

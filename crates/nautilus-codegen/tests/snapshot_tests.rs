@@ -314,8 +314,12 @@ model User {
     let code = models.get("User").expect("User missing");
 
     assert!(
-        code.contains("normalize_row_with_hints"),
-        "expected generated Rust model to normalize rows before FromRow:\n{code}"
+        code.contains("normalize_value_with_hint"),
+        "expected generated Rust model to normalize projected values inline during decode:\n{code}"
+    );
+    assert!(
+        code.contains("FromValue::from_value_owned"),
+        "expected generated Rust model to decode normalized values without extra cloning:\n{code}"
     );
     assert!(
         code.contains("Some(crate::ValueHint::Uuid)"),

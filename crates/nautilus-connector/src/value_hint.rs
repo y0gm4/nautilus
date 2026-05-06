@@ -91,7 +91,8 @@ fn parse_datetime_string(raw: &str) -> Option<chrono::NaiveDateTime> {
     None
 }
 
-fn normalize_value_with_hint(
+/// Normalize a single projected value using its schema-aware hint.
+pub fn normalize_value_with_hint(
     column: &str,
     index: usize,
     value: Value,
