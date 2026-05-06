@@ -110,7 +110,11 @@ where
         let mut results = Vec::with_capacity(rows.len());
         for row in rows {
             let row: crate::Row = row.into();
-            results.push(decode_model_row_with_hints(row, all_scalar_value_hints())?);
+            results.push(decode_model_row_with_hints(
+                row,
+                all_scalar_decode_slots(),
+                all_scalar_value_hints(),
+            )?);
         }
 
         Ok(results)

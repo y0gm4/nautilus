@@ -455,10 +455,10 @@ pub(crate) async fn try_find_many_via_engine<E, M>(
     client: &Client<E>,
     model: &str,
     args: &FindManyArgs,
+    mut decode_row: impl FnMut(crate::Row) -> nautilus_core::Result<M>,
 ) -> nautilus_core::Result<Option<Vec<M>>>
 where
     E: Executor,
-    M: crate::FromRow,
 {
     if !client.should_try_engine_for_find_many(args) {
         return Ok(None);
@@ -501,7 +501,7 @@ where
 
     let mut decoded = Vec::with_capacity(rows.len());
     for row in rows {
-        decoded.push(M::from_row(&row)?);
+        decoded.push(decode_row(row)?);
     }
 
     Ok(Some(decoded))
@@ -583,10 +583,10 @@ pub(crate) async fn try_create_via_engine<E, M>(
     client: &Client<E>,
     model: &str,
     data: JsonValue,
+    decode_row: impl FnMut(crate::Row) -> nautilus_core::Result<M>,
 ) -> nautilus_core::Result<Option<M>>
 where
     E: Executor,
-    M: crate::FromRow,
 {
     if !client.should_try_engine_for_mutation() {
         return Ok(None);
@@ -610,6 +610,7 @@ where
         QUERY_CREATE,
         serde_json::to_value(params)
             .map_err(|e| Error::Other(format!("failed to serialize engine create params: {}", e)))?,
+        decode_row,
     )
     .await?;
 
@@ -620,10 +621,10 @@ pub(crate) async fn try_create_many_via_engine<E, M>(
     client: &Client<E>,
     model: &str,
     data: Vec<JsonValue>,
+    decode_row: impl FnMut(crate::Row) -> nautilus_core::Result<M>,
 ) -> nautilus_core::Result<Option<Vec<M>>>
 where
     E: Executor,
-    M: crate::FromRow,
 {
     if !client.should_try_engine_for_mutation() {
         return Ok(None);
@@ -651,6 +652,7 @@ where
                 e
             ))
         })?,
+        decode_row,
     )
     .await
 }
@@ -660,10 +662,10 @@ pub(crate) async fn try_update_via_engine<E, M>(
     model: &str,
     filter: JsonValue,
     data: JsonValue,
+    decode_row: impl FnMut(crate::Row) -> nautilus_core::Result<M>,
 ) -> nautilus_core::Result<Option<Vec<M>>>
 where
     E: Executor,
-    M: crate::FromRow,
 {
     if !client.should_try_engine_for_mutation() {
         return Ok(None);
@@ -688,6 +690,7 @@ where
         QUERY_UPDATE,
         serde_json::to_value(params)
             .map_err(|e| Error::Other(format!("failed to serialize engine update params: {}", e)))?,
+        decode_row,
     )
     .await
 }
@@ -697,15 +700,15 @@ async fn execute_engine_mutation<E, M>(
     state: &EngineState,
     method: &str,
     params: JsonValue,
+    mut decode_row: impl FnMut(crate::Row) -> nautilus_core::Result<M>,
 ) -> nautilus_core::Result<Option<Vec<M>>>
 where
     E: Executor,
-    M: crate::FromRow,
 {
     let rows = execute_engine_rows_request(state, method, params).await?;
     let mut decoded = Vec::with_capacity(rows.len());
-    for row in &rows {
-        decoded.push(M::from_row(row)?);
+    for row in rows {
+        decoded.push(decode_row(row)?);
     }
 
     Ok(Some(decoded))

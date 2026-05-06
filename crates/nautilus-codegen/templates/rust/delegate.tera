@@ -750,6 +750,21 @@ where
         Ok(builder)
     }
 
+    fn engine_decode_plan_for_find_many_args(
+        args: &nautilus_core::FindManyArgs,
+    ) -> (Vec<usize>, Vec<Option<crate::ValueHint>>) {
+        let selected_fields: std::collections::HashSet<String> = args
+            .select
+            .iter()
+            .filter_map(|(key, enabled)| enabled.then_some(key.clone()))
+            .collect();
+
+        (
+            projected_scalar_decode_slots(&selected_fields),
+            projected_scalar_value_hints(&selected_fields),
+        )
+    }
+
     /// Find all {{ model_name }} records matching `args`.
     ///
     /// Executes immediately and returns a `Vec<{{ model_name }}>`.
@@ -761,11 +776,16 @@ where
         let _c = self.client.clone();
         tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
 {%- endif %}
+        let (engine_decode_slots, engine_row_hints) =
+            Self::engine_decode_plan_for_find_many_args(&args);
         if let Some(rows) =
             crate::runtime::try_find_many_via_engine::<_, {{ model_name }}>(
                 {% if is_async %}&self.client{% else %}&_c{% endif %},
                 "{{ model_name }}",
                 &args,
+                move |row| {
+                    decode_model_row_with_hints(row, &engine_decode_slots, &engine_row_hints)
+                },
             )
             .await?
         {
@@ -792,11 +812,16 @@ where
         tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
 {%- endif %}
         let args = nautilus_core::FindManyArgs { take: Some(1), ..args };
+        let (engine_decode_slots, engine_row_hints) =
+            Self::engine_decode_plan_for_find_many_args(&args);
         if let Some(rows) =
             crate::runtime::try_find_many_via_engine::<_, {{ model_name }}>(
                 {% if is_async %}&self.client{% else %}&_c{% endif %},
                 "{{ model_name }}",
                 &args,
+                move |row| {
+                    decode_model_row_with_hints(row, &engine_decode_slots, &engine_row_hints)
+                },
             )
             .await?
         {
@@ -831,11 +856,16 @@ where
         let _c = self.client.clone();
         tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
 {%- endif %}
+        let (engine_decode_slots, engine_row_hints) =
+            Self::engine_decode_plan_for_find_many_args(&find_args);
         if let Some(rows) =
             crate::runtime::try_find_many_via_engine::<_, {{ model_name }}>(
                 {% if is_async %}&self.client{% else %}&_c{% endif %},
                 "{{ model_name }}",
                 &find_args,
+                move |row| {
+                    decode_model_row_with_hints(row, &engine_decode_slots, &engine_row_hints)
+                },
             )
             .await?
         {
@@ -892,6 +922,13 @@ where
                 {% if is_async %}&self.client{% else %}&_c{% endif %},
                 "{{ model_name }}",
                 data.to_engine_data(),
+                |row| {
+                    decode_model_row_with_hints(
+                        row,
+                        all_scalar_decode_slots(),
+                        all_scalar_value_hints(),
+                    )
+                },
             )
             .await?
         {
@@ -930,6 +967,13 @@ where
                 {% if is_async %}&self.client{% else %}&_c{% endif %},
                 "{{ model_name }}",
                 entries.iter().map({{ entry_name }}::to_engine_data).collect(),
+                |row| {
+                    decode_model_row_with_hints(
+                        row,
+                        all_scalar_decode_slots(),
+                        all_scalar_value_hints(),
+                    )
+                },
             )
             .await?
         {
@@ -973,6 +1017,13 @@ where
                     "{{ model_name }}",
                     filter_json,
                     engine_data,
+                    |row| {
+                        decode_model_row_with_hints(
+                            row,
+                            all_scalar_decode_slots(),
+                            all_scalar_value_hints(),
+                        )
+                    },
                 )
                 .await?
             {

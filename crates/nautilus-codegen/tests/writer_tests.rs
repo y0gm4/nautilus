@@ -322,6 +322,10 @@ fn test_write_rust_code_uses_execute_fast_paths_in_generated_queries() {
         user_content.contains("crate::execute_optional("),
         "generated single-row read builders should use execute_optional when decoding optional rows:\n{user_content}"
     );
+    assert!(
+        user_content.contains("row.get_by_pos("),
+        "generated model decoders should use positional row access on the hot path:\n{user_content}"
+    );
 }
 
 /// Multiple models each get their own snake_case .rs file.

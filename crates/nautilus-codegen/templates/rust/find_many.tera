@@ -108,6 +108,7 @@ where
         crate::Client<E>,
         nautilus_dialect::Sql,
         Vec<Option<crate::ValueHint>>,
+        Vec<usize>,
         bool,
     )> {
         use nautilus_core::*;
@@ -124,23 +125,22 @@ where
             distinct,
             _selection,
         } = self;
+        let row_hints = projected_scalar_value_hints(&select);
+        let decode_slots = projected_scalar_decode_slots(&select);
         let mut builder = Select::from_table("{{ table_name }}").with_capacity(SelectCapacity {
             items: {{ scalar_fields | length }},
             order_by_columns: order_by.len() + distinct.len() + {{ pk_fields_with_db | length }},
             distinct: distinct.len(),
             ..SelectCapacity::default()
         });
-        let mut row_hints: Vec<Option<crate::ValueHint>> = Vec::new();
 
         // Add scalar columns (PK columns always included; others filtered by select if active)
 {%- for field in scalar_fields %}
 {%- if field.is_pk %}
         builder = builder.item(SelectItem::column(ColumnMarker::new("{{ table_name }}", "{{ field.db_name }}")));
-        row_hints.push({{ field.read_hint_expr }});
 {%- else %}
         if select.is_empty() || select.contains("{{ field.name }}") {
             builder = builder.item(SelectItem::column(ColumnMarker::new("{{ table_name }}", "{{ field.db_name }}")));
-            row_hints.push({{ field.read_hint_expr }});
         }
 {%- endif %}
 {%- endfor %}
@@ -224,7 +224,7 @@ where
         let select = builder.build()?;
         let sql = client.dialect().render_select_owned(select)?;
 
-        Ok((client, sql, row_hints, backward))
+        Ok((client, sql, row_hints, decode_slots, backward))
     }
 }
 
@@ -238,7 +238,7 @@ where
         use nautilus_core::*;
         use std::convert::Into;
 
-        let (client, sql, row_hints, backward) = self.into_execution_parts()?;
+        let (client, sql, row_hints, decode_slots, backward) = self.into_execution_parts()?;
 
         let rows = crate::execute_all(client.executor(), &sql)
             .await
@@ -247,7 +247,7 @@ where
         let mut results = Vec::with_capacity(rows.len());
         for row in rows {
             let row: crate::Row = row.into();
-            let decoded = decode_model_row_with_hints(row, &row_hints)?;
+            let decoded = decode_model_row_with_hints(row, &decode_slots, &row_hints)?;
             results.push(decoded);
         }
 
@@ -264,7 +264,7 @@ where
         use nautilus_core::*;
         use std::convert::Into;
 
-        let (client, sql, row_hints, _backward) = self.into_execution_parts()?;
+        let (client, sql, row_hints, decode_slots, _backward) = self.into_execution_parts()?;
         let row = crate::execute_optional(client.executor(), &sql)
             .await
             .map_err(|e| Error::Other(e.to_string()))?;
@@ -274,6 +274,6 @@ where
         };
 
         let row: crate::Row = row.into();
-        Ok(Some(decode_model_row_with_hints(row, &row_hints)?))
+        Ok(Some(decode_model_row_with_hints(row, &decode_slots, &row_hints)?))
     }
 }

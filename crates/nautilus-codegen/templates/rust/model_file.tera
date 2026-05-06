@@ -1,6 +1,6 @@
 //! {{ model_name }} model and associated builders.
 
-use crate::{FromRow, Row};
+use crate::Row;
 use futures::stream::StreamExt;
 {%- if has_enums %}
 {%- for enum_name in enum_imports %}
@@ -26,16 +26,152 @@ fn all_scalar_value_hints() -> &'static [Option<crate::ValueHint>] {
     ]
 }
 
+fn all_scalar_decode_slots() -> &'static [usize] {
+    &[
+{%- for field in scalar_fields %}
+        {{ loop.index0 }},
+{%- endfor %}
+    ]
+}
+
+fn projected_scalar_value_hints(
+    fields: &std::collections::HashSet<String>,
+) -> Vec<Option<crate::ValueHint>> {
+    let mut hints = Vec::with_capacity({{ scalar_fields | length }});
+{%- for field in scalar_fields %}
+{%- if field.is_pk %}
+    hints.push({{ field.read_hint_expr }});
+{%- else %}
+    if fields.is_empty() || fields.contains("{{ field.name }}") {
+        hints.push({{ field.read_hint_expr }});
+    }
+{%- endif %}
+{%- endfor %}
+    hints
+}
+
+fn projected_scalar_decode_slots(fields: &std::collections::HashSet<String>) -> Vec<usize> {
+    let mut slots = Vec::with_capacity({{ scalar_fields | length }});
+{%- for field in scalar_fields %}
+{%- if field.is_pk %}
+    slots.push({{ loop.index0 }});
+{%- else %}
+    if fields.is_empty() || fields.contains("{{ field.name }}") {
+        slots.push({{ loop.index0 }});
+    }
+{%- endif %}
+{%- endfor %}
+    slots
+}
+
 fn decode_model_row_with_hints(
     row: crate::Row,
+    decode_slots: &[usize],
     hints: &[Option<crate::ValueHint>],
 ) -> nautilus_core::Result<{{ model_name }}> {
-    let row = crate::normalize_row_with_hints(row, hints)
-        .map_err(|e| nautilus_core::Error::Other(format!(
-            "Failed to normalize {{ model_name }} row: {}",
-            e
-        )))?;
-    {{ model_name }}::from_row(&row)
+    if decode_slots.len() != hints.len() {
+        return Err(nautilus_core::Error::Other(format!(
+            "Failed to decode {{ model_name }} row: projection slot count {} does not match hint count {}",
+            decode_slots.len(),
+            hints.len(),
+        )));
+    }
+
+    let row = crate::normalize_row_with_hints(row, hints).map_err(|e| {
+        nautilus_core::Error::Other(format!("Failed to normalize {{ model_name }} row: {}", e))
+    })?;
+    decode_model_row_positionally(&row, decode_slots)
+}
+
+fn decode_model_row_positionally(
+    row: &crate::Row,
+    decode_slots: &[usize],
+) -> nautilus_core::Result<{{ model_name }}> {
+    if row.len() < decode_slots.len() {
+        return Err(nautilus_core::Error::TypeError(format!(
+            "expected at least {} projected scalar columns for {{ model_name }}, got {}",
+            decode_slots.len(),
+            row.len(),
+        )));
+    }
+
+{%- for field in scalar_fields %}
+{%- if field.is_pk %}
+    let mut {{ field.name }}: Option<{{ field.rust_type }}> = None;
+{%- else %}
+    let mut {{ field.name }}: Option<{{ field.rust_type }}> = None;
+{%- endif %}
+{%- endfor %}
+
+    for (column_idx, field_slot) in decode_slots.iter().copied().enumerate() {
+        let value = row.get_by_pos(column_idx).ok_or_else(|| {
+            nautilus_core::Error::TypeError(format!(
+                "missing projected scalar column at position {} for {{ model_name }}",
+                column_idx
+            ))
+        })?;
+
+        match field_slot {
+{%- for field in scalar_fields %}
+            {{ loop.index0 }} => {
+{%- if field.is_pk %}
+                {{ field.name }} = Some(nautilus_core::FromValue::from_value(value)?);
+{%- else %}
+                {{ field.name }} = match value {
+                    nautilus_core::Value::Null => None,
+                    other => nautilus_core::FromValue::from_value(other).ok(),
+                };
+{%- endif %}
+            }
+{%- endfor %}
+            other => {
+                return Err(nautilus_core::Error::TypeError(format!(
+                    "unknown scalar projection slot {} while decoding {{ model_name }}",
+                    other
+                )));
+            }
+        }
+    }
+
+        // Decode relation fields from JSON (if included via .include()).
+{%- for rel in relations %}
+{%- if rel.is_array %}
+    let {{ rel.field_name }} = row.get("{{ rel.field_name }}_json")
+        .and_then(|v| match v {
+            nautilus_core::Value::Json(json) => {
+                serde_json::from_value::<Vec<{{ rel.target_model }}>>(json.clone()).ok()
+            }
+            nautilus_core::Value::Null => Some(vec![]),
+            _ => None,
+        })
+        .unwrap_or_else(|| vec![]);
+{%- else %}
+    let {{ rel.field_name }} = row.get("{{ rel.field_name }}_json")
+        .and_then(|v| match v {
+            nautilus_core::Value::Json(json) => {
+                serde_json::from_value::<{{ rel.target_model }}>(json.clone())
+                    .ok()
+                    .map(Box::new)
+            }
+            _ => None,
+        });
+{%- endif %}
+{%- endfor %}
+
+    Ok({{ model_name }} {
+{%- for field in scalar_fields %}
+{%- if field.is_pk %}
+        {{ field.name }}: {{ field.name }}.ok_or_else(|| nautilus_core::Error::TypeError(
+            "missing required PK column '{{ field.db_name }}' ({{ field.name }})".to_string()
+        ))?,
+{%- else %}
+        {{ field.name }},
+{%- endif %}
+{%- endfor %}
+{%- for field in relation_fields %}
+        {{ field.name }},
+{%- endfor %}
+    })
 }
 
 {% include "model_struct.tera" %}
