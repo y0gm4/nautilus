@@ -267,3 +267,117 @@ async fn typed_find_many_includes_bypass_rpc_and_preserve_include_semantics() {
     drop(state);
     drop(temp_dir);
 }
+
+#[tokio::test]
+async fn array_includes_batch_children_across_multiple_parents() {
+    let (state, temp_dir) = sqlite_state("include-tests-batch", schema_source()).await;
+
+    let mut user_ids: Vec<i64> = Vec::new();
+    for email in ["alice@example.com", "bob@example.com", "carol@example.com"] {
+        let created_user = call_rpc_json(
+            &state,
+            QUERY_CREATE,
+            json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "model": "User",
+                "data": { "email": email }
+            }),
+        )
+        .await;
+        user_ids.push(
+            created_user["data"][0]["User__id"]
+                .as_i64()
+                .expect("user id should be present"),
+        );
+    }
+
+    // Bob (idx 1) gets no posts so we exercise the empty-children branch too.
+    let posts_per_user: Vec<Vec<(&str, i32)>> = vec![
+        vec![("alice-1", 1), ("alice-2", 2)],
+        vec![],
+        vec![("carol-1", 1)],
+    ];
+
+    for (user_id, posts) in user_ids.iter().zip(posts_per_user.iter()) {
+        for (title, sort) in posts {
+            let created_post = call_rpc_json(
+                &state,
+                QUERY_CREATE,
+                json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "model": "Post",
+                    "data": {
+                        "title": title,
+                        "sort": sort,
+                        "authorId": user_id
+                    }
+                }),
+            )
+            .await;
+            let post_id = created_post["data"][0]["blog_posts__post_id"]
+                .as_i64()
+                .expect("post id should be present");
+            let _ = call_rpc_json(
+                &state,
+                QUERY_CREATE,
+                json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "model": "Comment",
+                    "data": {
+                        "body": format!("{title}-comment"),
+                        "sort": 1,
+                        "postId": post_id
+                    }
+                }),
+            )
+            .await;
+        }
+    }
+
+    let found = call_rpc_json(
+        &state,
+        QUERY_FIND_MANY,
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "model": "User",
+            "args": {
+                "orderBy": [{ "id": "asc" }],
+                "include": {
+                    "posts": {
+                        "orderBy": [{ "sort": "asc" }],
+                        "include": { "comments": {} }
+                    }
+                }
+            }
+        }),
+    )
+    .await;
+
+    let rows = found["data"]
+        .as_array()
+        .expect("find_many should return rows");
+    assert_eq!(rows.len(), 3);
+
+    let alice_posts = rows[0]["posts_json"].as_array().unwrap();
+    assert_eq!(alice_posts.len(), 2);
+    assert_eq!(alice_posts[0]["title"], json!("alice-1"));
+    assert_eq!(alice_posts[1]["title"], json!("alice-2"));
+    assert_eq!(
+        alice_posts[0]["comments_json"].as_array().unwrap()[0]["body"],
+        json!("alice-1-comment"),
+        "nested batched include should attach the right comments to each post"
+    );
+
+    let bob_posts = rows[1]["posts_json"].as_array().unwrap();
+    assert!(
+        bob_posts.is_empty(),
+        "parent without children should get an empty array, not a sibling's data"
+    );
+
+    let carol_posts = rows[2]["posts_json"].as_array().unwrap();
+    assert_eq!(carol_posts.len(), 1);
+    assert_eq!(carol_posts[0]["title"], json!("carol-1"));
+
+    drop(state);
+    drop(temp_dir);
+}
