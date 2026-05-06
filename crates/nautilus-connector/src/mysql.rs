@@ -1,6 +1,7 @@
 //! MySQL executor implementation.
 
 use crate::error::{ConnectorError as Error, Result};
+use crate::single_row::{fetch_single_row, SingleRowExpectation};
 use crate::{ConnectorPoolOptions, Executor, MysqlRowStream, Row};
 use futures::future::BoxFuture;
 use nautilus_core::Value;
@@ -175,6 +176,66 @@ impl Executor for MysqlExecutor {
         Self: 'conn,
     {
         self.execute_collect_internal(sql)
+    }
+
+    fn execute_one<'conn>(
+        &'conn self,
+        sql: &'conn Sql,
+    ) -> BoxFuture<'conn, Result<Self::Row<'conn>>>
+    where
+        Self: 'conn,
+    {
+        Box::pin(async move {
+            let mut conn = self
+                .pool
+                .acquire()
+                .await
+                .map_err(|e| Error::connection(e, "Failed to acquire connection"))?;
+
+            let row = fetch_single_row::<sqlx::MySql, _, _, _>(
+                &mut *conn,
+                &sql.text,
+                &sql.params,
+                bind_value,
+                crate::mysql_stream::decode_row_internal,
+                "Query execution failed",
+                SingleRowExpectation::ExactlyOne,
+            )
+            .await?;
+
+            drop(conn);
+            Ok(row.expect("cardinality checked above"))
+        })
+    }
+
+    fn execute_optional<'conn>(
+        &'conn self,
+        sql: &'conn Sql,
+    ) -> BoxFuture<'conn, Result<Option<Self::Row<'conn>>>>
+    where
+        Self: 'conn,
+    {
+        Box::pin(async move {
+            let mut conn = self
+                .pool
+                .acquire()
+                .await
+                .map_err(|e| Error::connection(e, "Failed to acquire connection"))?;
+
+            let row = fetch_single_row::<sqlx::MySql, _, _, _>(
+                &mut *conn,
+                &sql.text,
+                &sql.params,
+                bind_value,
+                crate::mysql_stream::decode_row_internal,
+                "Query execution failed",
+                SingleRowExpectation::ZeroOrOne,
+            )
+            .await?;
+
+            drop(conn);
+            Ok(row)
+        })
     }
 }
 

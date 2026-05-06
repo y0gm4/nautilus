@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use crate::error::{ConnectorError as Error, Result};
+use crate::single_row::{fetch_single_row, SingleRowExpectation};
 use crate::{ConnectorPoolOptions, Executor, PgRowStream, Row};
 use futures::future::BoxFuture;
 use nautilus_core::Value;
@@ -73,15 +74,17 @@ impl PgExecutor {
     /// Execute a raw SQL statement with no result rows (e.g., DDL).
     pub async fn execute_raw(&self, sql: &str) -> Result<()> {
         sqlx::query(sql)
+            .persistent(false)
             .execute(&self.pool)
             .await
             .map(|_| ())
             .map_err(|e| Error::database(e, "DDL error"))
     }
 
-    fn execute_collect_internal<'conn>(
+    fn execute_collect_internal_with_persistence<'conn>(
         &'conn self,
         sql: &'conn Sql,
+        persistent: bool,
     ) -> BoxFuture<'conn, Result<Vec<Row>>> {
         Box::pin(async move {
             let mut conn = self
@@ -90,7 +93,7 @@ impl PgExecutor {
                 .await
                 .map_err(|e| Error::connection(e, "Failed to acquire connection"))?;
 
-            let mut query = sqlx::query(&sql.text);
+            let mut query = sqlx::query(&sql.text).persistent(persistent);
             for param in &sql.params {
                 query = bind_value(query, param)?;
             }
@@ -114,6 +117,22 @@ impl PgExecutor {
                 .map(crate::postgres_stream::decode_row_internal)
                 .collect()
         })
+    }
+
+    fn execute_collect_internal<'conn>(
+        &'conn self,
+        sql: &'conn Sql,
+    ) -> BoxFuture<'conn, Result<Vec<Row>>> {
+        self.execute_collect_internal_with_persistence(sql, true)
+    }
+
+    /// Execute a SQL query with sqlx statement persistence disabled.
+    ///
+    /// This is reserved for raw/direct query paths that must stay compatible
+    /// with poolers such as PgBouncer transaction pooling.
+    pub async fn execute_collect_unprepared(&self, sql: &Sql) -> Result<Vec<Row>> {
+        self.execute_collect_internal_with_persistence(sql, false)
+            .await
     }
 
     fn execute_and_fetch_collect_internal<'conn>(
@@ -193,6 +212,66 @@ impl Executor for PgExecutor {
         Self: 'conn,
     {
         self.execute_collect_internal(sql)
+    }
+
+    fn execute_one<'conn>(
+        &'conn self,
+        sql: &'conn Sql,
+    ) -> BoxFuture<'conn, Result<Self::Row<'conn>>>
+    where
+        Self: 'conn,
+    {
+        Box::pin(async move {
+            let mut conn = self
+                .pool
+                .acquire()
+                .await
+                .map_err(|e| Error::connection(e, "Failed to acquire connection"))?;
+
+            let row = fetch_single_row::<sqlx::Postgres, _, _, _>(
+                &mut *conn,
+                &sql.text,
+                &sql.params,
+                bind_value,
+                crate::postgres_stream::decode_row_internal,
+                "Query execution failed",
+                SingleRowExpectation::ExactlyOne,
+            )
+            .await?;
+
+            drop(conn);
+            Ok(row.expect("cardinality checked above"))
+        })
+    }
+
+    fn execute_optional<'conn>(
+        &'conn self,
+        sql: &'conn Sql,
+    ) -> BoxFuture<'conn, Result<Option<Self::Row<'conn>>>>
+    where
+        Self: 'conn,
+    {
+        Box::pin(async move {
+            let mut conn = self
+                .pool
+                .acquire()
+                .await
+                .map_err(|e| Error::connection(e, "Failed to acquire connection"))?;
+
+            let row = fetch_single_row::<sqlx::Postgres, _, _, _>(
+                &mut *conn,
+                &sql.text,
+                &sql.params,
+                bind_value,
+                crate::postgres_stream::decode_row_internal,
+                "Query execution failed",
+                SingleRowExpectation::ZeroOrOne,
+            )
+            .await?;
+
+            drop(conn);
+            Ok(row)
+        })
     }
 }
 

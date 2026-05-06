@@ -26,6 +26,7 @@ use nautilus_dialect::Sql;
 
 use crate::error::{ConnectorError as Error, Result};
 use crate::row_stream::RowStream;
+use crate::single_row::{fetch_single_row, SingleRowExpectation};
 use crate::{Executor, Row};
 
 /// Options for starting a transaction.
@@ -157,10 +158,11 @@ impl TransactionExecutor {
     fn bind_query<'q, DB, Bind>(
         sql_text: &'q str,
         params: &'q [Value],
+        persistent: bool,
         bind: Bind,
     ) -> Result<sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>>
     where
-        DB: sqlx::Database,
+        DB: sqlx::Database + sqlx::database::HasStatementCache,
         for<'q2> <DB as sqlx::Database>::Arguments<'q2>: sqlx::IntoArguments<'q2, DB>,
         Bind: Fn(
             sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>,
@@ -168,7 +170,7 @@ impl TransactionExecutor {
         )
             -> Result<sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>>,
     {
-        let mut query = sqlx::query(sql_text);
+        let mut query = sqlx::query(sql_text).persistent(persistent);
         for param in params {
             query = bind(query, param)?;
         }
@@ -179,11 +181,12 @@ impl TransactionExecutor {
         tx_arc: TxHandle<DB>,
         sql_text: String,
         params: Vec<Value>,
+        persistent: bool,
         bind: Bind,
         rows_affected: RowsAffected,
     ) -> BoxFuture<'static, Result<usize>>
     where
-        DB: sqlx::Database + Send + 'static,
+        DB: sqlx::Database + sqlx::database::HasStatementCache + Send + 'static,
         for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
         for<'q> <DB as sqlx::Database>::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
         for<'q> Bind: Fn(
@@ -197,7 +200,7 @@ impl TransactionExecutor {
         RowsAffected: Fn(<DB as sqlx::Database>::QueryResult) -> u64 + Copy + Send + 'static,
     {
         Box::pin(async move {
-            let query = Self::bind_query::<DB, Bind>(&sql_text, &params, bind)?;
+            let query = Self::bind_query::<DB, Bind>(&sql_text, &params, persistent, bind)?;
             let mut guard = tx_arc.lock().await;
             let tx = guard
                 .as_mut()
@@ -216,12 +219,13 @@ impl TransactionExecutor {
         tx_arc: TxHandle<DB>,
         sql_text: String,
         params: Vec<Value>,
+        persistent: bool,
         bind: Bind,
         decode: Decode,
         query_context: &'static str,
     ) -> BoxFuture<'static, Result<Vec<Row>>>
     where
-        DB: sqlx::Database + Send + 'static,
+        DB: sqlx::Database + sqlx::database::HasStatementCache + Send + 'static,
         for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
         for<'q> <DB as sqlx::Database>::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
         for<'q> Bind: Fn(
@@ -235,7 +239,7 @@ impl TransactionExecutor {
         Decode: Fn(<DB as sqlx::Database>::Row) -> Result<Row> + Copy + Send + 'static,
     {
         Box::pin(async move {
-            let query = Self::bind_query::<DB, Bind>(&sql_text, &params, bind)?;
+            let query = Self::bind_query::<DB, Bind>(&sql_text, &params, persistent, bind)?;
             let mut guard = tx_arc.lock().await;
             let tx = guard
                 .as_mut()
@@ -262,7 +266,7 @@ impl TransactionExecutor {
         decode: Decode,
     ) -> BoxFuture<'static, Result<Vec<Row>>>
     where
-        DB: sqlx::Database + Send + 'static,
+        DB: sqlx::Database + sqlx::database::HasStatementCache + Send + 'static,
         for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
         for<'q> <DB as sqlx::Database>::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
         for<'q> Bind: Fn(
@@ -277,8 +281,8 @@ impl TransactionExecutor {
     {
         Box::pin(async move {
             let mutation_query =
-                Self::bind_query::<DB, Bind>(&mutation_text, &mutation_params, bind)?;
-            let fetch_query = Self::bind_query::<DB, Bind>(&fetch_text, &fetch_params, bind)?;
+                Self::bind_query::<DB, Bind>(&mutation_text, &mutation_params, true, bind)?;
+            let fetch_query = Self::bind_query::<DB, Bind>(&fetch_text, &fetch_params, true, bind)?;
             let mut guard = tx_arc.lock().await;
             let tx = guard
                 .as_mut()
@@ -297,6 +301,48 @@ impl TransactionExecutor {
             drop(guard);
 
             rows.into_iter().map(decode).collect()
+        })
+    }
+
+    fn execute_single_on<DB, Bind, Decode>(
+        tx_arc: TxHandle<DB>,
+        sql_text: String,
+        params: Vec<Value>,
+        bind: Bind,
+        decode: Decode,
+        query_context: &'static str,
+        expectation: SingleRowExpectation,
+    ) -> BoxFuture<'static, Result<Option<Row>>>
+    where
+        DB: sqlx::Database + Send + 'static,
+        for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+        for<'q> <DB as sqlx::Database>::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+        for<'q> Bind: Fn(
+                sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>,
+                &'q Value,
+            )
+                -> Result<sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>>
+            + Copy
+            + Send
+            + 'static,
+        Decode: Fn(<DB as sqlx::Database>::Row) -> Result<Row> + Copy + Send + 'static,
+    {
+        Box::pin(async move {
+            let mut guard = tx_arc.lock().await;
+            let tx = guard
+                .as_mut()
+                .ok_or_else(|| Error::database_msg("Transaction already closed"))?;
+
+            fetch_single_row::<DB, _, _, _>(
+                &mut **tx,
+                &sql_text,
+                &params,
+                bind,
+                decode,
+                query_context,
+                expectation,
+            )
+            .await
         })
     }
 
@@ -369,6 +415,7 @@ impl TransactionExecutor {
                     Arc::clone(tx_arc),
                     sql.text.clone(),
                     sql.params.clone(),
+                    true,
                     crate::postgres::bind_value,
                     |result: sqlx::postgres::PgQueryResult| result.rows_affected(),
                 )
@@ -379,6 +426,7 @@ impl TransactionExecutor {
                     Arc::clone(tx_arc),
                     sql.text.clone(),
                     sql.params.clone(),
+                    true,
                     crate::mysql::bind_value,
                     |result: sqlx::mysql::MySqlQueryResult| result.rows_affected(),
                 )
@@ -389,8 +437,54 @@ impl TransactionExecutor {
                     Arc::clone(tx_arc),
                     sql.text.clone(),
                     sql.params.clone(),
+                    true,
                     crate::sqlite::bind_value,
                     |result: sqlx::sqlite::SqliteQueryResult| result.rows_affected(),
+                )
+                .await
+            }
+        }
+    }
+
+    /// Execute a SQL query with sqlx statement persistence disabled.
+    ///
+    /// Raw/direct query paths use this so they remain compatible with
+    /// poolers such as PgBouncer even when they run inside a transaction.
+    pub async fn execute_collect_unprepared(&self, sql: &Sql) -> Result<Vec<Row>> {
+        match &self.inner {
+            TransactionInner::Postgres(tx_arc) => {
+                Self::execute_collect_on(
+                    Arc::clone(tx_arc),
+                    sql.text.clone(),
+                    sql.params.clone(),
+                    false,
+                    crate::postgres::bind_value,
+                    crate::postgres_stream::decode_row_internal,
+                    "Query failed",
+                )
+                .await
+            }
+            TransactionInner::Mysql(tx_arc) => {
+                Self::execute_collect_on(
+                    Arc::clone(tx_arc),
+                    sql.text.clone(),
+                    sql.params.clone(),
+                    false,
+                    crate::mysql::bind_value,
+                    crate::mysql_stream::decode_row_internal,
+                    "Query failed",
+                )
+                .await
+            }
+            TransactionInner::Sqlite(tx_arc) => {
+                Self::execute_collect_on(
+                    Arc::clone(tx_arc),
+                    sql.text.clone(),
+                    sql.params.clone(),
+                    false,
+                    crate::sqlite::bind_value,
+                    crate::sqlite_stream::decode_row_internal,
+                    "Query failed",
                 )
                 .await
             }
@@ -415,6 +509,7 @@ impl Executor for TransactionExecutor {
                     Arc::clone(tx_arc),
                     sql.text.clone(),
                     sql.params.clone(),
+                    true,
                     crate::postgres::bind_value,
                     crate::postgres_stream::decode_row_internal,
                     "Query failed",
@@ -425,6 +520,7 @@ impl Executor for TransactionExecutor {
                     Arc::clone(tx_arc),
                     sql.text.clone(),
                     sql.params.clone(),
+                    true,
                     crate::mysql::bind_value,
                     crate::mysql_stream::decode_row_internal,
                     "Query failed",
@@ -435,6 +531,7 @@ impl Executor for TransactionExecutor {
                     Arc::clone(tx_arc),
                     sql.text.clone(),
                     sql.params.clone(),
+                    true,
                     crate::sqlite::bind_value,
                     crate::sqlite_stream::decode_row_internal,
                     "Query failed",
@@ -497,6 +594,7 @@ impl Executor for TransactionExecutor {
                 Arc::clone(tx_arc),
                 sql.text.clone(),
                 sql.params.clone(),
+                true,
                 crate::postgres::bind_value,
                 crate::postgres_stream::decode_row_internal,
                 "Query failed",
@@ -505,6 +603,7 @@ impl Executor for TransactionExecutor {
                 Arc::clone(tx_arc),
                 sql.text.clone(),
                 sql.params.clone(),
+                true,
                 crate::mysql::bind_value,
                 crate::mysql_stream::decode_row_internal,
                 "Query failed",
@@ -513,9 +612,99 @@ impl Executor for TransactionExecutor {
                 Arc::clone(tx_arc),
                 sql.text.clone(),
                 sql.params.clone(),
+                true,
                 crate::sqlite::bind_value,
                 crate::sqlite_stream::decode_row_internal,
                 "Query failed",
+            ),
+        }
+    }
+
+    fn execute_one<'conn>(
+        &'conn self,
+        sql: &'conn Sql,
+    ) -> BoxFuture<'conn, Result<Self::Row<'conn>>>
+    where
+        Self: 'conn,
+    {
+        Box::pin(async move {
+            let row = match &self.inner {
+                TransactionInner::Postgres(tx_arc) => {
+                    Self::execute_single_on(
+                        Arc::clone(tx_arc),
+                        sql.text.clone(),
+                        sql.params.clone(),
+                        crate::postgres::bind_value,
+                        crate::postgres_stream::decode_row_internal,
+                        "Query failed",
+                        SingleRowExpectation::ExactlyOne,
+                    )
+                    .await?
+                }
+                TransactionInner::Mysql(tx_arc) => {
+                    Self::execute_single_on(
+                        Arc::clone(tx_arc),
+                        sql.text.clone(),
+                        sql.params.clone(),
+                        crate::mysql::bind_value,
+                        crate::mysql_stream::decode_row_internal,
+                        "Query failed",
+                        SingleRowExpectation::ExactlyOne,
+                    )
+                    .await?
+                }
+                TransactionInner::Sqlite(tx_arc) => {
+                    Self::execute_single_on(
+                        Arc::clone(tx_arc),
+                        sql.text.clone(),
+                        sql.params.clone(),
+                        crate::sqlite::bind_value,
+                        crate::sqlite_stream::decode_row_internal,
+                        "Query failed",
+                        SingleRowExpectation::ExactlyOne,
+                    )
+                    .await?
+                }
+            };
+
+            Ok(row.expect("cardinality checked above"))
+        })
+    }
+
+    fn execute_optional<'conn>(
+        &'conn self,
+        sql: &'conn Sql,
+    ) -> BoxFuture<'conn, Result<Option<Self::Row<'conn>>>>
+    where
+        Self: 'conn,
+    {
+        match &self.inner {
+            TransactionInner::Postgres(tx_arc) => Self::execute_single_on(
+                Arc::clone(tx_arc),
+                sql.text.clone(),
+                sql.params.clone(),
+                crate::postgres::bind_value,
+                crate::postgres_stream::decode_row_internal,
+                "Query failed",
+                SingleRowExpectation::ZeroOrOne,
+            ),
+            TransactionInner::Mysql(tx_arc) => Self::execute_single_on(
+                Arc::clone(tx_arc),
+                sql.text.clone(),
+                sql.params.clone(),
+                crate::mysql::bind_value,
+                crate::mysql_stream::decode_row_internal,
+                "Query failed",
+                SingleRowExpectation::ZeroOrOne,
+            ),
+            TransactionInner::Sqlite(tx_arc) => Self::execute_single_on(
+                Arc::clone(tx_arc),
+                sql.text.clone(),
+                sql.params.clone(),
+                crate::sqlite::bind_value,
+                crate::sqlite_stream::decode_row_internal,
+                "Query failed",
+                SingleRowExpectation::ZeroOrOne,
             ),
         }
     }

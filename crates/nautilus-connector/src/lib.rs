@@ -87,6 +87,7 @@ mod postgres;
 mod postgres_stream;
 mod row;
 mod row_stream;
+mod single_row;
 mod sqlite;
 mod sqlite_stream;
 pub mod transaction;

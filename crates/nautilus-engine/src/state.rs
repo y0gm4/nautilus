@@ -104,6 +104,30 @@ impl DatabaseClient {
         })
     }
 
+    /// Execute a rendered SQL query with sqlx statement persistence disabled.
+    ///
+    /// This is used only for raw/direct query paths that may run through
+    /// PgBouncer-style transaction poolers.
+    pub async fn execute_query_unprepared(
+        &self,
+        sql: &Sql,
+        context: &str,
+    ) -> Result<Vec<Row>, ProtocolError> {
+        match self {
+            DatabaseClient::Postgres(client) => client
+                .executor()
+                .execute_collect_unprepared(sql)
+                .await
+                .map_err(|e| connector_to_protocol(e, context)),
+            DatabaseClient::Mysql(client) => execute_all(client.executor(), sql)
+                .await
+                .map_err(|e| connector_to_protocol(e, context)),
+            DatabaseClient::Sqlite(client) => execute_all(client.executor(), sql)
+                .await
+                .map_err(|e| connector_to_protocol(e, context)),
+        }
+    }
+
     /// Execute a mutation SQL and return the number of affected rows.
     pub async fn execute_affected(&self, sql: &Sql, context: &str) -> Result<usize, ProtocolError> {
         with_client!(self, client => {
@@ -295,21 +319,27 @@ impl EngineState {
 
     /// Execute a SQL query using the direct connection when available, otherwise the pooled one.
     ///
-    /// Raw SQL queries should use this so they bypass connection poolers (e.g. PgBouncer)
-    /// that do not support prepared statements. If a `tx_id` is provided the query always
-    /// runs on the transaction's connection regardless.
+    /// Raw SQL queries should use this so they bypass connection poolers
+    /// (e.g. PgBouncer) when possible and disable sqlx statement persistence.
+    /// If a `tx_id` is provided the query always runs on the transaction's
+    /// connection regardless.
     pub async fn execute_direct_query_on(
         &self,
         sql: &Sql,
         context: &str,
         tx_id: Option<&str>,
     ) -> Result<Vec<Row>, ProtocolError> {
-        if tx_id.is_some() {
-            return self.execute_query_on(sql, context, tx_id).await;
+        if let Some(tx_id) = tx_id {
+            let tx_client = self.transaction_client_for_request(tx_id).await?;
+            return tx_client
+                .executor()
+                .execute_collect_unprepared(sql)
+                .await
+                .map_err(|e| connector_to_protocol(e, context));
         }
         match &self.direct_client {
-            Some(direct) => direct.execute_query(sql, context).await,
-            None => self.client.execute_query(sql, context).await,
+            Some(direct) => direct.execute_query_unprepared(sql, context).await,
+            None => self.client.execute_query_unprepared(sql, context).await,
         }
     }
 
