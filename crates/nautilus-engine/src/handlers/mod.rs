@@ -264,6 +264,17 @@ pub async fn handle_request_embedded(
     }
 }
 
+/// Handle a typed Rust `findMany` request in-process without going through the
+/// JSON-RPC envelope or engine JSON argument format.
+pub async fn handle_find_many_typed(
+    state: &EngineState,
+    model_name: &str,
+    args: &nautilus_core::FindManyArgs,
+    transaction_id: Option<&str>,
+) -> Result<Vec<nautilus_connector::Row>, ProtocolError> {
+    crud::handle_find_many_typed(state, model_name, args, transaction_id).await
+}
+
 fn response_from_result(
     id: Option<nautilus_protocol::RpcId>,
     result: Result<Box<serde_json::value::RawValue>, ProtocolError>,

@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value as JsonValue;
 
-use nautilus_core::{BinaryOp, Expr, OrderBy, OrderDir, Select, Value, VectorMetric};
+use nautilus_core::{
+    BinaryOp, Expr, FindManyArgs, IncludeRelation, OrderBy, OrderDir, Select, Value, VectorMetric,
+};
 use nautilus_protocol::ProtocolError;
 use nautilus_schema::ir::{ModelIr, ResolvedFieldType, ScalarType};
 
@@ -134,7 +136,150 @@ pub struct QueryArgs {
     pub nearest: Option<VectorNearestQuery>,
 }
 
+fn strip_column_qualifier(name: &str) -> String {
+    name.split_once("__")
+        .map(|(_, column)| column.to_string())
+        .unwrap_or_else(|| name.to_string())
+}
+
+fn normalize_order_by(order_by: &[OrderBy]) -> Vec<OrderBy> {
+    order_by
+        .iter()
+        .map(|order| OrderBy::new(strip_column_qualifier(&order.column), order.direction))
+        .collect()
+}
+
+fn normalize_select(select: &HashMap<String, bool>) -> HashSet<String> {
+    select
+        .iter()
+        .filter(|(_, enabled)| **enabled)
+        .map(|(field, _)| strip_column_qualifier(field))
+        .collect()
+}
+
+fn normalize_cursor(cursor: &HashMap<String, Value>) -> HashMap<String, Value> {
+    cursor
+        .iter()
+        .map(|(field, value)| (strip_column_qualifier(field), value.clone()))
+        .collect()
+}
+
+fn normalize_distinct(distinct: &[String]) -> Vec<String> {
+    distinct
+        .iter()
+        .map(|field| strip_column_qualifier(field))
+        .collect()
+}
+
+fn include_relation_to_node(include: &IncludeRelation) -> IncludeNode {
+    IncludeNode {
+        filter: include.where_.clone(),
+        nested: include_map_to_nodes(&include.include),
+        take: include.take,
+        skip: include.skip,
+        order_by: normalize_order_by(&include.order_by),
+    }
+}
+
+fn include_map_to_nodes(
+    include: &HashMap<String, IncludeRelation>,
+) -> HashMap<String, IncludeNode> {
+    include
+        .iter()
+        .map(|(field, relation)| (field.clone(), include_relation_to_node(relation)))
+        .collect()
+}
+
 impl QueryArgs {
+    /// Convert typed Rust `FindManyArgs` into internal query components without
+    /// passing through the JSON protocol shape.
+    pub(crate) fn from_find_many_args(
+        args: &FindManyArgs,
+        field_types: &FieldTypeMap,
+    ) -> Result<Self, ProtocolError> {
+        let select = normalize_select(&args.select);
+        let include = include_map_to_nodes(&args.include);
+
+        if !select.is_empty() && !include.is_empty() {
+            return Err(ProtocolError::InvalidParams(
+                "'select' and 'include' cannot be used together. Use 'select' for projection only, or 'include' for relation loading.".to_string(),
+            ));
+        }
+
+        let (take, backward) = if let Some(take) = args.take {
+            if take < 0 {
+                (Some(take.unsigned_abs() as i32), true)
+            } else {
+                (Some(take), false)
+            }
+        } else {
+            (None, false)
+        };
+
+        let cursor = args.cursor.as_ref().map(normalize_cursor);
+        let distinct = normalize_distinct(&args.distinct);
+        let nearest = if let Some(nearest) = args.nearest.as_ref() {
+            let field = strip_column_qualifier(&nearest.field);
+            let field_type = field_types.get(field.as_str()).ok_or_else(|| {
+                ProtocolError::InvalidParams(format!(
+                    "'nearest.field' references unknown field '{}'",
+                    field
+                ))
+            })?;
+
+            let ResolvedFieldType::Scalar(ScalarType::Vector { .. }) = field_type else {
+                return Err(ProtocolError::InvalidParams(format!(
+                    "'nearest.field' must reference a Vector field, got '{}'",
+                    field
+                )));
+            };
+
+            Some(VectorNearestQuery {
+                field,
+                query: nearest.query.clone(),
+                metric: nearest.metric,
+            })
+        } else {
+            None
+        };
+
+        if nearest.is_some() {
+            if !matches!(take, Some(value) if value > 0) {
+                return Err(ProtocolError::InvalidParams(
+                    "'nearest' requires a positive 'take' limit".to_string(),
+                ));
+            }
+            if backward {
+                return Err(ProtocolError::InvalidParams(
+                    "'nearest' does not support backward pagination".to_string(),
+                ));
+            }
+            if cursor.is_some() {
+                return Err(ProtocolError::InvalidParams(
+                    "'nearest' cannot be combined with 'cursor'".to_string(),
+                ));
+            }
+            if !distinct.is_empty() {
+                return Err(ProtocolError::InvalidParams(
+                    "'nearest' cannot be combined with 'distinct'".to_string(),
+                ));
+            }
+        }
+
+        Ok(QueryArgs {
+            filter: args.where_.clone(),
+            order_by: normalize_order_by(&args.order_by),
+            take,
+            skip: args.skip,
+            include,
+            select,
+            cursor,
+            backward,
+            distinct,
+            nearest,
+        })
+    }
+
     /// Parse with no relation or field-type context (backward-compatible).
     pub fn parse(args: Option<JsonValue>) -> Result<Self, ProtocolError> {
         Self::parse_with_context(

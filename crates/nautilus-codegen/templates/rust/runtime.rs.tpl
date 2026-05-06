@@ -12,8 +12,7 @@ use nautilus_dialect::Dialect;
 use nautilus_engine::{handlers, EngineState};
 use nautilus_protocol::{
     CountParams, CreateManyParams, CreateParams, GroupByParams, ProtocolError, UpdateParams,
-    PROTOCOL_VERSION, QUERY_COUNT, QUERY_CREATE, QUERY_CREATE_MANY, QUERY_FIND_MANY, QUERY_GROUP_BY,
-    QUERY_UPDATE,
+    PROTOCOL_VERSION, QUERY_COUNT, QUERY_CREATE, QUERY_CREATE_MANY, QUERY_GROUP_BY, QUERY_UPDATE,
 };
 use nautilus_schema::validate_schema_source;
 use serde_json::Value as JsonValue;
@@ -468,36 +467,15 @@ where
         return Ok(None);
     };
 
-    let args_json = match nautilus_core::find_many_args_to_protocol_object(args) {
-        Ok(value) => value,
-        Err(_) => return Ok(None),
-    };
-
     let transaction_id = client.transaction_id();
-    let mut params = serde_json::Map::with_capacity(
-        2 + if args_json.is_empty() { 0 } else { 1 } + if transaction_id.is_some() { 1 } else { 0 },
-    );
-    params.insert(
-        "protocolVersion".to_string(),
-        JsonValue::from(PROTOCOL_VERSION),
-    );
-    params.insert("model".to_string(), JsonValue::String(model.to_string()));
-    if !args_json.is_empty() {
-        params.insert("args".to_string(), JsonValue::Object(args_json));
-    }
-    if let Some(transaction_id) = transaction_id {
-        params.insert(
-            "transactionId".to_string(),
-            JsonValue::String(transaction_id),
-        );
-    }
-
-    let rows = execute_engine_rows_request(
+    let rows = handlers::handle_find_many_typed(
         state.as_ref(),
-        QUERY_FIND_MANY,
-        JsonValue::Object(params),
+        model,
+        args,
+        transaction_id.as_deref(),
     )
-    .await?;
+    .await
+    .map_err(map_engine_protocol_error)?;
 
     let mut decoded = Vec::with_capacity(rows.len());
     for row in rows {

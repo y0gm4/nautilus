@@ -48,6 +48,15 @@ pub(super) async fn handle_find_many_embedded(
     read::handle_find_many_embedded(state, request).await
 }
 
+pub(super) async fn handle_find_many_typed(
+    state: &EngineState,
+    model_name: &str,
+    args: &nautilus_core::FindManyArgs,
+    transaction_id: Option<&str>,
+) -> Result<Vec<Row>, ProtocolError> {
+    read::execute_find_many_typed(state, model_name, args, transaction_id).await
+}
+
 pub(super) async fn handle_find_first(
     state: &EngineState,
     request: RpcRequest,

@@ -315,6 +315,19 @@ pub(super) async fn execute_find_many_params(
     execute_find_many_rows(state, model, query_args, tx_id.as_deref()).await
 }
 
+pub(super) async fn execute_find_many_typed(
+    state: &EngineState,
+    model_name: &str,
+    args: &nautilus_core::FindManyArgs,
+    transaction_id: Option<&str>,
+) -> Result<Vec<Row>, ProtocolError> {
+    let model = get_model_or_error(state, model_name)?;
+    let metadata = state.model_metadata(model);
+    let query_args = QueryArgs::from_find_many_args(args, metadata.field_types())?;
+
+    execute_find_many_rows(state, model, query_args, transaction_id).await
+}
+
 /// Handle `query.findMany`.
 ///
 /// Builds a SELECT for the requested model, applying optional `where`, `orderBy`,
