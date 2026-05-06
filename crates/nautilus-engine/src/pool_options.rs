@@ -13,6 +13,7 @@ pub struct EnginePoolOptions {
     acquire_timeout: Option<Duration>,
     idle_timeout: Option<Option<Duration>>,
     test_before_acquire: Option<bool>,
+    statement_cache_capacity: Option<usize>,
 }
 
 impl EnginePoolOptions {
@@ -24,6 +25,7 @@ impl EnginePoolOptions {
             acquire_timeout: None,
             idle_timeout: None,
             test_before_acquire: None,
+            statement_cache_capacity: None,
         }
     }
 
@@ -74,6 +76,14 @@ impl EnginePoolOptions {
         self
     }
 
+    /// Override the per-connection statement cache capacity used by sqlx.
+    ///
+    /// Set this to `0` to disable statement caching entirely.
+    pub fn statement_cache_capacity(mut self, statement_cache_capacity: usize) -> Self {
+        self.statement_cache_capacity = Some(statement_cache_capacity);
+        self
+    }
+
     /// Return the configured maximum-connection override, if any.
     pub const fn get_max_connections(&self) -> Option<u32> {
         self.max_connections
@@ -99,6 +109,11 @@ impl EnginePoolOptions {
         self.test_before_acquire
     }
 
+    /// Return the configured statement-cache-capacity override, if any.
+    pub const fn get_statement_cache_capacity(&self) -> Option<usize> {
+        self.statement_cache_capacity
+    }
+
     /// Convert engine-level overrides into connector-level pool options.
     pub fn to_connector_pool_options(self) -> ConnectorPoolOptions {
         let mut options = ConnectorPoolOptions::new();
@@ -117,6 +132,9 @@ impl EnginePoolOptions {
         if let Some(test_before_acquire) = self.test_before_acquire {
             options = options.test_before_acquire(test_before_acquire);
         }
+        if let Some(statement_cache_capacity) = self.statement_cache_capacity {
+            options = options.statement_cache_capacity(statement_cache_capacity);
+        }
         options
     }
 
@@ -128,6 +146,7 @@ impl EnginePoolOptions {
             acquire_timeout: options.get_acquire_timeout(),
             idle_timeout: options.get_idle_timeout(),
             test_before_acquire: options.get_test_before_acquire(),
+            statement_cache_capacity: options.get_statement_cache_capacity(),
         }
     }
 }
@@ -144,7 +163,8 @@ mod tests {
             .min_connections(4)
             .acquire_timeout(Duration::from_secs(3))
             .disable_idle_timeout()
-            .test_before_acquire(false);
+            .test_before_acquire(false)
+            .statement_cache_capacity(12);
 
         let connector = engine.to_connector_pool_options();
 
@@ -156,6 +176,7 @@ mod tests {
         );
         assert_eq!(connector.get_idle_timeout(), Some(None));
         assert_eq!(connector.get_test_before_acquire(), Some(false));
+        assert_eq!(connector.get_statement_cache_capacity(), Some(12));
     }
 
     #[test]
@@ -163,7 +184,8 @@ mod tests {
         let connector = nautilus_connector::ConnectorPoolOptions::new()
             .max_connections(16)
             .idle_timeout(Duration::from_secs(30))
-            .test_before_acquire(true);
+            .test_before_acquire(true)
+            .statement_cache_capacity(4);
 
         let engine = EnginePoolOptions::from_connector_pool_options(connector);
 
@@ -173,5 +195,6 @@ mod tests {
             Some(Some(Duration::from_secs(30)))
         );
         assert_eq!(engine.get_test_before_acquire(), Some(true));
+        assert_eq!(engine.get_statement_cache_capacity(), Some(4));
     }
 }

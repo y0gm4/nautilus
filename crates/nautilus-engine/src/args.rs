@@ -114,6 +114,18 @@ impl CliArgs {
                     pool_options = pool_options.test_before_acquire(value);
                     i += 2;
                 }
+                "--statement-cache-capacity" => {
+                    if i + 1 >= args.len() {
+                        return Err(
+                            "--statement-cache-capacity requires a numeric argument".to_string()
+                        );
+                    }
+                    let value = args[i + 1].parse::<usize>().map_err(|_| {
+                        "--statement-cache-capacity requires a valid usize argument".to_string()
+                    })?;
+                    pool_options = pool_options.statement_cache_capacity(value);
+                    i += 2;
+                }
                 arg => {
                     return Err(format!("Unknown argument: {}", arg));
                 }
@@ -164,6 +176,8 @@ mod tests {
             "30000",
             "--test-before-acquire",
             "false",
+            "--statement-cache-capacity",
+            "64",
         ]))
         .unwrap();
         assert_eq!(cli.schema_path.as_deref(), Some("s.nautilus"));
@@ -183,6 +197,7 @@ mod tests {
             Some(Some(std::time::Duration::from_millis(30000)))
         );
         assert_eq!(cli.pool_options.get_test_before_acquire(), Some(false));
+        assert_eq!(cli.pool_options.get_statement_cache_capacity(), Some(64));
     }
 
     #[test]

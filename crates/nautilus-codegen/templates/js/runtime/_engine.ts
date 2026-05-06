@@ -21,6 +21,7 @@ export interface EnginePoolOptions {
   acquireTimeoutMs?: number;
   idleTimeoutMs?: number | null;
   testBeforeAcquire?: boolean;
+  statementCacheCapacity?: number;
 }
 
 /**
@@ -124,6 +125,12 @@ export class EngineProcess {
       args.push(
         '--test-before-acquire',
         String(this.poolOptions.testBeforeAcquire),
+      );
+    }
+    if (this.poolOptions.statementCacheCapacity != null) {
+      args.push(
+        '--statement-cache-capacity',
+        String(this.poolOptions.statementCacheCapacity),
       );
     }
 

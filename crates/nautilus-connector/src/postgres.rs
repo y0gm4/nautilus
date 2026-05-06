@@ -9,7 +9,7 @@ use futures::future::BoxFuture;
 use nautilus_core::Value;
 use nautilus_dialect::Sql;
 use sqlx::postgres::types::PgHstore;
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 
 /// PostgreSQL executor using sqlx.
 ///
@@ -50,6 +50,10 @@ impl PgExecutor {
     ///
     /// Any override not provided keeps the same default used by [`Self::new`].
     pub async fn new_with_options(url: &str, pool_options: ConnectorPoolOptions) -> Result<Self> {
+        let connect_options = pool_options.apply_to_postgres_connect_options(
+            url.parse::<PgConnectOptions>()
+                .map_err(|e| Error::connection(e, "Invalid PostgreSQL connection options"))?,
+        );
         let pool = pool_options
             .apply_to(
                 PgPoolOptions::new()
@@ -59,7 +63,7 @@ impl PgExecutor {
                     .idle_timeout(Duration::from_secs(300))
                     .test_before_acquire(true),
             )
-            .connect(url)
+            .connect_with(connect_options)
             .await
             .map_err(|e| Error::connection(e, "Failed to connect to database"))?;
 

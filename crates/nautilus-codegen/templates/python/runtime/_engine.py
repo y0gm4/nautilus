@@ -32,6 +32,7 @@ class EnginePoolOptions:
     idle_timeout_ms: Optional[int] = None
     disable_idle_timeout: bool = False
     test_before_acquire: Optional[bool] = None
+    statement_cache_capacity: Optional[int] = None
 
     def to_cli_args(self) -> list[str]:
         if self.disable_idle_timeout and self.idle_timeout_ms is not None:
@@ -53,6 +54,10 @@ class EnginePoolOptions:
         if self.test_before_acquire is not None:
             args.extend(
                 ["--test-before-acquire", "true" if self.test_before_acquire else "false"]
+            )
+        if self.statement_cache_capacity is not None:
+            args.extend(
+                ["--statement-cache-capacity", str(self.statement_cache_capacity)]
             )
         return args
 

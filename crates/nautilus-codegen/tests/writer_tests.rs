@@ -276,6 +276,10 @@ fn test_write_rust_code_runtime_exposes_pool_options_for_embedded_and_direct_pat
         "runtime.rs should store pool options on the generated client:\n{runtime_content}"
     );
     assert!(
+        runtime_content.contains("ConnectorPoolOptions::default()"),
+        "runtime.rs should keep using ConnectorPoolOptions so statement-cache tuning stays available on generated clients:\n{runtime_content}"
+    );
+    assert!(
         runtime_content.contains("pub enum EngineMode"),
         "runtime.rs should expose EngineMode so callers can pick Auto/Always/Never:\n{runtime_content}"
     );

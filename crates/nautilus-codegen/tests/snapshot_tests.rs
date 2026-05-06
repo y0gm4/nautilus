@@ -760,7 +760,8 @@ model User {
         engine_runtime.contains("class EnginePoolOptions:")
             && engine_runtime.contains("--max-connections")
             && engine_runtime.contains("--disable-idle-timeout")
-            && engine_runtime.contains("--test-before-acquire"),
+            && engine_runtime.contains("--test-before-acquire")
+            && engine_runtime.contains("--statement-cache-capacity"),
         "expected Python runtime engine to forward pool options to the CLI:\n{engine_runtime}"
     );
 }
@@ -1265,7 +1266,8 @@ model User {
         engine_runtime_dts.contains("export interface EnginePoolOptions")
             && engine_runtime.contains("--max-connections")
             && engine_runtime.contains("--disable-idle-timeout")
-            && engine_runtime.contains("--test-before-acquire"),
+            && engine_runtime.contains("--test-before-acquire")
+            && engine_runtime.contains("--statement-cache-capacity"),
         "expected JS runtime engine to forward pool options to the CLI:\n{engine_runtime}"
     );
 }

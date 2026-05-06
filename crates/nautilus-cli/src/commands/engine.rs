@@ -42,6 +42,10 @@ pub enum EngineCommand {
         /// Override whether pooled connections are pinged before acquisition.
         #[arg(long)]
         test_before_acquire: Option<bool>,
+
+        /// Override the per-connection sqlx statement cache capacity.
+        #[arg(long)]
+        statement_cache_capacity: Option<usize>,
     },
 }
 
@@ -57,6 +61,7 @@ pub async fn run(cmd: EngineCommand) -> anyhow::Result<()> {
             idle_timeout_ms,
             disable_idle_timeout,
             test_before_acquire,
+            statement_cache_capacity,
         } => {
             let mut pool_options = EnginePoolOptions::new();
             if let Some(max_connections) = max_connections {
@@ -76,6 +81,9 @@ pub async fn run(cmd: EngineCommand) -> anyhow::Result<()> {
             }
             if let Some(test_before_acquire) = test_before_acquire {
                 pool_options = pool_options.test_before_acquire(test_before_acquire);
+            }
+            if let Some(statement_cache_capacity) = statement_cache_capacity {
+                pool_options = pool_options.statement_cache_capacity(statement_cache_capacity);
             }
 
             nautilus_engine::run_engine_with_schema_resolution(

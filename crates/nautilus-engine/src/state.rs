@@ -156,22 +156,19 @@ impl EngineState {
         match provider {
             DatabaseProvider::Postgres => {
                 let pg_client = Client::postgres_with_options(url, connector_pool_options).await?;
-                Ok((
-                    Arc::new(PostgresDialect),
-                    DatabaseClient::Postgres(pg_client),
-                ))
+                let dialect: Arc<dyn Dialect + Send + Sync> = Arc::new(PostgresDialect);
+                Ok((dialect, DatabaseClient::Postgres(pg_client)))
             }
             DatabaseProvider::Mysql => {
                 let mysql_client = Client::mysql_with_options(url, connector_pool_options).await?;
-                Ok((Arc::new(MysqlDialect), DatabaseClient::Mysql(mysql_client)))
+                let dialect: Arc<dyn Dialect + Send + Sync> = Arc::new(MysqlDialect);
+                Ok((dialect, DatabaseClient::Mysql(mysql_client)))
             }
             DatabaseProvider::Sqlite => {
                 let sqlite_client =
                     Client::sqlite_with_options(url, connector_pool_options).await?;
-                Ok((
-                    Arc::new(SqliteDialect),
-                    DatabaseClient::Sqlite(sqlite_client),
-                ))
+                let dialect: Arc<dyn Dialect + Send + Sync> = Arc::new(SqliteDialect);
+                Ok((dialect, DatabaseClient::Sqlite(sqlite_client)))
             }
         }
     }

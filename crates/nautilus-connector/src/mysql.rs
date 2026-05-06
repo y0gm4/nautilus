@@ -6,7 +6,7 @@ use crate::{ConnectorPoolOptions, Executor, MysqlRowStream, Row};
 use futures::future::BoxFuture;
 use nautilus_core::Value;
 use nautilus_dialect::Sql;
-use sqlx::mysql::{MySqlPool, MySqlPoolOptions};
+use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions};
 
 /// MySQL executor using sqlx.
 ///
@@ -46,9 +46,13 @@ impl MysqlExecutor {
     ///
     /// Any override not provided keeps the same default used by [`Self::new`].
     pub async fn new_with_options(url: &str, pool_options: ConnectorPoolOptions) -> Result<Self> {
+        let connect_options = pool_options.apply_to_mysql_connect_options(
+            url.parse::<MySqlConnectOptions>()
+                .map_err(|e| Error::connection(e, "Invalid MySQL connection options"))?,
+        );
         let pool = pool_options
             .apply_to(MySqlPoolOptions::new().max_connections(5))
-            .connect(url)
+            .connect_with(connect_options)
             .await
             .map_err(|e| Error::connection(e, "Failed to connect to MySQL"))?;
 
@@ -63,6 +67,7 @@ impl MysqlExecutor {
     /// Execute a raw SQL statement with no result rows (e.g., DDL).
     pub async fn execute_raw(&self, sql: &str) -> Result<()> {
         sqlx::query(sql)
+            .persistent(false)
             .execute(&self.pool)
             .await
             .map(|_| ())

@@ -1,10 +1,14 @@
-//! Shared connection-pool overrides for connector executors.
+//! Shared connection-pool and statement-cache overrides for connector executors.
 
 use std::time::Duration;
 
-use sqlx::{pool::PoolOptions as SqlxPoolOptions, Database};
+use sqlx::{
+    mysql::MySqlConnectOptions, pool::PoolOptions as SqlxPoolOptions, postgres::PgConnectOptions,
+    sqlite::SqliteConnectOptions, Database,
+};
 
-/// Optional overrides for the sqlx connection pool used by Nautilus executors.
+/// Optional overrides for the sqlx connection pool and statement cache used by
+/// Nautilus executors.
 ///
 /// Any field left unset preserves the backend-specific defaults used by
 /// [`crate::PgExecutor::new`], [`crate::MysqlExecutor::new`], or
@@ -16,6 +20,7 @@ pub struct ConnectorPoolOptions {
     acquire_timeout: Option<Duration>,
     idle_timeout: Option<Option<Duration>>,
     test_before_acquire: Option<bool>,
+    statement_cache_capacity: Option<usize>,
 }
 
 impl ConnectorPoolOptions {
@@ -27,6 +32,7 @@ impl ConnectorPoolOptions {
             acquire_timeout: None,
             idle_timeout: None,
             test_before_acquire: None,
+            statement_cache_capacity: None,
         }
     }
 
@@ -62,6 +68,14 @@ impl ConnectorPoolOptions {
         self
     }
 
+    /// Override the per-connection statement cache capacity used by sqlx.
+    ///
+    /// Set this to `0` to disable statement caching entirely.
+    pub fn statement_cache_capacity(mut self, statement_cache_capacity: usize) -> Self {
+        self.statement_cache_capacity = Some(statement_cache_capacity);
+        self
+    }
+
     /// Return the configured maximum-connection override, if any.
     pub const fn get_max_connections(&self) -> Option<u32> {
         self.max_connections
@@ -90,6 +104,11 @@ impl ConnectorPoolOptions {
         self.test_before_acquire
     }
 
+    /// Return the configured statement-cache-capacity override, if any.
+    pub const fn get_statement_cache_capacity(&self) -> Option<usize> {
+        self.statement_cache_capacity
+    }
+
     pub(crate) fn apply_to<DB: Database>(
         &self,
         mut options: SqlxPoolOptions<DB>,
@@ -111,13 +130,48 @@ impl ConnectorPoolOptions {
         }
         options
     }
+
+    pub(crate) fn apply_to_postgres_connect_options(
+        &self,
+        mut options: PgConnectOptions,
+    ) -> PgConnectOptions {
+        if let Some(statement_cache_capacity) = self.statement_cache_capacity {
+            options = options.statement_cache_capacity(statement_cache_capacity);
+        }
+        options
+    }
+
+    pub(crate) fn apply_to_mysql_connect_options(
+        &self,
+        mut options: MySqlConnectOptions,
+    ) -> MySqlConnectOptions {
+        if let Some(statement_cache_capacity) = self.statement_cache_capacity {
+            options = options.statement_cache_capacity(statement_cache_capacity);
+        }
+        options
+    }
+
+    pub(crate) fn apply_to_sqlite_connect_options(
+        &self,
+        mut options: SqliteConnectOptions,
+    ) -> SqliteConnectOptions {
+        if let Some(statement_cache_capacity) = self.statement_cache_capacity {
+            options = options.statement_cache_capacity(statement_cache_capacity);
+        }
+        options
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use sqlx::postgres::PgPoolOptions;
+    use sqlx::{
+        mysql::MySqlConnectOptions,
+        postgres::{PgConnectOptions, PgPoolOptions},
+        sqlite::SqliteConnectOptions,
+        ConnectOptions,
+    };
 
     use super::ConnectorPoolOptions;
 
@@ -150,5 +204,63 @@ mod tests {
             .apply_to(base);
 
         assert_eq!(applied.get_idle_timeout(), None);
+    }
+
+    #[test]
+    fn apply_to_postgres_connect_options_can_override_statement_cache_capacity() {
+        let applied = ConnectorPoolOptions::new()
+            .statement_cache_capacity(7)
+            .apply_to_postgres_connect_options(
+                "postgres://localhost/nautilus"
+                    .parse::<PgConnectOptions>()
+                    .expect("postgres url should parse"),
+            );
+
+        let query = applied.to_url_lossy();
+        assert_eq!(
+            query
+                .query_pairs()
+                .find(|(key, _)| key == "statement-cache-capacity")
+                .map(|(_, value)| value.into_owned())
+                .as_deref(),
+            Some("7")
+        );
+    }
+
+    #[test]
+    fn apply_to_mysql_connect_options_can_override_statement_cache_capacity() {
+        let applied = ConnectorPoolOptions::new()
+            .statement_cache_capacity(9)
+            .apply_to_mysql_connect_options(
+                "mysql://root:password@localhost/nautilus"
+                    .parse::<MySqlConnectOptions>()
+                    .expect("mysql url should parse"),
+            );
+
+        let query = applied.to_url_lossy();
+        assert_eq!(
+            query
+                .query_pairs()
+                .find(|(key, _)| key == "statement-cache-capacity")
+                .map(|(_, value)| value.into_owned())
+                .as_deref(),
+            Some("9")
+        );
+    }
+
+    #[test]
+    fn apply_to_sqlite_connect_options_can_override_statement_cache_capacity() {
+        let applied = ConnectorPoolOptions::new()
+            .statement_cache_capacity(0)
+            .apply_to_sqlite_connect_options(
+                "sqlite://nautilus.db"
+                    .parse::<SqliteConnectOptions>()
+                    .expect("sqlite url should parse"),
+            );
+
+        assert!(
+            format!("{applied:?}").contains("statement_cache_capacity: 0"),
+            "sqlite connect options should reflect the overridden statement cache capacity: {applied:?}"
+        );
     }
 }

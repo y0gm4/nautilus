@@ -66,6 +66,12 @@ export class EngineProcess {
     if (this.poolOptions.testBeforeAcquire != null) {
       args.push('--test-before-acquire', String(this.poolOptions.testBeforeAcquire));
     }
+    if (this.poolOptions.statementCacheCapacity != null) {
+      args.push(
+        '--statement-cache-capacity',
+        String(this.poolOptions.statementCacheCapacity),
+      );
+    }
 
     return args;
   }

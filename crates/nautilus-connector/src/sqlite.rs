@@ -6,7 +6,7 @@ use crate::{ConnectorPoolOptions, Executor, Row, SqliteRowStream};
 use futures::future::BoxFuture;
 use nautilus_core::Value;
 use nautilus_dialect::Sql;
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 /// SQLite executor using sqlx.
 ///
@@ -49,9 +49,13 @@ impl SqliteExecutor {
     ///
     /// Any override not provided keeps the same default used by [`Self::new`].
     pub async fn new_with_options(url: &str, pool_options: ConnectorPoolOptions) -> Result<Self> {
+        let connect_options = pool_options.apply_to_sqlite_connect_options(
+            url.parse::<SqliteConnectOptions>()
+                .map_err(|e| Error::connection(e, "Invalid SQLite connection options"))?,
+        );
         let pool = pool_options
             .apply_to(SqlitePoolOptions::new().max_connections(5))
-            .connect(url)
+            .connect_with(connect_options)
             .await
             .map_err(|e| Error::connection(e, "Failed to connect to SQLite"))?;
 
@@ -66,6 +70,7 @@ impl SqliteExecutor {
     /// Execute a raw SQL statement with no result rows (e.g., DDL).
     pub async fn execute_raw(&self, sql: &str) -> Result<()> {
         sqlx::query(sql)
+            .persistent(false)
             .execute(&self.pool)
             .await
             .map(|_| ())
