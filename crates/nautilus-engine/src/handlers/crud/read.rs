@@ -1,5 +1,5 @@
 use super::common::{
-    parse_and_qualify_model_filter, qualify_model_filter, wrap_data_result, wrap_result,
+    parse_and_qualify_model_filter, qualify_model_filter, wrap_count_result, wrap_data_result,
 };
 use super::include::hydrate_rows_with_includes;
 use super::*;
@@ -232,9 +232,7 @@ pub(super) async fn handle_find_many(
         if chunks.peek().is_some() {
             while let Some(chunk) = chunks.next() {
                 let is_last = chunks.peek().is_none();
-                let data_raw = rows_to_raw_json(chunk)?;
-                let raw =
-                    wrap_result(format!("{{\"data\":{}}}", data_raw.get()), "findMany chunk")?;
+                let raw = wrap_data_result(chunk, "findMany chunk")?;
                 if is_last {
                     return Ok(raw);
                 }
@@ -401,7 +399,7 @@ pub(super) async fn handle_count(
         .map_err(|e| ProtocolError::InvalidParams(format!("Invalid count params: {}", e)))?;
 
     let count = execute_count_params(state, params).await?;
-    wrap_result(format!("{{\"count\":{}}}", count), "count result")
+    wrap_count_result(count, "count result")
 }
 
 async fn execute_count_params(

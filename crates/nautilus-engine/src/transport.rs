@@ -48,37 +48,51 @@ pub async fn run_request_loop(state: EngineState) -> Result<(), Box<dyn std::err
     let reaper_task = spawn_transaction_reaper(Arc::clone(&state));
     let stdin = tokio_io::stdin();
     let mut reader = tokio_io::BufReader::new(stdin);
-    let mut stdout = tokio_io::stdout();
+    let stdout = tokio_io::stdout();
 
     let (tx, mut rx) = mpsc::channel::<RpcResponse>(100);
 
     let writer_task = tokio::spawn(async move {
-        while let Some(response) = rx.recv().await {
-            let json = match serde_json::to_string(&response) {
-                Ok(j) => j,
-                Err(e) => {
+        // Buffered writer amortizes syscalls; we flush after each drained batch
+        // so chunked findMany partials still reach the client promptly.
+        let mut stdout = tokio_io::BufWriter::with_capacity(64 * 1024, stdout);
+        let mut batch: Vec<RpcResponse> = Vec::with_capacity(32);
+        let mut serialized: Vec<u8> = Vec::with_capacity(8 * 1024);
+
+        loop {
+            let received = rx.recv_many(&mut batch, 32).await;
+            if received == 0 {
+                break;
+            }
+
+            let mut write_failed = false;
+            for response in batch.drain(..) {
+                serialized.clear();
+                if let Err(e) = serde_json::to_writer(&mut serialized, &response) {
                     eprintln!("[engine] Failed to serialize response: {}", e);
-                    // Build a minimal error response so the client does not hang.
+                    serialized.clear();
                     let fallback = err(
                         response.id.clone(),
                         -32603,
                         format!("Failed to serialize response: {}", e),
                         None,
                     );
-                    match serde_json::to_string(&fallback) {
-                        Ok(j) => j,
-                        Err(_) => continue, // truly unrecoverable
+                    if serde_json::to_writer(&mut serialized, &fallback).is_err() {
+                        continue; // truly unrecoverable
                     }
                 }
-            };
-            if let Err(e) = stdout.write_all(json.as_bytes()).await {
-                eprintln!("[engine] Failed to write response: {}", e);
+                serialized.push(b'\n');
+                if let Err(e) = stdout.write_all(&serialized).await {
+                    eprintln!("[engine] Failed to write response: {}", e);
+                    write_failed = true;
+                    break;
+                }
+            }
+
+            if write_failed {
                 break;
             }
-            if let Err(e) = stdout.write_all(b"\n").await {
-                eprintln!("[engine] Failed to write newline: {}", e);
-                break;
-            }
+
             if let Err(e) = stdout.flush().await {
                 eprintln!("[engine] Failed to flush stdout: {}", e);
                 break;

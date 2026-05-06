@@ -74,25 +74,40 @@ pub(super) fn wrap_data_result(
     context: &str,
 ) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
     let data_raw = rows_to_raw_json(rows)?;
-    wrap_result(format!("{{\"data\":{}}}", data_raw.get()), context)
+    let data_str = data_raw.get();
+    let mut buf = String::with_capacity(data_str.len() + 9);
+    buf.push_str("{\"data\":");
+    buf.push_str(data_str);
+    buf.push('}');
+    wrap_result(buf, context)
 }
 
 pub(super) fn wrap_count_result(
     count: impl std::fmt::Display,
     context: &str,
 ) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
-    wrap_result(format!("{{\"count\":{}}}", count), context)
+    use std::fmt::Write;
+    let mut buf = String::with_capacity(32);
+    buf.push_str("{\"count\":");
+    let _ = write!(buf, "{}", count);
+    buf.push('}');
+    wrap_result(buf, context)
 }
 
 pub(super) fn wrap_mutation_result(
     rows: &[Row],
     context: &str,
 ) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
+    use std::fmt::Write;
     let data_raw = rows_to_raw_json(rows)?;
-    wrap_result(
-        format!("{{\"count\":{},\"data\":{}}}", rows.len(), data_raw.get()),
-        context,
-    )
+    let data_str = data_raw.get();
+    let mut buf = String::with_capacity(data_str.len() + 32);
+    buf.push_str("{\"count\":");
+    let _ = write!(buf, "{}", rows.len());
+    buf.push_str(",\"data\":");
+    buf.push_str(data_str);
+    buf.push('}');
+    wrap_result(buf, context)
 }
 
 pub(super) async fn execute_mutation_result(
