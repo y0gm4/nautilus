@@ -396,6 +396,70 @@ model Post {
 }
 
 #[test]
+fn test_rust_delete_uses_single_record_fast_path_for_unique_filters() {
+    let ir = validate(
+        r#"
+model User {
+  id       Int    @id @default(autoincrement())
+  email    String @unique
+  tenantId Int
+  slug     String
+
+  @@unique([tenantId, slug])
+}
+"#,
+    );
+    let models = generate_all_models(&ir, false);
+    let user_code = models.get("User").expect("User missing");
+
+    assert!(
+        user_code.contains("fn is_single_record_filter(filter: &nautilus_core::Expr) -> bool"),
+        "expected generated Rust code to recognize single-record filters:\n{user_code}"
+    );
+    assert!(
+        user_code.contains("&[\"tenant_id\", \"slug\"]"),
+        "expected composite unique constraints to participate in the delete fast path:\n{user_code}"
+    );
+    assert!(
+        user_code.contains(
+            "if self.client.dialect().supports_returning() && is_single_record_filter(&filter)"
+        ),
+        "expected delete() to use the single-query fast path for unique filters:\n{user_code}"
+    );
+}
+
+#[test]
+fn test_rust_upsert_attempts_update_before_find_on_returning_backends() {
+    let ir = validate(
+        r#"
+model User {
+  id    Int    @id @default(autoincrement())
+  email String @unique
+  name  String
+}
+"#,
+    );
+    let models = generate_all_models(&ir, false);
+    let user_code = models.get("User").expect("User missing");
+
+    let update_idx = user_code
+        .find("if self.client.dialect().supports_returning() && has_update_assignments {")
+        .expect("missing upsert update-first fast path");
+    let find_idx = user_code
+        .find("let existing = self.find_first(")
+        .expect("missing upsert fallback lookup");
+
+    assert!(
+        update_idx < find_idx,
+        "expected upsert() to try the update path before the read fallback:\n{user_code}"
+    );
+    assert!(
+        user_code.contains("let has_update_assignments = args.update.has_assignments();"),
+        "expected generated upsert() to reuse update-input assignment detection:\n{user_code}"
+    );
+}
+
+#[test]
 fn test_rust_named_inverse_relations_use_matching_relation_name() {
     let ir = validate(
         r#"

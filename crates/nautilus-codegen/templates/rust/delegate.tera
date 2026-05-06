@@ -62,6 +62,13 @@ impl {{ model_name }}UpdateInput {
 {%- endfor %}
         serde_json::Value::Object(data)
     }
+
+    fn has_assignments(&self) -> bool {
+{%- for field in create_fields %}
+        self.{{ field.name }}.is_some()
+{%- if not loop.last %} ||{% endif %}
+{%- endfor %}
+    }
 }
 
 /// Structured arguments for updating {{ model_name }} records.
@@ -688,6 +695,76 @@ fn serialize_update_filter_for_engine(
     Ok(Some(filter_json))
 }
 
+fn single_record_filter_field_name(column: &str) -> Option<&'static str> {
+{%- for field in scalar_fields %}
+    if column == "{{ table_name }}__{{ field.db_name }}"
+        || column == "{{ field.db_name }}"
+{%- if field.logical_name != field.db_name %}
+        || column == "{{ field.logical_name }}"
+{%- endif %}
+    {
+        return Some("{{ field.name }}");
+    }
+{%- endfor %}
+    None
+}
+
+fn collect_single_record_filter_fields(
+    expr: &nautilus_core::Expr,
+    fields: &mut std::collections::HashSet<&'static str>,
+) -> bool {
+    use nautilus_core::{BinaryOp, Expr};
+
+    match expr {
+        Expr::Binary {
+            left,
+            op: BinaryOp::And,
+            right,
+        } => {
+            collect_single_record_filter_fields(left, fields)
+                && collect_single_record_filter_fields(right, fields)
+        }
+        Expr::Binary {
+            left,
+            op: BinaryOp::Eq,
+            right,
+        } => match (&**left, &**right) {
+            (Expr::Column(column), Expr::Param(_)) | (Expr::Param(_), Expr::Column(column)) => {
+                let Some(field_name) = single_record_filter_field_name(column) else {
+                    return false;
+                };
+                fields.insert(field_name)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn matches_single_record_constraint(
+    fields: &std::collections::HashSet<&'static str>,
+    constraint: &[&str],
+) -> bool {
+    fields.len() == constraint.len() && constraint.iter().all(|field| fields.contains(field))
+}
+
+fn is_single_record_filter(filter: &nautilus_core::Expr) -> bool {
+    const SINGLE_RECORD_CONSTRAINTS: &[&[&str]] = &[
+{%- for constraint in single_record_constraints %}
+        &[{% for field in constraint %}"{{ field.name }}"{% if not loop.last %}, {% endif %}{% endfor %}],
+{%- endfor %}
+    ];
+
+    let mut fields = std::collections::HashSet::new();
+    if !collect_single_record_filter_fields(filter, &mut fields) {
+        return false;
+    }
+
+    SINGLE_RECORD_CONSTRAINTS
+        .iter()
+        .any(|constraint| matches_single_record_constraint(&fields, constraint))
+}
+
 /// Delegate for {{ model_name }} queries.
 ///
 /// Obtained via `client.{{ table_name }}` (or the model accessor). Each method
@@ -1051,6 +1128,35 @@ where
         &self,
         args: {{ model_name }}DeleteArgs,
     ) -> nautilus_core::Result<Option<{{ model_name }}>> {
+        if let Some(filter) = args.where_.clone() {
+            if self.client.dialect().supports_returning() && is_single_record_filter(&filter) {
+{%- if not is_async %}
+                let _c = self.client.clone();
+                return tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
+                    let deleted = {{ delete_name }}::new(_c).where_(filter).exec().await?;
+                    match deleted.len() {
+                        0 => Ok(None),
+                        1 => Ok(deleted.into_iter().next()),
+                        count => Err(nautilus_core::Error::Other(format!(
+                            "expected at most one deleted {{ model_name }} row, got {}",
+                            count
+                        ))),
+                    }
+                }));
+{%- else %}
+                let deleted = {{ delete_name }}::new(self.client.clone()).where_(filter).exec().await?;
+                return match deleted.len() {
+                    0 => Ok(None),
+                    1 => Ok(deleted.into_iter().next()),
+                    count => Err(nautilus_core::Error::Other(format!(
+                        "expected at most one deleted {{ model_name }} row, got {}",
+                        count
+                    ))),
+                };
+{%- endif %}
+            }
+        }
+
         // Find the first matching record to get its primary key
         let record = self.find_first(nautilus_core::FindManyArgs {
             where_: args.where_,
@@ -1245,12 +1351,35 @@ where
         &self,
         args: {{ model_name }}UpsertArgs,
     ) -> nautilus_core::Result<Option<{{ model_name }}>> {
+        let has_update_assignments = args.update.has_assignments();
+
+        if self.client.dialect().supports_returning() && has_update_assignments {
+            let updated = self.update({{ model_name }}UpdateArgs {
+                where_: args.where_.clone(),
+                data: args.update.clone(),
+            }){% if is_async %}.await{% endif %}?;
+
+            if let Some(record) = updated.into_iter().next() {
+                if !args.return_data {
+                    return Ok(None);
+                }
+                return Ok(Some(record));
+            }
+        }
+
         let existing = self.find_first(nautilus_core::FindManyArgs {
             where_: args.where_.clone(),
             ..Default::default()
         }){% if is_async %}.await{% endif %}?;
 
         if let Some(record) = existing {
+            if !has_update_assignments {
+                if !args.return_data {
+                    return Ok(None);
+                }
+                return Ok(Some(record));
+            }
+
             let updated = self.update({{ model_name }}UpdateArgs {
                 where_: args.where_,
                 data: args.update,

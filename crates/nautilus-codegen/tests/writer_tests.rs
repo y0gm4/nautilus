@@ -323,8 +323,8 @@ fn test_write_rust_code_uses_execute_fast_paths_in_generated_queries() {
         "generated single-row read builders should use execute_optional when decoding optional rows:\n{user_content}"
     );
     assert!(
-        user_content.contains("row.get_by_pos("),
-        "generated model decoders should use positional row access on the hot path:\n{user_content}"
+        user_content.contains("row.into_columns().into_iter().enumerate()"),
+        "generated model decoders should consume projected rows positionally on the hot path:\n{user_content}"
     );
 }
 

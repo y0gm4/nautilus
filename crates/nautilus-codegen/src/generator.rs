@@ -111,6 +111,8 @@ struct AggregateFieldContext {
 struct PkFieldContext {
     /// Snake-case logical name — used as the cursor map key in generated code.
     name: String,
+    /// Original logical field name from the schema.
+    logical_name: String,
     /// Database column name — used to build the `table__db_col` column reference.
     db_name: String,
 }
@@ -233,11 +235,53 @@ fn generate_model_with_registry(
                 .find(|f| f.logical_name.as_str() == *logical)
                 .map(|f| PkFieldContext {
                     name: f.logical_name.to_snake_case(),
+                    logical_name: f.logical_name.clone(),
                     db_name: f.db_name.clone(),
                 })
         })
         .collect();
     context.insert("pk_fields_with_db", &pk_fields_with_db);
+
+    let mut single_record_constraints = Vec::new();
+    let mut seen_constraint_keys = HashSet::new();
+
+    if !pk_fields_with_db.is_empty() {
+        let pk_key: Vec<String> = pk_fields_with_db
+            .iter()
+            .map(|field| field.db_name.clone())
+            .collect();
+        if seen_constraint_keys.insert(pk_key) {
+            single_record_constraints.push(pk_fields_with_db.clone());
+        }
+    }
+
+    for constraint in &model.unique_constraints {
+        let fields: Vec<PkFieldContext> = constraint
+            .fields
+            .iter()
+            .filter_map(|logical| {
+                model
+                    .scalar_fields()
+                    .find(|f| f.logical_name == *logical)
+                    .map(|f| PkFieldContext {
+                        name: f.logical_name.to_snake_case(),
+                        logical_name: f.logical_name.clone(),
+                        db_name: f.db_name.clone(),
+                    })
+            })
+            .collect();
+
+        if fields.len() != constraint.fields.len() || fields.is_empty() {
+            continue;
+        }
+
+        let constraint_key: Vec<String> =
+            fields.iter().map(|field| field.db_name.clone()).collect();
+        if seen_constraint_keys.insert(constraint_key) {
+            single_record_constraints.push(fields);
+        }
+    }
+    context.insert("single_record_constraints", &single_record_constraints);
 
     let mut enum_imports = HashSet::new();
     let mut composite_type_imports = HashSet::new();
