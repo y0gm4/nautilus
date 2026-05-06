@@ -356,8 +356,13 @@ impl<'a> Lexer<'a> {
     }
 
     /// Peek at the nth character ahead without consuming.
-    fn peek_n(&self, n: usize) -> Option<char> {
-        self.source[self.pos..].chars().nth(n)
+    fn peek_n(&mut self, n: usize) -> Option<char> {
+        if n == 0 {
+            return self.peek();
+        }
+
+        let _ = self.peek();
+        self.chars.clone().nth(n - 1)
     }
 
     /// Advance to the next character.
@@ -418,6 +423,16 @@ mod tests {
                 TokenKind::Ident("_private".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn test_peek_n_preserves_current_char_and_handles_utf8() {
+        let mut lexer = Lexer::new("aβ");
+
+        assert_eq!(lexer.peek_n(1), Some('β'));
+        assert_eq!(lexer.peek(), Some('a'));
+        lexer.advance();
+        assert_eq!(lexer.peek(), Some('β'));
     }
 
     #[test]
