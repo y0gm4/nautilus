@@ -206,6 +206,98 @@ pub(super) async fn execute_find_many_typed(
     execute_find_many_rows(state, model, query_args, transaction_id).await
 }
 
+async fn execute_find_unique_rows(
+    state: &EngineState,
+    model: &ModelIr,
+    qualified_filter: Expr,
+    selected_fields: &std::collections::HashSet<&str>,
+    tx_id: Option<&str>,
+) -> Result<Vec<Row>, ProtocolError> {
+    let metadata = state.model_metadata(model);
+    let pk_fields = metadata.primary_key_fields();
+
+    let mut builder = Select::from_table(&model.db_name).with_capacity(SelectCapacity {
+        items: metadata.scalar_fields().len(),
+        ..SelectCapacity::default()
+    });
+    let mut row_hints = Vec::new();
+
+    for field in metadata.scalar_fields() {
+        if !selected_fields.is_empty()
+            && !selected_fields.contains(field.logical_name())
+            && !pk_fields
+                .iter()
+                .any(|pk_field| pk_field.logical_name() == field.logical_name())
+        {
+            continue;
+        }
+
+        builder = builder.item(SelectItem::from(field.marker().clone()));
+        row_hints.push(field.hint());
+    }
+
+    let select = builder
+        .filter(qualified_filter)
+        .take(1)
+        .build()
+        .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to build query: {}", e)))?;
+
+    let sql = state
+        .dialect
+        .render_select_owned(select)
+        .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
+
+    normalize_rows_with_hints(
+        state.execute_query_on(&sql, "Query", tx_id).await?,
+        &row_hints,
+    )
+}
+
+pub(super) async fn execute_find_unique_typed(
+    state: &EngineState,
+    model_name: &str,
+    args: &nautilus_core::FindUniqueArgs,
+    transaction_id: Option<&str>,
+) -> Result<Vec<Row>, ProtocolError> {
+    if !args.include.is_empty() {
+        return execute_find_many_typed(
+            state,
+            model_name,
+            &nautilus_core::FindManyArgs {
+                where_: Some(args.where_.clone()),
+                take: Some(1),
+                select: args.select.clone(),
+                include: args.include.clone(),
+                ..Default::default()
+            },
+            transaction_id,
+        )
+        .await;
+    }
+
+    let model = get_model_or_error(state, model_name)?;
+    let metadata = state.model_metadata(model);
+    let qualified_filter = qualify_filter_columns(
+        args.where_.clone(),
+        &model.db_name,
+        metadata.logical_to_db(),
+    );
+    let selected_fields: std::collections::HashSet<&str> = args
+        .select
+        .iter()
+        .filter_map(|(field, enabled)| enabled.then_some(field.as_str()))
+        .collect();
+
+    execute_find_unique_rows(
+        state,
+        model,
+        qualified_filter,
+        &selected_fields,
+        transaction_id,
+    )
+    .await
+}
+
 /// Handle `query.findMany`.
 ///
 /// Builds a SELECT for the requested model, applying optional `where`, `orderBy`,
@@ -318,33 +410,14 @@ pub(super) async fn handle_find_unique(
         metadata.field_types(),
         metadata.logical_to_db(),
     )?;
-
-    let mut builder = Select::from_table(&model.db_name).with_capacity(SelectCapacity {
-        items: metadata.scalar_markers().len(),
-        ..SelectCapacity::default()
-    });
-    for marker in metadata.scalar_markers() {
-        builder = builder.item(SelectItem::from(marker.clone()));
-    }
-
-    builder = builder.filter(qualified_filter);
-
-    let select = builder
-        .take(1)
-        .build()
-        .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to build query: {}", e)))?;
-
-    let sql = state
-        .dialect
-        .render_select_owned(select)
-        .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
-
-    let rows = normalize_rows_with_hints(
-        state
-            .execute_query_on(&sql, "Query", tx_id.as_deref())
-            .await?,
-        metadata.scalar_hints(),
-    )?;
+    let rows = execute_find_unique_rows(
+        state,
+        model,
+        qualified_filter,
+        &std::collections::HashSet::new(),
+        tx_id.as_deref(),
+    )
+    .await?;
     wrap_data_result(&rows, "findUnique result")
 }
 

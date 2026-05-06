@@ -216,6 +216,14 @@ where
         }
     }
 
+    fn should_try_engine_for_find_unique(&self, args: &nautilus_core::FindUniqueArgs) -> bool {
+        match self.engine_mode {
+            EngineMode::Always => true,
+            EngineMode::Auto => !args.include.is_empty(),
+            EngineMode::Never => false,
+        }
+    }
+
     fn should_try_engine_for_mutation(&self) -> bool {
         self.engine_mode.uses_engine_for_simple_crud()
     }
@@ -483,6 +491,37 @@ where
     }
 
     Ok(Some(decoded))
+}
+
+pub(crate) async fn try_find_unique_via_engine<E, M>(
+    client: &Client<E>,
+    model: &str,
+    args: &nautilus_core::FindUniqueArgs,
+    decode_row: impl FnMut(crate::Row) -> nautilus_core::Result<M>,
+) -> nautilus_core::Result<Option<M>>
+where
+    E: Executor,
+{
+    if !client.should_try_engine_for_find_unique(args) {
+        return Ok(None);
+    }
+
+    let Some(state) = client.engine_state().await? else {
+        return Ok(None);
+    };
+
+    let transaction_id = client.transaction_id();
+    let rows = handlers::handle_find_unique_typed(
+        state.as_ref(),
+        model,
+        args,
+        transaction_id.as_deref(),
+    )
+    .await
+    .map_err(map_engine_protocol_error)?;
+    let decoded = decode_engine_rows(rows, decode_row)?;
+
+    Ok(decoded.into_iter().next())
 }
 
 pub(crate) async fn try_count_via_engine<E>(

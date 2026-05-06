@@ -307,6 +307,7 @@ fn test_write_rust_code_runtime_exposes_pool_options_for_embedded_and_direct_pat
     );
     assert!(
         runtime_content.contains("handlers::handle_find_many_typed")
+            && runtime_content.contains("handlers::handle_find_unique_typed")
             && runtime_content.contains("handlers::handle_create_typed")
             && runtime_content.contains("handlers::handle_count_typed"),
         "runtime.rs should call typed embedded engine handlers directly for Rust in-process paths:\n{runtime_content}"
@@ -337,6 +338,10 @@ fn test_write_rust_code_auto_engine_mode_keeps_direct_and_engine_paths_separate(
     assert!(
         user_content.contains("include queries require the embedded engine path in the generated Rust client"),
         "generated delegates should keep include-heavy reads on the embedded engine path:\n{user_content}"
+    );
+    assert!(
+        user_content.contains("crate::runtime::try_find_unique_via_engine::<_, User>("),
+        "generated find_unique delegates should use the dedicated embedded engine fast path:\n{user_content}"
     );
     assert!(
         user_content.contains(

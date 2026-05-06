@@ -3,7 +3,7 @@ mod common;
 use common::{call_rpc_json, sqlite_state};
 use std::collections::HashMap;
 
-use nautilus_core::{Column, FindManyArgs, IncludeRelation, OrderBy};
+use nautilus_core::{Column, FindManyArgs, FindUniqueArgs, IncludeRelation, OrderBy};
 use nautilus_engine::handlers;
 use nautilus_protocol::{PROTOCOL_VERSION, QUERY_CREATE, QUERY_FIND_MANY};
 use serde_json::json;
@@ -263,6 +263,79 @@ async fn typed_find_many_includes_bypass_rpc_and_preserve_include_semantics() {
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0]["body"], json!("second-mid"));
     assert_eq!(comments[0]["sort"], json!(2));
+
+    drop(state);
+    drop(temp_dir);
+}
+
+#[tokio::test]
+async fn typed_find_unique_uses_specialized_projection_path() {
+    let (state, temp_dir) = sqlite_state("include-tests", schema_source()).await;
+
+    let created_user = call_rpc_json(
+        &state,
+        QUERY_CREATE,
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "model": "User",
+            "data": { "email": "alice@example.com" }
+        }),
+    )
+    .await;
+    let user_id = created_user["data"][0]["User__id"]
+        .as_i64()
+        .expect("user id should be present");
+
+    let created_post = call_rpc_json(
+        &state,
+        QUERY_CREATE,
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "model": "Post",
+            "data": {
+                "title": "projected",
+                "sort": 7,
+                "authorId": user_id
+            }
+        }),
+    )
+    .await;
+    let post_id = created_post["data"][0]["blog_posts__post_id"]
+        .as_i64()
+        .expect("post id should be present");
+
+    let rows = handlers::handle_find_unique_typed(
+        &state,
+        "Post",
+        &FindUniqueArgs::new(Column::<i64>::new("blog_posts", "post_id").eq(post_id))
+            .with_select("title"),
+        None,
+    )
+    .await
+    .expect("typed findUnique should succeed");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].len(),
+        2,
+        "projection should keep only PK + selected field"
+    );
+    assert_eq!(
+        rows[0].get("blog_posts__post_id"),
+        Some(&nautilus_core::Value::I64(post_id))
+    );
+    assert_eq!(
+        rows[0].get("blog_posts__title"),
+        Some(&nautilus_core::Value::String("projected".to_string()))
+    );
+    assert!(
+        rows[0].get("blog_posts__sort_index").is_none(),
+        "non-selected scalar fields should stay out of the specialized findUnique projection"
+    );
+    assert!(
+        rows[0].get("blog_posts__author_id").is_none(),
+        "non-selected foreign keys should stay out of the specialized findUnique projection"
+    );
 
     drop(state);
     drop(temp_dir);

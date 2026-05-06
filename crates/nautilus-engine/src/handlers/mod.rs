@@ -276,6 +276,16 @@ pub async fn handle_find_many_typed(
     crud::handle_find_many_typed(state, model_name, args, transaction_id).await
 }
 
+/// Handle a typed Rust `findUnique` request in-process without an RPC envelope.
+pub async fn handle_find_unique_typed(
+    state: &EngineState,
+    model_name: &str,
+    args: &nautilus_core::FindUniqueArgs,
+    transaction_id: Option<&str>,
+) -> Result<Vec<nautilus_connector::Row>, ProtocolError> {
+    crud::handle_find_unique_typed(state, model_name, args, transaction_id).await
+}
+
 /// Handle a typed Rust `create` request in-process without an RPC envelope.
 pub async fn handle_create_typed(
     state: &EngineState,
