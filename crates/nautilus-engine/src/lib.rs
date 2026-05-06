@@ -9,6 +9,7 @@ pub mod conversion;
 pub mod filter;
 pub mod handlers;
 mod metadata;
+mod plan_cache;
 pub mod pool_options;
 pub mod state;
 pub mod transport;

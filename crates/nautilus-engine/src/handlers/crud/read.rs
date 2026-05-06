@@ -206,13 +206,12 @@ pub(super) async fn execute_find_many_typed(
     execute_find_many_rows(state, model, query_args, transaction_id).await
 }
 
-async fn execute_find_unique_rows(
+fn build_find_unique_sql(
     state: &EngineState,
     model: &ModelIr,
     qualified_filter: Expr,
     selected_fields: &std::collections::HashSet<&str>,
-    tx_id: Option<&str>,
-) -> Result<Vec<Row>, ProtocolError> {
+) -> Result<(Sql, Vec<Option<ValueHint>>), ProtocolError> {
     let metadata = state.model_metadata(model);
     let pk_fields = metadata.primary_key_fields();
 
@@ -247,10 +246,53 @@ async fn execute_find_unique_rows(
         .render_select_owned(select)
         .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
 
+    Ok((sql, row_hints))
+}
+
+async fn execute_find_unique_rows(
+    state: &EngineState,
+    model: &ModelIr,
+    qualified_filter: Expr,
+    selected_fields: &std::collections::HashSet<&str>,
+    tx_id: Option<&str>,
+) -> Result<Vec<Row>, ProtocolError> {
+    let (sql, row_hints) = build_find_unique_sql(state, model, qualified_filter, selected_fields)?;
     normalize_rows_with_hints(
         state.execute_query_on(&sql, "Query", tx_id).await?,
         &row_hints,
     )
+}
+
+/// Build the [`FindUniquePlanKey`] for a request matched by [`extract_simple_eq_filter`].
+///
+/// The resolved projection is canonicalised (selected fields plus implicit PK
+/// fields, sorted) so semantically equivalent inputs share a cache entry.
+fn find_unique_plan_key(
+    model: &ModelIr,
+    metadata: &crate::metadata::ModelMetadata,
+    selected_fields: &std::collections::HashSet<&str>,
+    shape: &crate::plan_cache::EqFilterShape<'_>,
+) -> crate::plan_cache::FindUniquePlanKey {
+    let resolved: Vec<String> = if selected_fields.is_empty() {
+        Vec::new()
+    } else {
+        let mut combined: Vec<String> = selected_fields.iter().map(|s| s.to_string()).collect();
+        for pk in metadata.primary_key_fields() {
+            let logical = pk.logical_name();
+            if !selected_fields.contains(logical) {
+                combined.push(logical.to_string());
+            }
+        }
+        combined.sort();
+        combined.dedup();
+        combined
+    };
+
+    crate::plan_cache::FindUniquePlanKey {
+        model_db_name: model.db_name.clone(),
+        selected_logical_fields: resolved,
+        filter_columns: shape.columns.iter().map(|s| s.to_string()).collect(),
+    }
 }
 
 pub(super) async fn execute_find_unique_typed(
@@ -277,17 +319,57 @@ pub(super) async fn execute_find_unique_typed(
 
     let model = get_model_or_error(state, model_name)?;
     let metadata = state.model_metadata(model);
-    let qualified_filter = qualify_filter_columns(
-        args.where_.clone(),
-        &model.db_name,
-        metadata.logical_to_db(),
-    );
     let selected_fields: std::collections::HashSet<&str> = args
         .select
         .iter()
         .filter_map(|(field, enabled)| enabled.then_some(field.as_str()))
         .collect();
 
+    // Plan-cache fast path: only available when the filter is a flat AND chain
+    // of `Column = Param` predicates so we can replay the rendered SQL by
+    // re-binding parameter values without rebuilding the AST.
+    if let Some(shape) = crate::plan_cache::extract_simple_eq_filter(&args.where_) {
+        let cache_key = find_unique_plan_key(model, metadata, &selected_fields, &shape);
+        if let Some(plan) = state.plan_cache().get_find_unique(&cache_key) {
+            let sql = Sql {
+                text: plan.sql_text.clone(),
+                params: shape.values.iter().map(|v| (*v).clone()).collect(),
+            };
+            return normalize_rows_with_hints(
+                state
+                    .execute_query_on(&sql, "Query", transaction_id)
+                    .await?,
+                &plan.row_hints,
+            );
+        }
+
+        let qualified_filter = qualify_filter_columns(
+            args.where_.clone(),
+            &model.db_name,
+            metadata.logical_to_db(),
+        );
+        let (sql, row_hints) =
+            build_find_unique_sql(state, model, qualified_filter, &selected_fields)?;
+        state.plan_cache().insert_find_unique(
+            cache_key,
+            std::sync::Arc::new(crate::plan_cache::CachedFindUniquePlan {
+                sql_text: sql.text.clone(),
+                row_hints: row_hints.clone(),
+            }),
+        );
+        return normalize_rows_with_hints(
+            state
+                .execute_query_on(&sql, "Query", transaction_id)
+                .await?,
+            &row_hints,
+        );
+    }
+
+    let qualified_filter = qualify_filter_columns(
+        args.where_.clone(),
+        &model.db_name,
+        metadata.logical_to_db(),
+    );
     execute_find_unique_rows(
         state,
         model,

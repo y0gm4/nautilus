@@ -15,6 +15,7 @@ use nautilus_schema::ir::{ModelIr, SchemaIr};
 
 use crate::filter::RelationMap;
 use crate::metadata::ModelMetadata;
+use crate::plan_cache::PlanCache;
 use crate::pool_options::EnginePoolOptions;
 
 const EXPIRED_TRANSACTION_RETENTION: Duration = Duration::from_secs(60);
@@ -57,6 +58,8 @@ pub struct EngineState {
     /// Recently expired interactive transactions, kept briefly so late follow-up
     /// calls still report a timeout instead of an unknown transaction.
     expired_transactions: Arc<Mutex<HashMap<String, Instant>>>,
+    /// Cached SQL plans for repeated read shapes (e.g. `findUnique` by id).
+    plan_cache: PlanCache,
 }
 
 /// An active interactive transaction managed by the engine.
@@ -251,7 +254,13 @@ impl EngineState {
             direct_client,
             transactions: Arc::new(Mutex::new(HashMap::new())),
             expired_transactions: Arc::new(Mutex::new(HashMap::new())),
+            plan_cache: PlanCache::default(),
         })
+    }
+
+    /// Read-plan cache shared by hot read paths.
+    pub(crate) fn plan_cache(&self) -> &PlanCache {
+        &self.plan_cache
     }
 
     /// Return cached metadata for a validated model.
@@ -868,6 +877,62 @@ model User {
             .rollback_transaction(&tx_id)
             .await
             .expect("long-query transaction rollback should succeed");
+
+        drop(state);
+        drop(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn find_unique_typed_caches_simple_eq_plans_per_shape() {
+        use nautilus_core::{Expr, FindUniqueArgs};
+
+        let (state, temp_dir) = sqlite_state(schema_source()).await;
+        for name in ["Alice", "Bob"] {
+            state
+                .execute_affected_on(&insert_user_sql(name), "insert user", None)
+                .await
+                .expect("seed insert should succeed");
+        }
+
+        assert_eq!(state.plan_cache().find_unique_len(), 0);
+
+        let by_id_args =
+            FindUniqueArgs::new(Expr::column("User__id").eq(Expr::param(Value::I64(1))));
+        let rows = crate::handlers::handle_find_unique_typed(&state, "User", &by_id_args, None)
+            .await
+            .expect("first findUnique should succeed");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(state.plan_cache().find_unique_len(), 1);
+
+        // Same filter shape with a different parameter value must hit the cache.
+        let by_id_other =
+            FindUniqueArgs::new(Expr::column("User__id").eq(Expr::param(Value::I64(2))));
+        let rows = crate::handlers::handle_find_unique_typed(&state, "User", &by_id_other, None)
+            .await
+            .expect("second findUnique should reuse the cached plan");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            state.plan_cache().find_unique_len(),
+            1,
+            "identical filter shape should not grow the cache",
+        );
+
+        // A different filter column produces a distinct cache entry.
+        let by_name_args = FindUniqueArgs::new(
+            Expr::column("User__name").eq(Expr::param(Value::String("Alice".to_string()))),
+        );
+        let rows = crate::handlers::handle_find_unique_typed(&state, "User", &by_name_args, None)
+            .await
+            .expect("differently shaped findUnique should also succeed");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(state.plan_cache().find_unique_len(), 2);
+
+        // Non-equality filters are not cacheable and should leave the cache size unchanged.
+        let by_id_gt = FindUniqueArgs::new(Expr::column("User__id").gt(Expr::param(Value::I64(0))));
+        let _ = crate::handlers::handle_find_unique_typed(&state, "User", &by_id_gt, None)
+            .await
+            .expect("non-cacheable filter should still execute");
+        assert_eq!(state.plan_cache().find_unique_len(), 2);
 
         drop(state);
         drop(temp_dir);
