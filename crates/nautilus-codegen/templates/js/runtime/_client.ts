@@ -4,8 +4,9 @@ import * as readline from 'readline';
 
 const RPC_TIMEOUT_MS        = 30_000;
 const DEFAULT_TX_TIMEOUT_MS =  5_000;
+const STREAM_END            = Symbol('nautilus.stream.end');
 import { EngineProcess, type EnginePoolOptions } from './_engine';
-import { PROTOCOL_VERSION, type JsonRpcResponse } from './_protocol';
+import { PROTOCOL_VERSION, type JsonRpcRequest, type JsonRpcResponse } from './_protocol';
 import { IsolationLevel, TransactionClient } from './_transaction';
 import { errorFromCode, HandshakeError, ProtocolError } from './_errors';
 
@@ -24,6 +25,19 @@ interface PendingRequest {
   reject:  (error: Error)   => void;
 }
 
+type StreamQueueItem = unknown | Error | typeof STREAM_END;
+
+interface StreamWaiter {
+  resolve: (value: StreamQueueItem) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface PendingStreamRequest {
+  items: StreamQueueItem[];
+  waiters: StreamWaiter[];
+  closed: boolean;
+}
+
 /**
  * Base Nautilus client.
  *
@@ -40,6 +54,7 @@ export class NautilusClient {
   private nextId      = 0;
   private readonly pending     = new Map<number, PendingRequest>();
   private readonly partialData = new Map<number, unknown[]>();
+  private readonly streams = new Map<number, PendingStreamRequest>();
   private rl: readline.Interface | null = null;
 
   /**
@@ -83,6 +98,7 @@ export class NautilusClient {
     for (const { reject } of this.pending.values()) reject(err);
     this.pending.clear();
     this.partialData.clear();
+    this._failStreams(err);
   }
 
   /**
@@ -97,8 +113,7 @@ export class NautilusClient {
       throw new ProtocolError('Engine is not running. Call connect() first.');
     }
 
-    const id      = ++this.nextId;
-    const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params }, this._jsonReplacer) + '\n';
+    const id = ++this.nextId;
 
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -112,14 +127,46 @@ export class NautilusClient {
         reject:  (e) => { clearTimeout(timer); reject(e);  },
       });
 
-      this.engine.stdin!.write(payload, (err) => {
-        if (err) {
-          clearTimeout(timer);
-          this.pending.delete(id);
-          reject(new ProtocolError(`Write failed: ${err.message}`));
-        }
+      this._writeRequest({ jsonrpc: '2.0', id, method, params }).catch((err) => {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(err);
       });
     });
+  }
+
+  async *_streamRpc(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs = RPC_TIMEOUT_MS,
+  ): AsyncGenerator<unknown, void, unknown> {
+    if (!this.engine.isRunning()) {
+      throw new ProtocolError('Engine is not running. Call connect() first.');
+    }
+
+    const id = ++this.nextId;
+    this.streams.set(id, { items: [], waiters: [], closed: false });
+    let completed = false;
+
+    try {
+      await this._writeRequest({ jsonrpc: '2.0', id, method, params });
+
+      while (true) {
+        const item = await this._readStreamItem(id, timeoutMs);
+        if (item === STREAM_END) {
+          completed = true;
+          break;
+        }
+        if (item instanceof Error) throw item;
+        yield item;
+      }
+    } finally {
+      this._clearStream(id);
+      this.partialData.delete(id);
+      if (!completed) {
+        await this._cancelRequest(id);
+      }
+    }
   }
 
   /** JSON replacer that serialises special JS types the engine understands. */
@@ -127,6 +174,121 @@ export class NautilusClient {
     if (value instanceof Date)   return value.toISOString();
     if (value instanceof Buffer) return value.toString('base64');
     return value;
+  }
+
+  private async _writeRequest(request: JsonRpcRequest): Promise<void> {
+    const stdin = this.engine.stdin;
+    if (!stdin) {
+      throw new ProtocolError('Engine is not running. Call connect() first.');
+    }
+
+    const payload = JSON.stringify(request, this._jsonReplacer) + '\n';
+
+    await new Promise<void>((resolve, reject) => {
+      stdin.write(payload, (err) => {
+        if (err) {
+          reject(new ProtocolError(`Write failed: ${err.message}`));
+        } else {
+          resolve();
+        }
+      });
+    });
+  }
+
+  private async _cancelRequest(requestId: number): Promise<void> {
+    try {
+      await this._writeRequest({
+        jsonrpc: '2.0',
+        method: 'request.cancel',
+        params: {
+          protocolVersion: PROTOCOL_VERSION,
+          requestId,
+        },
+      });
+    } catch {
+      // Best effort: the engine may already be gone.
+    }
+  }
+
+  private _pushStreamItem(id: number, item: StreamQueueItem): void {
+    const stream = this.streams.get(id);
+    if (!stream) return;
+
+    const waiter = stream.waiters.shift();
+    if (waiter) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(item);
+      return;
+    }
+
+    stream.items.push(item);
+  }
+
+  private _finishStream(id: number, item: StreamQueueItem): void {
+    const stream = this.streams.get(id);
+    if (!stream || stream.closed) return;
+
+    this._pushStreamItem(id, item);
+    this._closeStream(id);
+  }
+
+  private _closeStream(id: number): void {
+    const stream = this.streams.get(id);
+    if (!stream || stream.closed) return;
+
+    stream.closed = true;
+    this._pushStreamItem(id, STREAM_END);
+  }
+
+  private _failStreams(error: Error): void {
+    for (const [id, stream] of this.streams.entries()) {
+      if (stream.closed) continue;
+      stream.closed = true;
+      this._pushStreamItem(id, error);
+      this._pushStreamItem(id, STREAM_END);
+    }
+  }
+
+  private _clearStream(id: number): void {
+    const stream = this.streams.get(id);
+    if (!stream) return;
+
+    for (const waiter of stream.waiters) {
+      clearTimeout(waiter.timer);
+    }
+
+    this.streams.delete(id);
+  }
+
+  private _readStreamItem(id: number, timeoutMs: number): Promise<StreamQueueItem> {
+    const stream = this.streams.get(id);
+    if (!stream) {
+      return Promise.resolve(STREAM_END);
+    }
+    if (stream.items.length > 0) {
+      return Promise.resolve(stream.items.shift()!);
+    }
+
+    return new Promise<StreamQueueItem>((resolve, reject) => {
+      const activeStream = this.streams.get(id);
+      if (!activeStream) {
+        resolve(STREAM_END);
+        return;
+      }
+
+      const waiter: StreamWaiter = {
+        resolve,
+        timer: setTimeout(() => {
+          const index = activeStream.waiters.indexOf(waiter);
+          if (index >= 0) {
+            activeStream.waiters.splice(index, 1);
+          }
+          reject(new ProtocolError(`Request ${id} timed out`));
+        }, timeoutMs),
+      };
+
+      activeStream.waiters.push(waiter);
+    });
   }
 
   /**
@@ -151,6 +313,26 @@ export class NautilusClient {
 
       const id = response.id as number | undefined;
       if (id == null) return;
+
+      const stream = this.streams.get(id);
+      if (stream) {
+        if (response.error) {
+          this._finishStream(
+            id,
+            errorFromCode(
+              response.error.code,
+              response.error.message,
+              response.error.data,
+            ),
+          );
+        } else {
+          this._pushStreamItem(id, response.result);
+          if (response.partial !== true) {
+            this._closeStream(id);
+          }
+        }
+        return;
+      }
 
       const pending = this.pending.get(id);
       if (!pending) return;
@@ -200,6 +382,7 @@ export class NautilusClient {
       for (const { reject } of this.pending.values()) reject(err);
       this.pending.clear();
       this.partialData.clear();
+      this._failStreams(err);
     });
   }
 

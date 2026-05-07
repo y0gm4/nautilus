@@ -378,6 +378,57 @@ export class {{ delegate_name }} {
     return ((result['data'] as unknown[]) ?? []).map(r => _coerce{{ model_name }}(r as Record<string, unknown>));
   }
 
+  async *streamMany(args?: {
+    where?:    {{ model_name }}WhereInput;
+    orderBy?:  {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
+{%- if has_vector_fields %}
+    nearest?:  {{ model_name }}NearestInput;
+{%- endif %}
+    take?:     number;
+    skip?:     number;
+    select?:   {{ model_name }}SelectInput;
+    include?:  {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
+    cursor?:   Record<string, unknown>;
+    distinct?: string[];
+    chunkSize?: number;
+  }): AsyncIterable<{{ model_name }}Model> {
+    const chunkSize = args?.chunkSize ?? 128;
+    if (!Number.isInteger(chunkSize) || chunkSize < 1) {
+      throw new RangeError('streamMany chunkSize must be a positive integer');
+    }
+
+    const rpcArgs: Record<string, unknown> = {};
+    if (args?.where    != null) rpcArgs['where']   = _processWhereFilters(args.where as Record<string, unknown>, _{{ table_name }}FieldToDb);
+    if (args?.orderBy  != null) {
+      const ob = args.orderBy;
+      rpcArgs['orderBy'] = Array.isArray(ob) ? ob : [ob];
+    }
+{%- if has_vector_fields %}
+    if (args?.nearest  != null) rpcArgs['nearest'] = _serializeNearestInput(args.nearest);
+{%- endif %}
+    if (args?.take     != null) rpcArgs['take']    = args.take;
+    if (args?.skip     != null) rpcArgs['skip']    = args.skip;
+    if (args?.select   != null) rpcArgs['select']  = args.select;
+    if (args?.include  != null) rpcArgs['include'] = _serializeInclude(args.include);
+    if (args?.cursor   != null) rpcArgs['cursor']  = args.cursor;
+    if (args?.distinct != null) rpcArgs['distinct'] = args.distinct;
+
+    const payload: Record<string, unknown> = {
+      protocolVersion: PROTOCOL_VERSION,
+      model: '{{ model_name }}',
+      args: rpcArgs,
+      chunkSize,
+    };
+
+    for await (const chunk of this.client._streamRpc('query.findMany', payload)) {
+      const rows = (chunk as Record<string, unknown>)?.['data'];
+      if (!Array.isArray(rows)) continue;
+      for (const row of rows) {
+        yield _coerce{{ model_name }}(row as Record<string, unknown>);
+      }
+    }
+  }
+
   async findFirst(args?: {
     where?:   {{ model_name }}WhereInput;
     orderBy?: {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];

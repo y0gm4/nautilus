@@ -238,6 +238,21 @@ export declare class {{ delegate_name }} {
     chunkSize?: number;
   }): Promise<{{ model_name }}Model[]>;
 
+  streamMany(args?: {
+    where?:    {{ model_name }}WhereInput;
+    orderBy?:  {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
+{%- if has_vector_fields %}
+    nearest?:  {{ model_name }}NearestInput;
+{%- endif %}
+    take?:     number;
+    skip?:     number;
+    select?:   {{ model_name }}SelectInput;
+    include?:  {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
+    cursor?:   Record<string, unknown>;
+    distinct?: string[];
+    chunkSize?: number;
+  }): AsyncIterable<{{ model_name }}Model>;
+
   findFirst(args?: {
     where?:   {{ model_name }}WhereInput;
     orderBy?: {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];

@@ -326,6 +326,44 @@ export class {{ delegate_name }} {
     return ((result['data']) ?? []).map(r => _coerce{{ model_name }}(r));
   }
 
+  async *streamMany(args) {
+    const chunkSize = args?.chunkSize ?? 128;
+    if (!Number.isInteger(chunkSize) || chunkSize < 1) {
+      throw new RangeError('streamMany chunkSize must be a positive integer');
+    }
+
+    const rpcArgs = {};
+    if (args?.where    != null) rpcArgs['where']   = _processWhereFilters(args.where, _{{ table_name }}FieldToDb);
+    if (args?.orderBy  != null) {
+      const ob = args.orderBy;
+      rpcArgs['orderBy'] = Array.isArray(ob) ? ob : [ob];
+    }
+{%- if has_vector_fields %}
+    if (args?.nearest  != null) rpcArgs['nearest'] = _serializeNearestInput(args.nearest);
+{%- endif %}
+    if (args?.take     != null) rpcArgs['take']    = args.take;
+    if (args?.skip     != null) rpcArgs['skip']    = args.skip;
+    if (args?.select   != null) rpcArgs['select']  = args.select;
+    if (args?.include  != null) rpcArgs['include'] = _serializeInclude(args.include);
+    if (args?.cursor   != null) rpcArgs['cursor']  = args.cursor;
+    if (args?.distinct != null) rpcArgs['distinct'] = args.distinct;
+
+    const payload = {
+      protocolVersion: PROTOCOL_VERSION,
+      model: '{{ model_name }}',
+      args: rpcArgs,
+      chunkSize,
+    };
+
+    for await (const chunk of this.client._streamRpc('query.findMany', payload)) {
+      const rows = chunk?.['data'];
+      if (!Array.isArray(rows)) continue;
+      for (const row of rows) {
+        yield _coerce{{ model_name }}(row);
+      }
+    }
+  }
+
   async findFirst(args) {
     const rpcArgs = {};
     if (args?.where    != null) rpcArgs['where']   = _processWhereFilters(args.where, _{{ table_name }}FieldToDb);

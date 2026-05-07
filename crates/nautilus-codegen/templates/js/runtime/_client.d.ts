@@ -20,6 +20,11 @@ export declare class NautilusClient {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   _rpc(method: string, params: Record<string, unknown>): Promise<unknown>;
+  _streamRpc(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs?: number,
+  ): AsyncIterable<unknown>;
   protected _startTransaction(timeoutMs?: number, isolationLevel?: IsolationLevel): Promise<string>;
   protected _commitTransaction(txId: string): Promise<void>;
   protected _rollbackTransaction(txId: string): Promise<void>;

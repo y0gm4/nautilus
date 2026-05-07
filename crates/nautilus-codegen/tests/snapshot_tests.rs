@@ -731,7 +731,9 @@ model User {
         protocol_runtime.contains("export const PROTOCOL_VERSION = 1;")
             && client_runtime.contains("protocolVersion: PROTOCOL_VERSION")
             && client_runtime.contains("client expects ${PROTOCOL_VERSION}")
-            && client_runtime.contains("transaction.batch"),
+            && client_runtime.contains("transaction.batch")
+            && client_runtime.contains("async *_streamRpc(")
+            && client_runtime.contains("method: 'request.cancel'"),
         "expected JS runtime client to reuse the shared protocol version constant and expose transaction.batch:\n{client_runtime}\n\nProtocol:\n{protocol_runtime}"
     );
     assert!(
@@ -1284,6 +1286,44 @@ model User {
     assert!(
         js_code.contains("if (args?.chunkSize != null) request['chunkSize'] = args.chunkSize;"),
         "expected generated JS findMany() to forward chunkSize at the protocol level:\n{js_code}"
+    );
+}
+
+#[test]
+fn test_js_async_delegate_exposes_stream_many() {
+    let ir = validate(
+        r#"
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let (js_models, dts_models) = generate_all_js_models(&ir);
+    let js_code = generated_named_file(&js_models, "user.js");
+    let dts_code = generated_named_file(&dts_models, "user.d.ts");
+
+    assert!(
+        dts_code.contains("streamMany(args?: {"),
+        "expected generated JS typings to expose streamMany():\n{dts_code}"
+    );
+    assert!(
+        dts_code.contains("}): AsyncIterable<UserModel>;"),
+        "expected generated JS streamMany() typings to return an AsyncIterable:\n{dts_code}"
+    );
+    assert!(
+        js_code.contains("async *streamMany(args) {"),
+        "expected generated JS delegate to expose streamMany():\n{js_code}"
+    );
+    assert!(
+        js_code.contains(
+            "for await (const chunk of this.client._streamRpc('query.findMany', payload)) {"
+        ),
+        "expected generated JS streamMany() to consume chunked RPC frames:\n{js_code}"
+    );
+    assert!(
+        js_code.contains("chunkSize,"),
+        "expected generated JS streamMany() to force protocol chunking:\n{js_code}"
     );
 }
 
