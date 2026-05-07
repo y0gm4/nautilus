@@ -488,6 +488,114 @@ async fn test_streaming_drop_mid_iteration_keeps_pool_usable() {
     }
 }
 
+/// Same drain-on-drop guarantee, but going through the detached `execute_owned`
+/// path used by codegen `stream_many`. The returned stream is `'static` and
+/// independent of `&executor`, but the worker still owns the pool connection,
+/// so dropping the stream mid-iteration must release the connection cleanly.
+#[tokio::test]
+async fn test_execute_owned_drop_mid_iteration_keeps_pool_usable() {
+    use std::time::Duration;
+
+    let url = "sqlite::memory:";
+    let pool_options = ConnectorPoolOptions::default()
+        .max_connections(1)
+        .min_connections(1)
+        .acquire_timeout(Duration::from_secs(2));
+    let executor = SqliteExecutor::new_with_options(url, pool_options)
+        .await
+        .expect("Failed to create executor");
+
+    setup_test_table(&executor)
+        .await
+        .expect("Failed to setup table");
+
+    for i in 200..220i64 {
+        let insert = Sql {
+            text: "INSERT INTO test_users (id, name, email, age, score, active) VALUES (?, ?, ?, ?, ?, ?)".to_string(),
+            params: vec![
+                Value::I64(i),
+                Value::String(format!("OwnedUser{}", i)),
+                Value::String(format!("owned{}@example.com", i)),
+                Value::I64(20 + i),
+                Value::F64(80.0 + i as f64),
+                Value::Bool(true),
+            ],
+        };
+        execute_all(&executor, &insert)
+            .await
+            .expect("Failed to insert");
+    }
+
+    let select_template = Sql {
+        text: "SELECT id FROM test_users WHERE id >= ? ORDER BY id".to_string(),
+        params: vec![Value::I64(200)],
+    };
+
+    for _ in 0..5 {
+        let mut stream = executor.execute_owned(select_template.clone());
+        let first = stream
+            .next()
+            .await
+            .expect("expected at least one row from execute_owned");
+        first.expect("first row should decode");
+        drop(stream);
+
+        let rows = execute_all(&executor, &select_template)
+            .await
+            .expect("pool should still acquire after execute_owned drop");
+        assert_eq!(rows.len(), 20);
+    }
+}
+
+/// Smoke test for `execute_owned`: the returned stream is detached from the
+/// executor reference, can be moved into a spawned task, and yields all rows.
+#[tokio::test]
+async fn test_execute_owned_yields_all_rows_when_moved_to_task() {
+    let executor = setup_executor().await.expect("Failed to create executor");
+    setup_test_table(&executor)
+        .await
+        .expect("Failed to setup table");
+
+    for i in 30..35i64 {
+        let insert = Sql {
+            text: "INSERT INTO test_users (id, name, email, age, score, active) VALUES (?, ?, ?, ?, ?, ?)".to_string(),
+            params: vec![
+                Value::I64(i),
+                Value::String(format!("OwnedRowUser{}", i)),
+                Value::Null,
+                Value::I64(20 + i),
+                Value::F64(80.0 + i as f64),
+                Value::Bool(true),
+            ],
+        };
+        execute_all(&executor, &insert)
+            .await
+            .expect("Failed to insert");
+    }
+
+    let select = Sql {
+        text: "SELECT id FROM test_users WHERE id >= ? ORDER BY id".to_string(),
+        params: vec![Value::I64(30)],
+    };
+
+    let stream = executor.execute_owned(select);
+    let collected = tokio::spawn(async move {
+        let mut stream = stream;
+        let mut ids = Vec::new();
+        while let Some(item) = stream.next().await {
+            let row = item.expect("row should decode");
+            if let Some(Value::I64(id)) = row.get("id") {
+                ids.push(*id);
+            }
+        }
+        ids
+    })
+    .await
+    .expect("spawned task should join");
+
+    assert_eq!(collected, vec![30, 31, 32, 33, 34]);
+}
+
 #[tokio::test]
 async fn test_duplicate_column_names() {
     let executor = setup_executor().await.expect("Failed to create executor");

@@ -180,6 +180,22 @@ impl Executor for SqliteExecutor {
         })
     }
 
+    fn execute_owned(&self, sql: Sql) -> crate::row_stream::RowStream<'static> {
+        crate::streaming::spawn_streaming_query(crate::streaming::StreamingQuery::<
+            sqlx::Sqlite,
+            _,
+            _,
+        > {
+            pool: self.pool.clone(),
+            sql_text: sql.text,
+            params: sql.params,
+            bind: bind_value,
+            decode: crate::sqlite_stream::decode_row_internal,
+            query_context: "Query execution failed",
+            persistent: true,
+        })
+    }
+
     fn execute_and_fetch<'conn>(
         &'conn self,
         mutation: &'conn Sql,

@@ -1,15 +1,36 @@
+use std::collections::HashMap;
+
+use futures::stream::StreamExt;
+
 use super::common::{
     parse_and_qualify_model_filter, qualify_model_filter, wrap_count_result, wrap_data_result,
 };
 use super::include::hydrate_rows_with_includes;
 use super::*;
+use crate::conversion::normalize_row_with_hints;
+use crate::filter::IncludeNode;
+use crate::state::connector_to_protocol;
 
-pub(super) async fn execute_find_many_rows(
+/// Pre-execution artefact produced by [`build_find_many_plan`].
+///
+/// Splitting plan-building from row consumption lets the buffered fast path
+/// ([`execute_find_many_rows`]) and the chunked streaming path
+/// ([`stream_find_many_chunked`]) share the same SQL/hint computation while
+/// each owning its consumption strategy. Streaming requires `backward = false`
+/// and `include.is_empty()` because both transformations need the full row
+/// set in memory before any output can leave the engine.
+struct FindManyPlan {
+    sql: Sql,
+    row_hints: Vec<Option<ValueHint>>,
+    backward: bool,
+    include: HashMap<String, IncludeNode>,
+}
+
+fn build_find_many_plan(
     state: &EngineState,
     model: &ModelIr,
     query_args: QueryArgs,
-    tx_id: Option<&str>,
-) -> Result<Vec<Row>, ProtocolError> {
+) -> Result<FindManyPlan, ProtocolError> {
     let QueryArgs {
         filter,
         order_by,
@@ -161,16 +182,31 @@ pub(super) async fn execute_find_many_rows(
         .render_select_owned(select)
         .map_err(|e| ProtocolError::QueryPlanning(format!("Failed to render SQL: {}", e)))?;
 
+    Ok(FindManyPlan {
+        sql,
+        row_hints,
+        backward,
+        include,
+    })
+}
+
+pub(super) async fn execute_find_many_rows(
+    state: &EngineState,
+    model: &ModelIr,
+    query_args: QueryArgs,
+    tx_id: Option<&str>,
+) -> Result<Vec<Row>, ProtocolError> {
+    let plan = build_find_many_plan(state, model, query_args)?;
     let mut rows = normalize_rows_with_hints(
-        state.execute_query_on(&sql, "Query", tx_id).await?,
-        &row_hints,
+        state.execute_query_on(&plan.sql, "Query", tx_id).await?,
+        &plan.row_hints,
     )?;
 
-    if backward {
+    if plan.backward {
         rows.reverse();
     }
 
-    hydrate_rows_with_includes(state, model, rows, &include, tx_id).await
+    hydrate_rows_with_includes(state, model, rows, &plan.include, tx_id).await
 }
 
 pub(super) async fn execute_find_many_params(
@@ -380,6 +416,92 @@ pub(super) async fn execute_find_unique_typed(
     .await
 }
 
+/// Drive `findMany` row-by-row through the connector's owned-stream path,
+/// emitting `partial: true` chunks as they fill up.
+///
+/// This is the chunked-response code path: when the client sets `chunkSize`
+/// and a response channel is available, the engine forwards each batch of at
+/// most `chunk_size` rows to the transport as soon as they arrive, instead of
+/// buffering the full result set first. The final batch is returned to the
+/// caller (so the outer dispatcher emits a non-partial reply at the end).
+///
+/// Streaming is only safe when the result set does not need a global
+/// transformation before output:
+///
+/// - `backward = true` would require reversing the entire `Vec<Row>` after the
+///   fetch completes, defeating streaming semantics.
+/// - `include` is not empty: relation hydration runs a follow-up batch query
+///   keyed on the parent PKs (`WHERE child.fk IN (parent_ids…)`), which needs
+///   every parent row in memory.
+///
+/// Both cases fall back to the buffered path in [`handle_find_many`].
+async fn stream_find_many_chunked(
+    state: &EngineState,
+    plan: FindManyPlan,
+    tx_id: Option<&str>,
+    chunk_size: usize,
+    request_id: Option<nautilus_protocol::RpcId>,
+    sender: mpsc::Sender<RpcResponse>,
+) -> Result<Box<serde_json::value::RawValue>, ProtocolError> {
+    let mut row_stream = state
+        .execute_query_stream_on(plan.sql, tx_id)
+        .await
+        .map_err(|e| match e {
+            ProtocolError::ConnectionFailed(msg) => ProtocolError::ConnectionFailed(msg),
+            other => other,
+        })?;
+
+    // `pending` holds the most recently *filled* chunk: it is held back until
+    // we know whether another full chunk follows. If yes, `pending` becomes a
+    // partial response on the wire; if not (i.e. it is the last chunk), it is
+    // returned as the final result so the caller emits a non-partial reply.
+    // `accum` collects rows until it reaches `chunk_size`.
+    let mut pending: Vec<Row> = Vec::with_capacity(chunk_size);
+    let mut accum: Vec<Row> = Vec::with_capacity(chunk_size);
+
+    while let Some(item) = row_stream.next().await {
+        let raw_row = item.map_err(|e| connector_to_protocol(e, "Query"))?;
+        let row = normalize_row_with_hints(raw_row, &plan.row_hints)?;
+        accum.push(row);
+        if accum.len() >= chunk_size {
+            if !pending.is_empty() {
+                let raw = wrap_data_result(&pending, "findMany chunk")?;
+                pending.clear();
+                sender
+                    .send(ok_partial(request_id.clone(), raw))
+                    .await
+                    .map_err(|_| {
+                        ProtocolError::Internal(
+                            "Channel closed during chunked response".to_string(),
+                        )
+                    })?;
+            }
+            std::mem::swap(&mut pending, &mut accum);
+        }
+    }
+
+    // End-of-stream: at most one of `pending` (a fully-filled chunk) and
+    // `accum` (partial leftover) is non-empty. Whichever holds rows last is
+    // returned as the final non-partial reply; if both are non-empty, flush
+    // `pending` as a partial frame first so the leftover can be the final.
+    let final_chunk = if accum.is_empty() {
+        pending
+    } else {
+        if !pending.is_empty() {
+            let raw = wrap_data_result(&pending, "findMany chunk")?;
+            sender
+                .send(ok_partial(request_id.clone(), raw))
+                .await
+                .map_err(|_| {
+                    ProtocolError::Internal("Channel closed during chunked response".to_string())
+                })?;
+        }
+        accum
+    };
+
+    wrap_data_result(&final_chunk, "findMany result")
+}
+
 /// Handle `query.findMany`.
 ///
 /// Builds a SELECT for the requested model, applying optional `where`, `orderBy`,
@@ -387,6 +509,12 @@ pub(super) async fn execute_find_unique_typed(
 /// Relation includes are hydrated after the parent rows load so child ordering
 /// and pagination execute on the related query before JSON serialization.
 /// Returns `QueryResult { data: [...] }`. Supports transactional execution via `transactionId`.
+///
+/// When the client sets `chunkSize` and the dispatcher provided a response
+/// channel, eligible queries (no `include`, not backward-paginated) take the
+/// streaming path and emit partial replies as rows arrive from the database.
+/// Other queries fall back to the buffered path so reverse / hydrate logic can
+/// run against the full row set.
 pub(super) async fn handle_find_many(
     state: &EngineState,
     request: RpcRequest,
@@ -395,11 +523,48 @@ pub(super) async fn handle_find_many(
     let params: FindManyParams = serde_json::from_value(request.params)
         .map_err(|e| ProtocolError::InvalidParams(format!("Invalid findMany params: {}", e)))?;
 
-    let chunk_size = params.chunk_size;
-    let rows = execute_find_many_params(state, params).await?;
+    let chunk_size = params.chunk_size.map(|n| n.max(1));
+    check_protocol_version(params.protocol_version)?;
+    let tx_id = params.transaction_id;
+    let model = get_model_or_error(state, &params.model)?;
+    let metadata = state.model_metadata(model);
+    let relation_map = state.relation_map_for_model(model)?;
+    let query_args = QueryArgs::parse_with_context(
+        params.args,
+        relation_map,
+        metadata.field_types(),
+        crate::filter::SchemaContext::with_state(state),
+    )?;
 
+    // Streaming path is reserved for plans whose output does not need a global
+    // post-fetch transformation: backward pagination flips order in memory,
+    // and include hydration needs every parent row before issuing the batch
+    // child query. Both cases fall back to the buffered path below.
+    let streamable = chunk_size.is_some()
+        && sender.is_some()
+        && !query_args.backward
+        && query_args.include.is_empty();
+
+    if streamable {
+        let plan = build_find_many_plan(state, model, query_args)?;
+        let request_id = request.id.clone();
+        return stream_find_many_chunked(
+            state,
+            plan,
+            tx_id.as_deref(),
+            chunk_size.expect("checked above"),
+            request_id,
+            sender.expect("checked above"),
+        )
+        .await;
+    }
+
+    let rows = execute_find_many_rows(state, model, query_args, tx_id.as_deref()).await?;
+
+    // Buffered chunking fallback: backward / include paths still benefit from
+    // wire-level chunking even though the engine had to materialise the full
+    // `Vec<Row>` first.
     if let (Some(size), Some(channel)) = (chunk_size, sender) {
-        let size = size.max(1);
         let id = request.id.clone();
         let mut chunks = rows.chunks(size).peekable();
 

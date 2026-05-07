@@ -2,6 +2,7 @@
 
 use crate::error::ConnectorError as Error;
 use crate::error::Result;
+use crate::row_stream::RowStream;
 use futures::future::BoxFuture;
 use futures::stream::Stream;
 use nautilus_core::RowAccess;
@@ -115,6 +116,25 @@ pub trait Executor: Send + Sync {
         mutation: &'conn Sql,
         fetch: &'conn Sql,
     ) -> Self::RowStream<'conn>;
+
+    /// Execute a SQL query and return a row stream that owns its work.
+    ///
+    /// Unlike [`Self::execute`], the returned stream is `'static` and detached
+    /// from `&self`: the underlying connection is held by a background task
+    /// (see `streaming::spawn_streaming_query`), so the caller can move the
+    /// stream freely without keeping the executor borrowed. Dropping the
+    /// stream mid-iteration still releases the connection cleanly because the
+    /// worker drains the remaining rows before returning the connection to
+    /// the pool.
+    ///
+    /// This is the entry point used by codegen-emitted `stream_many` APIs and
+    /// by the engine's row-by-row streaming path.
+    ///
+    /// ## Parameters
+    ///
+    /// - `sql`: The SQL query, taken by value so the worker can own its text
+    ///   and parameters for the lifetime of the stream.
+    fn execute_owned(&self, sql: Sql) -> RowStream<'static>;
 
     /// Execute a SQL query and materialize all rows into a vector.
     ///
@@ -292,6 +312,17 @@ mod tests {
             self.execute(_fetch)
         }
 
+        fn execute_owned(&self, _sql: Sql) -> RowStream<'static> {
+            // Test stub: bridge the iter-style stream into the shared RowStream.
+            use futures::stream::StreamExt;
+            let inner = stream::iter(vec![Ok(crate::Row::new(vec![(
+                "id".to_string(),
+                Value::I64(1),
+            )]))])
+            .map(|item: Result<crate::Row>| item);
+            RowStream::new_from_stream(Box::pin(inner))
+        }
+
         fn execute_collect<'conn>(
             &'conn self,
             _sql: &'conn Sql,
@@ -341,6 +372,18 @@ mod tests {
             _fetch: &'conn Sql,
         ) -> Self::RowStream<'conn> {
             self.execute(_fetch)
+        }
+
+        fn execute_owned(&self, _sql: Sql) -> RowStream<'static> {
+            let rows: Vec<Result<crate::Row>> = (0..self.row_count)
+                .map(|idx| {
+                    Ok(crate::Row::new(vec![(
+                        "id".to_string(),
+                        Value::I64(idx as i64 + 1),
+                    )]))
+                })
+                .collect();
+            RowStream::new_from_stream(Box::pin(stream::iter(rows)))
         }
     }
 

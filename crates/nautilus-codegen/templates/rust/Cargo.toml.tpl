@@ -18,6 +18,7 @@ nautilus-schema = { path = "{{ workspace_root_path }}/crates/nautilus-schema", p
 
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 futures = "0.3"
+async-stream = "0.3"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"

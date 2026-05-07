@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use nautilus_connector::{
-    execute_all, Client, ConnectorPoolOptions, MysqlExecutor, PgExecutor, Row, SqliteExecutor,
-    SqlxErrorKind, TransactionExecutor,
+    execute_all, Client, ConnectorPoolOptions, Executor, MysqlExecutor, PgExecutor, Row, RowStream,
+    SqliteExecutor, SqlxErrorKind, TransactionExecutor,
 };
 use nautilus_dialect::{Dialect, MysqlDialect, PostgresDialect, Sql, SqliteDialect};
 use nautilus_migrate::DatabaseProvider;
@@ -22,7 +22,10 @@ const EXPIRED_TRANSACTION_RETENTION: Duration = Duration::from_secs(60);
 
 /// Convert a [`nautilus_connector::ConnectorError`] to the appropriate [`ProtocolError`],
 /// mapping specific constraint violation kinds to their dedicated error codes.
-fn connector_to_protocol(e: nautilus_connector::ConnectorError, context: &str) -> ProtocolError {
+pub(crate) fn connector_to_protocol(
+    e: nautilus_connector::ConnectorError,
+    context: &str,
+) -> ProtocolError {
     let msg = format!("{}: {}", context, e);
     match e.sqlx_kind() {
         SqlxErrorKind::UniqueConstraint => ProtocolError::UniqueConstraintViolation(msg),
@@ -145,6 +148,18 @@ impl DatabaseClient {
     pub async fn execute_raw(&self, stmt: &str) -> Result<(), Box<dyn std::error::Error>> {
         with_client!(self, client => client.executor().execute_raw(stmt).await?);
         Ok(())
+    }
+
+    /// Execute a rendered SQL query and return a row-by-row stream that owns
+    /// its database connection.
+    ///
+    /// Unlike [`Self::execute_query`], which materialises the full result set,
+    /// this path drives the underlying sqlx stream from a worker task. The
+    /// returned [`RowStream`] is `'static` and can be moved between tasks; if
+    /// the consumer drops it mid-iteration, the worker drains the remaining
+    /// rows so the connection returns to the pool clean.
+    pub fn execute_query_stream(&self, sql: Sql) -> RowStream<'static> {
+        with_client!(self, client => client.executor().execute_owned(sql))
     }
 }
 
@@ -319,6 +334,32 @@ impl EngineState {
                 execute_all(tx_client.executor(), sql)
                     .await
                     .map_err(|e| connector_to_protocol(e, context))
+            }
+        }
+    }
+
+    /// Execute a SQL query and return a row-by-row stream, optionally inside a
+    /// transaction.
+    ///
+    /// Unlike [`Self::execute_query_on`], which buffers the full result set,
+    /// this path keeps memory bounded for large reads by streaming each row
+    /// through a worker-owned connection. The returned stream is `'static`,
+    /// so the caller can move it between tasks; dropping the stream
+    /// mid-iteration releases the connection cleanly.
+    ///
+    /// Used by the chunked `findMany` IPC path so partial responses can be
+    /// emitted as rows arrive from the database, without first materialising
+    /// the whole `Vec<Row>`.
+    pub async fn execute_query_stream_on(
+        &self,
+        sql: Sql,
+        tx_id: Option<&str>,
+    ) -> Result<RowStream<'static>, ProtocolError> {
+        match tx_id {
+            None => Ok(self.client.execute_query_stream(sql)),
+            Some(id) => {
+                let tx_client = self.transaction_client_for_request(id).await?;
+                Ok(tx_client.executor().execute_owned(sql))
             }
         }
     }

@@ -388,6 +388,40 @@ model Post {
 }
 
 #[test]
+fn test_rust_async_delegate_exposes_stream_many() {
+    let ir = validate(
+        r#"
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let async_models = generate_all_models(&ir, true);
+    let async_code = async_models.get("User").expect("User missing");
+
+    assert!(
+        async_code.contains("pub fn stream_many("),
+        "expected async delegate to expose stream_many:\n{async_code}"
+    );
+    assert!(
+        async_code.contains("execute_owned(sql)"),
+        "expected stream_many to drive the executor's owned-stream path:\n{async_code}"
+    );
+    assert!(
+        async_code.contains("stream_many does not support backward pagination"),
+        "expected stream_many to reject backward pagination explicitly:\n{async_code}"
+    );
+
+    let sync_models = generate_all_models(&ir, false);
+    let sync_code = sync_models.get("User").expect("User missing");
+    assert!(
+        !sync_code.contains("pub fn stream_many("),
+        "stream_many should not be emitted for sync clients (the runtime would have to block on iteration); got:\n{sync_code}"
+    );
+}
+
+#[test]
 fn test_rust_relation_include_routes_through_engine_path() {
     let ir = validate(
         r#"

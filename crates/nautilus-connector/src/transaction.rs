@@ -540,6 +540,50 @@ impl Executor for TransactionExecutor {
         }
     }
 
+    /// Streaming inside a transaction is buffered: a live transaction holds the
+    /// connection exclusively, so the worker pattern used for pooled executors
+    /// does not apply. We reuse `execute_collect_on` (which already returns a
+    /// `'static` future via the `Arc<Mutex<...>>` handle) and adapt it to the
+    /// shared `RowStream<'static>` shape so codegen `stream_many` paths work
+    /// uniformly across pooled and transactional clients.
+    fn execute_owned(&self, sql: Sql) -> RowStream<'static> {
+        match &self.inner {
+            TransactionInner::Postgres(tx_arc) => {
+                RowStream::from_rows_future(Self::execute_collect_on(
+                    Arc::clone(tx_arc),
+                    sql.text,
+                    sql.params,
+                    true,
+                    crate::postgres::bind_value,
+                    crate::postgres_stream::decode_row_internal,
+                    "Query failed",
+                ))
+            }
+            TransactionInner::Mysql(tx_arc) => {
+                RowStream::from_rows_future(Self::execute_collect_on(
+                    Arc::clone(tx_arc),
+                    sql.text,
+                    sql.params,
+                    true,
+                    crate::mysql::bind_value,
+                    crate::mysql_stream::decode_row_internal,
+                    "Query failed",
+                ))
+            }
+            TransactionInner::Sqlite(tx_arc) => {
+                RowStream::from_rows_future(Self::execute_collect_on(
+                    Arc::clone(tx_arc),
+                    sql.text,
+                    sql.params,
+                    true,
+                    crate::sqlite::bind_value,
+                    crate::sqlite_stream::decode_row_internal,
+                    "Query failed",
+                ))
+            }
+        }
+    }
+
     fn execute_and_fetch<'conn>(
         &'conn self,
         mutation: &'conn Sql,

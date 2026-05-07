@@ -993,6 +993,63 @@ where
             )
         })
     }
+{% if is_async %}
+    /// Stream {{ model_name }} records matching `args` row-by-row.
+    ///
+    /// Unlike [`Self::find_many`], which materializes the full result set
+    /// into a `Vec<{{ model_name }}>`, `stream_many` returns an async stream
+    /// that yields each decoded record as it arrives from the database. This
+    /// keeps client memory bounded for large reads (exports, scans) and
+    /// reduces time-to-first-row.
+    ///
+    /// The stream owns the database connection for the duration of the
+    /// iteration; dropping the stream early releases the connection cleanly
+    /// because the underlying worker drains the remaining rows before
+    /// returning the connection to the pool.
+    ///
+    /// Backward pagination (`take` < 0) is not supported because the engine
+    /// would have to buffer the full window before reversing it; use
+    /// [`Self::find_many`] for that case.
+    ///
+    /// Note: `stream_many` always runs against the connector directly. The
+    /// embedded-engine path used by `find_many` is not available here.
+    pub fn stream_many(
+        &self,
+        args: nautilus_core::FindManyArgs,
+    ) -> nautilus_core::Result<
+        impl futures::stream::Stream<Item = nautilus_core::Result<{{ model_name }}>>
+            + Send
+            + 'static,
+    >
+    where
+        E: 'static,
+    {
+        let builder = Self::build_find_many_builder(self.client.clone(), args)?;
+        let (client, sql, row_hints, decode_slots, backward) = builder.into_execution_parts()?;
+        if backward {
+            return Err(nautilus_core::Error::InvalidQuery(
+                "stream_many does not support backward pagination — use find_many for negative take values"
+                    .to_string(),
+            ));
+        }
+        Ok(async_stream::stream! {
+            use futures::stream::StreamExt;
+            let mut rows = client.executor().execute_owned(sql);
+            while let Some(item) = rows.next().await {
+                match item {
+                    Ok(raw) => {
+                        let row: crate::Row = raw.into();
+                        yield decode_model_row_with_hints(row, &decode_slots, &row_hints);
+                    }
+                    Err(e) => {
+                        yield Err(nautilus_core::Error::Other(e.to_string()));
+                        break;
+                    }
+                }
+            }
+        })
+    }
+{% endif %}
 
     /// Create a new {{ model_name }} record.
     ///
