@@ -27,25 +27,15 @@ impl crate::FromRow for {{ model_name }} {
 {%- for rel in relations %}
 {%- if rel.is_array %}
         let {{ rel.field_name }} = row.get("{{ rel.field_name }}_json")
-            .and_then(|v| match v {
-                nautilus_core::Value::Json(json) => {
-                    serde_json::from_value::<Vec<{{ rel.target_model }}>>(json.clone())
-                        .ok()
-                }
-                nautilus_core::Value::Null => Some(vec![]),
-                _ => None,
+            .map(|v| match v {
+                nautilus_core::Value::Null => vec![],
+                other => decode_relation_json_ref::<Vec<{{ rel.target_model }}>>(other)
+                    .unwrap_or_default(),
             })
-            .unwrap_or_else(|| vec![]);
+            .unwrap_or_default();
 {%- else %}
         let {{ rel.field_name }} = row.get("{{ rel.field_name }}_json")
-            .and_then(|v| match v {
-                nautilus_core::Value::Json(json) => {
-                    serde_json::from_value::<{{ rel.target_model }}>(json.clone())
-                        .ok()
-                        .map(Box::new)
-                }
-                _ => None,
-            });
+            .and_then(|v| decode_relation_json_ref::<{{ rel.target_model }}>(v).map(Box::new));
 {%- endif %}
 {%- endfor %}
 

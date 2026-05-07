@@ -64,6 +64,26 @@ fn projected_scalar_decode_slots(fields: &std::collections::HashSet<String>) -> 
     slots
 }
 
+fn decode_relation_json_ref<T>(value: &nautilus_core::Value) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    match value {
+        nautilus_core::Value::Json(json) => serde::Deserialize::deserialize(json).ok(),
+        _ => None,
+    }
+}
+
+fn decode_relation_json_owned<T>(value: nautilus_core::Value) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    match value {
+        nautilus_core::Value::Json(json) => serde_json::from_value(json).ok(),
+        _ => None,
+    }
+}
+
 fn decode_model_row_with_hints(
     row: crate::Row,
     decode_slots: &[usize],
@@ -103,21 +123,12 @@ fn decode_model_row_with_hints(
 {%- for rel in relations %}
                 "{{ rel.field_name }}_json" => {
 {%- if rel.is_array %}
-                    {{ rel.field_name }} = match value {
-                        nautilus_core::Value::Json(json) => {
-                            serde_json::from_value::<Vec<{{ rel.target_model }}>>(json)
-                                .unwrap_or_else(|_| vec![])
-                        }
-                        nautilus_core::Value::Null => vec![],
-                        _ => vec![],
-                    };
+                    {{ rel.field_name }} =
+                        decode_relation_json_owned::<Vec<{{ rel.target_model }}>>(value)
+                            .unwrap_or_default();
 {%- else %}
-                    {{ rel.field_name }} = match value {
-                        nautilus_core::Value::Json(json) => serde_json::from_value::<{{ rel.target_model }}>(json)
-                            .ok()
-                            .map(Box::new),
-                        _ => None,
-                    };
+                    {{ rel.field_name }} =
+                        decode_relation_json_owned::<{{ rel.target_model }}>(value).map(Box::new);
 {%- endif %}
                 }
 {%- endfor %}
