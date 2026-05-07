@@ -1,6 +1,6 @@
 //! Error types for schema parsing and validation.
 
-use crate::span::Span;
+use crate::span::{LineIndex, Span};
 use std::fmt;
 
 /// Error type for schema operations.
@@ -27,24 +27,30 @@ pub enum SchemaError {
 impl SchemaError {
     /// Format error with source context for display.
     pub fn format_with_source(&self, source: &str) -> String {
+        let line_index = LineIndex::new(source);
+        self.format_with_source_indexed(source, &line_index)
+    }
+
+    /// Format error with source context using a cached line index.
+    pub fn format_with_source_indexed(&self, source: &str, line_index: &LineIndex) -> String {
         match self {
             SchemaError::Lexer(msg, span)
             | SchemaError::Parse(msg, span)
             | SchemaError::Validation(msg, span)
             | SchemaError::Warning(msg, span) => {
-                let (start_pos, _) = span.to_positions(source);
+                let (start_pos, _) = span.to_positions_with_index(source, line_index);
                 format!("{} at {}", msg, start_pos)
             }
             SchemaError::UnterminatedString(span) => {
-                let (start_pos, _) = span.to_positions(source);
+                let (start_pos, _) = span.to_positions_with_index(source, line_index);
                 format!("Unterminated string literal at {}", start_pos)
             }
             SchemaError::InvalidNumber(num, span) => {
-                let (start_pos, _) = span.to_positions(source);
+                let (start_pos, _) = span.to_positions_with_index(source, line_index);
                 format!("Invalid number '{}' at {}", num, start_pos)
             }
             SchemaError::UnexpectedCharacter(ch, span) => {
-                let (start_pos, _) = span.to_positions(source);
+                let (start_pos, _) = span.to_positions_with_index(source, line_index);
                 format!("Unexpected character '{}' at {}", ch, start_pos)
             }
             SchemaError::Other(msg) => msg.clone(),
@@ -55,33 +61,44 @@ impl SchemaError {
     /// Uses the format `filepath:line:column: message` which is recognized
     /// as a clickable link by VS Code and other IDEs.
     pub fn format_with_file(&self, filepath: &str, source: &str) -> String {
+        let line_index = LineIndex::new(source);
+        self.format_with_file_indexed(filepath, source, &line_index)
+    }
+
+    /// Format error with file path and source context using a cached line index.
+    pub fn format_with_file_indexed(
+        &self,
+        filepath: &str,
+        source: &str,
+        line_index: &LineIndex,
+    ) -> String {
         match self {
             SchemaError::Lexer(msg, span)
             | SchemaError::Parse(msg, span)
             | SchemaError::Validation(msg, span)
             | SchemaError::Warning(msg, span) => {
-                let (start_pos, _) = span.to_positions(source);
+                let (start_pos, _) = span.to_positions_with_index(source, line_index);
                 format!(
                     "{}:{}:{}: {}",
                     filepath, start_pos.line, start_pos.column, msg
                 )
             }
             SchemaError::UnterminatedString(span) => {
-                let (start_pos, _) = span.to_positions(source);
+                let (start_pos, _) = span.to_positions_with_index(source, line_index);
                 format!(
                     "{}:{}:{}: Unterminated string literal",
                     filepath, start_pos.line, start_pos.column
                 )
             }
             SchemaError::InvalidNumber(num, span) => {
-                let (start_pos, _) = span.to_positions(source);
+                let (start_pos, _) = span.to_positions_with_index(source, line_index);
                 format!(
                     "{}:{}:{}: Invalid number '{}'",
                     filepath, start_pos.line, start_pos.column, num
                 )
             }
             SchemaError::UnexpectedCharacter(ch, span) => {
-                let (start_pos, _) = span.to_positions(source);
+                let (start_pos, _) = span.to_positions_with_index(source, line_index);
                 format!(
                     "{}:{}:{}: Unexpected character '{}'",
                     filepath, start_pos.line, start_pos.column, ch
@@ -163,5 +180,21 @@ mod tests {
         let err = SchemaError::Lexer("unexpected token".to_string(), span);
         let formatted = err.format_with_file("schema.nautilus", source);
         assert_eq!(formatted, "schema.nautilus:2:1: unexpected token");
+    }
+
+    #[test]
+    fn test_indexed_formatting_matches_plain_formatting() {
+        let source = "hello\nworld";
+        let span = Span::new(6, 11);
+        let err = SchemaError::Lexer("unexpected token".to_string(), span);
+        let index = LineIndex::new(source);
+        assert_eq!(
+            err.format_with_source(source),
+            err.format_with_source_indexed(source, &index)
+        );
+        assert_eq!(
+            err.format_with_file("schema.nautilus", source),
+            err.format_with_file_indexed("schema.nautilus", source, &index)
+        );
     }
 }

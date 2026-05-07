@@ -78,7 +78,7 @@ pub use error::{Result, SchemaError};
 pub use formatter::format_schema;
 pub use lexer::Lexer;
 pub use parser::Parser;
-pub use span::{Position, Span};
+pub use span::{LineIndex, Position, Span};
 pub use token::{Token, TokenKind};
 pub use validator::validate_schema;
 use validator::validate_schema_ref;

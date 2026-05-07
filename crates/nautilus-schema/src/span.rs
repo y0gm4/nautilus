@@ -24,6 +24,59 @@ impl fmt::Display for Position {
     }
 }
 
+/// Cached line-start offsets for a source string.
+///
+/// Build this once per source document when many span/position conversions are
+/// needed, such as in an LSP server or when formatting many diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineIndex {
+    line_starts: Vec<usize>,
+}
+
+impl LineIndex {
+    /// Build a line index for `source`.
+    pub fn new(source: &str) -> Self {
+        let mut line_starts =
+            Vec::with_capacity(source.bytes().filter(|b| *b == b'\n').count() + 1);
+        line_starts.push(0);
+        for (idx, byte) in source.bytes().enumerate() {
+            if byte == b'\n' {
+                line_starts.push(idx + 1);
+            }
+        }
+        Self { line_starts }
+    }
+
+    /// Return the number of lines tracked by this index.
+    pub fn line_count(&self) -> usize {
+        self.line_starts.len()
+    }
+
+    /// Return the byte offset where the given 1-indexed line starts.
+    pub fn line_start_offset(&self, line: usize) -> Option<usize> {
+        line.checked_sub(1)
+            .and_then(|idx| self.line_starts.get(idx))
+            .copied()
+    }
+
+    /// Convert a byte offset to a 1-indexed line number.
+    pub fn line_number_at_offset(&self, offset: usize) -> usize {
+        match self.line_starts.binary_search(&offset) {
+            Ok(idx) => idx + 1,
+            Err(next_idx) => next_idx.max(1),
+        }
+    }
+
+    /// Convert a byte offset to a 1-indexed line/column position.
+    pub fn position_at_offset(&self, source: &str, offset: usize) -> Position {
+        let safe = offset.min(source.len());
+        let line = self.line_number_at_offset(safe);
+        let line_start = self.line_start_offset(line).unwrap_or(0);
+        let column = source[line_start..safe].chars().count() + 1;
+        Position { line, column }
+    }
+}
+
 /// A span in source code (byte offsets).
 ///
 /// Spans use byte offsets for efficient slicing. Line/column information
@@ -87,6 +140,17 @@ impl Span {
     pub fn to_positions(&self, source: &str) -> (Position, Position) {
         let start_pos = byte_offset_to_position(source, self.start);
         let end_pos = byte_offset_to_position(source, self.end);
+        (start_pos, end_pos)
+    }
+
+    /// Convert byte offset span to line/column positions using a cached line index.
+    pub fn to_positions_with_index(
+        &self,
+        source: &str,
+        line_index: &LineIndex,
+    ) -> (Position, Position) {
+        let start_pos = line_index.position_at_offset(source, self.start);
+        let end_pos = line_index.position_at_offset(source, self.end);
         (start_pos, end_pos)
     }
 }
@@ -164,5 +228,26 @@ mod tests {
         let (start, end) = span.to_positions(source);
         assert_eq!(start, Position::new(1, 1));
         assert_eq!(end, Position::new(1, 6));
+    }
+
+    #[test]
+    fn line_index_tracks_line_starts() {
+        let source = "alpha\nbeta\ngamma";
+        let index = LineIndex::new(source);
+        assert_eq!(index.line_count(), 3);
+        assert_eq!(index.line_start_offset(1), Some(0));
+        assert_eq!(index.line_start_offset(2), Some(6));
+        assert_eq!(index.line_start_offset(3), Some(11));
+    }
+
+    #[test]
+    fn span_to_positions_with_index_matches_plain_conversion() {
+        let source = "hello\nworld";
+        let span = Span::new(6, 11);
+        let index = LineIndex::new(source);
+        assert_eq!(
+            span.to_positions(source),
+            span.to_positions_with_index(source, &index)
+        );
     }
 }

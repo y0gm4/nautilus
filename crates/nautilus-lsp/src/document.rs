@@ -10,7 +10,7 @@ use nautilus_schema::{
         analyze, completion_with_analysis, goto_definition_with_analysis, hover_with_analysis,
         AnalysisResult, CompletionItem, HoverInfo,
     },
-    format_schema, Span,
+    format_schema, LineIndex, Span,
 };
 
 /// Snapshot of a single `.nautilus` document.
@@ -18,6 +18,8 @@ use nautilus_schema::{
 pub struct DocumentState {
     /// Full text of the document as last received from the client.
     pub source: String,
+    /// Cached line offsets for fast span/position conversion.
+    pub line_index: LineIndex,
     /// Analysis result produced from `source`.
     pub analysis: AnalysisResult,
 }
@@ -25,8 +27,13 @@ pub struct DocumentState {
 impl DocumentState {
     /// Analyze `source` and build a new [`DocumentState`].
     pub fn new(source: String) -> Self {
+        let line_index = LineIndex::new(&source);
         let analysis = analyze(&source);
-        Self { source, analysis }
+        Self {
+            source,
+            line_index,
+            analysis,
+        }
     }
 
     /// Completion items derived from the cached analysis.

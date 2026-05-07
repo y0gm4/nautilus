@@ -4,7 +4,7 @@
 use nautilus_schema::{
     analysis::{CompletionItem, CompletionKind, HoverInfo, SemanticKind, SemanticToken},
     diagnostic::{Diagnostic, Severity},
-    Span, Token, TokenKind,
+    LineIndex, Span, Token, TokenKind,
 };
 use tower_lsp::lsp_types::{
     self, CompletionItemKind, CompletionTextEdit, DiagnosticSeverity, InsertTextFormat, Position,
@@ -14,46 +14,47 @@ use tower_lsp::lsp_types::{
 /// Convert a byte `offset` in `source` to an LSP [`Position`].
 ///
 /// The returned position is 0-indexed (line, character).
+#[allow(dead_code)]
 pub fn offset_to_position(source: &str, offset: usize) -> Position {
+    let line_index = LineIndex::new(source);
+    offset_to_position_with_index(source, &line_index, offset)
+}
+
+/// Convert a byte `offset` in `source` to an LSP [`Position`] using a cached
+/// line index.
+pub fn offset_to_position_with_index(
+    source: &str,
+    line_index: &LineIndex,
+    offset: usize,
+) -> Position {
     let safe = offset.min(source.len());
-    let mut line = 0u32;
-    let mut character = 0u32;
-
-    for (idx, ch) in source.char_indices() {
-        if idx >= safe {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            character = 0;
-        } else {
-            character += ch.len_utf16() as u32;
-        }
+    let line_number = line_index.line_number_at_offset(safe);
+    let line_start = line_index.line_start_offset(line_number).unwrap_or(0);
+    let character = source[line_start..safe]
+        .chars()
+        .map(|ch| ch.len_utf16() as u32)
+        .sum();
+    Position {
+        line: (line_number.saturating_sub(1)) as u32,
+        character,
     }
-
-    Position { line, character }
 }
 
 /// Convert an LSP [`Position`] to a byte offset in `source`.
 ///
 /// Clamps to `source.len()` if the position is past the end.
+#[allow(dead_code)]
 pub fn position_to_offset(source: &str, pos: Position) -> usize {
-    let mut current_line = 0u32;
-    let mut line_start = 0usize;
+    let line_index = LineIndex::new(source);
+    position_to_offset_with_index(source, &line_index, pos)
+}
 
-    for (i, ch) in source.char_indices() {
-        if current_line == pos.line {
-            break;
-        }
-        if ch == '\n' {
-            current_line += 1;
-            line_start = i + ch.len_utf8();
-        }
-    }
-
-    if current_line != pos.line {
+/// Convert an LSP [`Position`] to a byte offset in `source` using a cached
+/// line index.
+pub fn position_to_offset_with_index(source: &str, line_index: &LineIndex, pos: Position) -> usize {
+    let Some(line_start) = line_index.line_start_offset(pos.line as usize + 1) else {
         return source.len();
-    }
+    };
 
     let mut utf16_col = 0u32;
     for (rel_idx, ch) in source[line_start..].char_indices() {
@@ -77,20 +78,36 @@ pub fn position_to_offset(source: &str, pos: Position) -> usize {
     source.len()
 }
 
+#[allow(dead_code)]
 pub fn span_to_range(source: &str, span: &Span) -> Range {
+    let line_index = LineIndex::new(source);
+    span_to_range_with_index(source, &line_index, span)
+}
+
+pub fn span_to_range_with_index(source: &str, line_index: &LineIndex, span: &Span) -> Range {
     Range {
-        start: offset_to_position(source, span.start),
-        end: offset_to_position(source, span.end),
+        start: offset_to_position_with_index(source, line_index, span.start),
+        end: offset_to_position_with_index(source, line_index, span.end),
     }
 }
 
+#[allow(dead_code)]
 pub fn nautilus_diagnostic_to_lsp(source: &str, d: &Diagnostic) -> lsp_types::Diagnostic {
+    let line_index = LineIndex::new(source);
+    nautilus_diagnostic_to_lsp_with_index(source, &line_index, d)
+}
+
+pub fn nautilus_diagnostic_to_lsp_with_index(
+    source: &str,
+    line_index: &LineIndex,
+    d: &Diagnostic,
+) -> lsp_types::Diagnostic {
     let severity = match d.severity {
         Severity::Error => DiagnosticSeverity::ERROR,
         Severity::Warning => DiagnosticSeverity::WARNING,
     };
     lsp_types::Diagnostic {
-        range: span_to_range(source, &d.span),
+        range: span_to_range_with_index(source, line_index, &d.span),
         severity: Some(severity),
         message: d.message.clone(),
         source: Some("nautilus-schema".to_string()),
@@ -98,8 +115,20 @@ pub fn nautilus_diagnostic_to_lsp(source: &str, d: &Diagnostic) -> lsp_types::Di
     }
 }
 
+#[allow(dead_code)]
 pub fn nautilus_completion_to_lsp(
     source: &str,
+    tokens: &[Token],
+    offset: usize,
+    item: &CompletionItem,
+) -> lsp_types::CompletionItem {
+    let line_index = LineIndex::new(source);
+    nautilus_completion_to_lsp_with_index(source, &line_index, tokens, offset, item)
+}
+
+pub fn nautilus_completion_to_lsp_with_index(
+    source: &str,
+    line_index: &LineIndex,
     tokens: &[Token],
     offset: usize,
     item: &CompletionItem,
@@ -113,7 +142,7 @@ pub fn nautilus_completion_to_lsp(
         CompletionKind::EnumName => CompletionItemKind::ENUM,
         CompletionKind::FieldName => CompletionItemKind::FIELD,
     };
-    let (new_text, range) = completion_text_edit(source, tokens, offset, item);
+    let (new_text, range) = completion_text_edit(source, line_index, tokens, offset, item);
     lsp_types::CompletionItem {
         label: item.label.clone(),
         kind: Some(kind),
@@ -131,6 +160,7 @@ pub fn nautilus_completion_to_lsp(
 
 fn completion_text_edit(
     source: &str,
+    line_index: &LineIndex,
     tokens: &[Token],
     offset: usize,
     item: &CompletionItem,
@@ -151,8 +181,8 @@ fn completion_text_edit(
             return (
                 new_text,
                 Range {
-                    start: offset_to_position(source, content_start),
-                    end: offset_to_position(source, content_end),
+                    start: offset_to_position_with_index(source, line_index, content_start),
+                    end: offset_to_position_with_index(source, line_index, content_end),
                 },
             );
         }
@@ -166,8 +196,8 @@ fn completion_text_edit(
     (
         new_text,
         Range {
-            start: offset_to_position(source, start),
-            end: offset_to_position(source, end),
+            start: offset_to_position_with_index(source, line_index, start),
+            end: offset_to_position_with_index(source, line_index, end),
         },
     )
 }
@@ -220,8 +250,21 @@ fn is_completion_word_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
+#[allow(dead_code)]
 pub fn hover_info_to_lsp(source: &str, h: &HoverInfo) -> lsp_types::Hover {
-    let range = h.span.as_ref().map(|s| span_to_range(source, s));
+    let line_index = LineIndex::new(source);
+    hover_info_to_lsp_with_index(source, &line_index, h)
+}
+
+pub fn hover_info_to_lsp_with_index(
+    source: &str,
+    line_index: &LineIndex,
+    h: &HoverInfo,
+) -> lsp_types::Hover {
+    let range = h
+        .span
+        .as_ref()
+        .map(|s| span_to_range_with_index(source, line_index, s));
     lsp_types::Hover {
         contents: lsp_types::HoverContents::Markup(lsp_types::MarkupContent {
             kind: lsp_types::MarkupKind::Markdown,
@@ -237,13 +280,23 @@ pub fn hover_info_to_lsp(source: &str, h: &HoverInfo) -> lsp_types::Hover {
 /// - `0` -> `nautilusModel`        (model reference)
 /// - `1` -> `nautilusEnum`         (enum reference)
 /// - `2` -> `nautilusCompositeType` (composite type reference)
+#[allow(dead_code)]
 pub fn semantic_tokens_to_lsp(source: &str, tokens: &[SemanticToken]) -> Vec<LspSemanticToken> {
+    let line_index = LineIndex::new(source);
+    semantic_tokens_to_lsp_with_index(source, &line_index, tokens)
+}
+
+pub fn semantic_tokens_to_lsp_with_index(
+    source: &str,
+    line_index: &LineIndex,
+    tokens: &[SemanticToken],
+) -> Vec<LspSemanticToken> {
     let mut result = Vec::with_capacity(tokens.len());
     let mut prev_line = 0u32;
     let mut prev_start = 0u32;
 
     for token in tokens {
-        let pos = offset_to_position(source, token.span.start);
+        let pos = offset_to_position_with_index(source, line_index, token.span.start);
         let length = (token.span.end - token.span.start) as u32;
 
         let delta_line = pos.line - prev_line;
@@ -410,5 +463,22 @@ mod tests {
             }
         );
         assert_eq!(edit.new_text, "String");
+    }
+
+    #[test]
+    fn cached_line_index_matches_plain_lsp_conversion() {
+        let source = "model User {\n  note String @default(\"hi 😀\")\n}\n";
+        let line_index = LineIndex::new(source);
+        let offset = source.find("😀").unwrap();
+        let pos = offset_to_position(source, offset);
+
+        assert_eq!(
+            pos,
+            offset_to_position_with_index(source, &line_index, offset)
+        );
+        assert_eq!(
+            offset,
+            position_to_offset_with_index(source, &line_index, pos)
+        );
     }
 }

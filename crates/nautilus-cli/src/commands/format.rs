@@ -1,5 +1,5 @@
 use anyhow::Context;
-use nautilus_schema::{format_schema, parse_schema_source_with_recovery};
+use nautilus_schema::{format_schema, parse_schema_source_with_recovery, LineIndex};
 
 use crate::commands::db::connection::resolve_schema_path;
 use crate::tui;
@@ -23,8 +23,14 @@ pub async fn run(schema_arg: Option<String>) -> anyhow::Result<()> {
     let recovered = parsed.recovered_errors;
     if !recovered.is_empty() {
         tui::spinner_err(sp, "Syntax errors found — formatting aborted");
+        let line_index = LineIndex::new(&schema_source);
+        let schema_label = schema_path.display().to_string();
         for e in &recovered {
-            tui::print_err_line(&e.to_string());
+            tui::print_err_line(&e.format_with_file_indexed(
+                &schema_label,
+                &schema_source,
+                &line_index,
+            ));
         }
         anyhow::bail!(
             "{} syntax error{} — fix them before formatting",

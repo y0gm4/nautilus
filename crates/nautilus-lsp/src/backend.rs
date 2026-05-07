@@ -21,8 +21,9 @@ use tower_lsp::{Client, LanguageServer};
 use nautilus_schema::analysis::semantic_tokens;
 
 use crate::convert::{
-    hover_info_to_lsp, nautilus_completion_to_lsp, nautilus_diagnostic_to_lsp, offset_to_position,
-    position_to_offset, semantic_tokens_to_lsp, span_to_range,
+    hover_info_to_lsp_with_index, nautilus_completion_to_lsp_with_index,
+    nautilus_diagnostic_to_lsp_with_index, offset_to_position_with_index,
+    position_to_offset_with_index, semantic_tokens_to_lsp_with_index, span_to_range_with_index,
 };
 use crate::document::DocumentState;
 
@@ -40,7 +41,7 @@ impl Backend {
             .analysis
             .diagnostics
             .iter()
-            .map(|d| nautilus_diagnostic_to_lsp(&source, d))
+            .map(|d| nautilus_diagnostic_to_lsp_with_index(&source, &state.line_index, d))
             .collect();
         self.docs.insert(uri.clone(), state);
         self.client.publish_diagnostics(uri, lsp_diags, None).await;
@@ -145,12 +146,18 @@ impl LanguageServer for Backend {
         let Some(state) = self.docs.get(uri) else {
             return Ok(None);
         };
-        let offset = position_to_offset(&state.source, pos);
+        let offset = position_to_offset_with_index(&state.source, &state.line_index, pos);
         let items = state.completion(offset);
         let lsp_items: Vec<CompletionItem> = items
             .iter()
             .map(|item| {
-                nautilus_completion_to_lsp(&state.source, &state.analysis.tokens, offset, item)
+                nautilus_completion_to_lsp_with_index(
+                    &state.source,
+                    &state.line_index,
+                    &state.analysis.tokens,
+                    offset,
+                    item,
+                )
             })
             .collect();
 
@@ -164,12 +171,12 @@ impl LanguageServer for Backend {
         let Some(state) = self.docs.get(uri) else {
             return Ok(None);
         };
-        let offset = position_to_offset(&state.source, pos);
+        let offset = position_to_offset_with_index(&state.source, &state.line_index, pos);
 
         Ok(state
             .hover(offset)
             .as_ref()
-            .map(|h| hover_info_to_lsp(&state.source, h)))
+            .map(|h| hover_info_to_lsp_with_index(&state.source, &state.line_index, h)))
     }
 
     async fn goto_definition(
@@ -182,13 +189,13 @@ impl LanguageServer for Backend {
         let Some(state) = self.docs.get(uri) else {
             return Ok(None);
         };
-        let offset = position_to_offset(&state.source, pos);
+        let offset = position_to_offset_with_index(&state.source, &state.line_index, pos);
 
         let Some(span) = state.goto_definition(offset) else {
             return Ok(None);
         };
 
-        let range = span_to_range(&state.source, &span);
+        let range = span_to_range_with_index(&state.source, &state.line_index, &span);
         let location = Location {
             uri: uri.clone(),
             range,
@@ -210,7 +217,7 @@ impl LanguageServer for Backend {
         };
 
         let tokens = semantic_tokens(ast, &state.analysis.tokens);
-        let data = semantic_tokens_to_lsp(&state.source, &tokens);
+        let data = semantic_tokens_to_lsp_with_index(&state.source, &state.line_index, &tokens);
 
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
@@ -236,7 +243,11 @@ impl LanguageServer for Backend {
         let edit = TextEdit {
             range: tower_lsp::lsp_types::Range {
                 start: tower_lsp::lsp_types::Position::new(0, 0),
-                end: offset_to_position(&state.source, state.source.len()),
+                end: offset_to_position_with_index(
+                    &state.source,
+                    &state.line_index,
+                    state.source.len(),
+                ),
             },
             new_text: formatted,
         };
