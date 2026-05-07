@@ -1,6 +1,6 @@
 use super::*;
 
-impl SchemaValidator {
+impl SchemaValidator<'_> {
     pub(super) fn collect_names(&mut self) {
         for decl in &self.schema.declarations {
             match decl {

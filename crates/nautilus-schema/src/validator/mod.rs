@@ -60,26 +60,24 @@ const JAVA_ONLY_GENERATOR_FIELDS: &[&str] = &["package", "group_id", "artifact_i
 ///
 /// All validation errors are collected and returned together when possible.
 pub fn validate_schema(schema: Schema) -> Result<SchemaIr> {
+    validate_schema_ref(&schema)
+}
+
+/// Validate a schema AST by reference, avoiding an extra clone in callers that
+/// must retain the AST after validation.
+pub(crate) fn validate_schema_ref(schema: &Schema) -> Result<SchemaIr> {
     let validator = SchemaValidator::new(schema);
     validator.validate()
 }
 
-/// Validates a schema AST and returns **all** diagnostics, not just the first one.
-///
-/// Unlike [`validate_schema`], which stops at the first error, this function
-/// runs every validation pass and collects all errors so that the analysis API
-/// and LSP server can surface the complete set of problems in one shot.
-///
-/// Returns `(Option<SchemaIr>, Vec<SchemaError>)`:
-/// - The validated IR when there are no errors; `None` otherwise.
-/// - Every error encountered across all validation passes (may be empty on success).
-pub(crate) fn validate_all(schema: Schema) -> (Option<SchemaIr>, Vec<SchemaError>) {
+/// Validate a schema AST by reference while collecting every diagnostic.
+pub(crate) fn validate_all_ref(schema: &Schema) -> (Option<SchemaIr>, Vec<SchemaError>) {
     let validator = SchemaValidator::new(schema);
     validator.validate_collect_all()
 }
 
-struct SchemaValidator {
-    schema: Schema,
+struct SchemaValidator<'a> {
+    schema: &'a Schema,
     errors: VecDeque<SchemaError>,
     warnings: VecDeque<SchemaError>,
     models: HashMap<String, Span>,
@@ -87,8 +85,8 @@ struct SchemaValidator {
     composite_types: HashMap<String, Span>,
 }
 
-impl SchemaValidator {
-    fn new(schema: Schema) -> Self {
+impl<'a> SchemaValidator<'a> {
+    fn new(schema: &'a Schema) -> Self {
         Self {
             schema,
             errors: VecDeque::new(),

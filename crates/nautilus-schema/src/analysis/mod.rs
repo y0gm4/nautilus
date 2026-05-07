@@ -32,7 +32,7 @@ use crate::diagnostic::Diagnostic;
 use crate::ir::SchemaIr;
 use crate::span::Span;
 use crate::token::{Token, TokenKind};
-use crate::validator::validate_all;
+use crate::validator::validate_all_ref;
 use crate::{Lexer, Parser};
 
 /// The result of a full analysis pass over a `.nautilus` source string.
@@ -119,7 +119,7 @@ pub fn analyze(source: &str) -> AnalysisResult {
         }
     };
 
-    let (ir, val_errors) = validate_all(ast.clone());
+    let (ir, val_errors) = validate_all_ref(&ast);
     for e in val_errors {
         diagnostics.push(Diagnostic::from(e));
     }

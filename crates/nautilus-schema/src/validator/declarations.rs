@@ -1,6 +1,6 @@
 use super::*;
 
-impl SchemaValidator {
+impl SchemaValidator<'_> {
     pub(super) fn validate_datasources(&mut self) {
         let datasources: Vec<_> = self
             .schema

@@ -19,7 +19,7 @@ fn missing_extension_warning(
     )
 }
 
-impl SchemaValidator {
+impl SchemaValidator<'_> {
     pub(super) fn validate_models(&mut self) {
         let models: Vec<_> = self.schema.models().cloned().collect();
         for model in &models {

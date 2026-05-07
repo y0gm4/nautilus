@@ -1,6 +1,6 @@
 use super::*;
 
-impl SchemaValidator {
+impl SchemaValidator<'_> {
     /// Build the IR from the validated AST.
     pub(super) fn build_ir(self) -> Result<SchemaIr> {
         let mut ir = SchemaIr::new();

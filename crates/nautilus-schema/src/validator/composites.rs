@@ -1,6 +1,6 @@
 use super::*;
 
-impl SchemaValidator {
+impl SchemaValidator<'_> {
     pub(super) fn validate_composite_types(&mut self) {
         let types: Vec<_> = self.schema.types().cloned().collect();
         for type_decl in &types {

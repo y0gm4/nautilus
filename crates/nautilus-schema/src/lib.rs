@@ -81,6 +81,7 @@ pub use parser::Parser;
 pub use span::{Position, Span};
 pub use token::{Token, TokenKind};
 pub use validator::validate_schema;
+use validator::validate_schema_ref;
 
 /// Parsed schema plus any non-fatal parse errors recovered during parsing.
 #[derive(Debug, Clone)]
@@ -138,7 +139,7 @@ pub fn parse_schema_source(source: &str) -> Result<Schema> {
 /// Parse and validate a schema source string.
 pub fn validate_schema_source(source: &str) -> Result<ValidatedSchema> {
     let ast = parse_schema_source(source)?;
-    let ir = validate_schema(ast.clone())?;
+    let ir = validate_schema_ref(&ast)?;
     Ok(ValidatedSchema { ast, ir })
 }
 

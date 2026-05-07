@@ -1,6 +1,6 @@
 use super::*;
 
-impl SchemaValidator {
+impl SchemaValidator<'_> {
     pub(super) fn validate_relations(&mut self) {
         let models: Vec<_> = self.schema.models().cloned().collect();
         for model in &models {
