@@ -205,14 +205,14 @@ pub(super) async fn execute_group_by_rows(
 
     let mut shaped_rows = Vec::with_capacity(rows.len());
     for row in rows {
-        let mut columns = Vec::with_capacity(row.len());
+        let mut shaped_row = Row::with_capacity(row.len() + 5);
         let mut count_map = serde_json::Map::new();
         let mut avg_map = serde_json::Map::new();
         let mut sum_map = serde_json::Map::new();
         let mut min_map = serde_json::Map::new();
         let mut max_map = serde_json::Map::new();
 
-        for (col_name, value) in row.into_columns() {
+        for (col_name, value) in row.into_columns_iter() {
             if let Some(rest) = col_name.strip_prefix("_count__") {
                 let key = if rest == "_all" { "_all" } else { rest };
                 count_map.insert(key.to_string(), value.to_json_plain());
@@ -233,30 +233,30 @@ pub(super) async fn execute_group_by_rows(
                     .get(field_key)
                     .cloned()
                     .unwrap_or_else(|| field_key.to_string());
-                columns.push((field_key, value));
+                shaped_row.push_column(field_key, value);
             }
         }
 
         if !count_map.is_empty() {
-            columns.push((
+            shaped_row.push_column(
                 "_count".to_string(),
                 Value::Json(JsonValue::Object(count_map)),
-            ));
+            );
         }
         if !avg_map.is_empty() {
-            columns.push(("_avg".to_string(), Value::Json(JsonValue::Object(avg_map))));
+            shaped_row.push_column("_avg".to_string(), Value::Json(JsonValue::Object(avg_map)));
         }
         if !sum_map.is_empty() {
-            columns.push(("_sum".to_string(), Value::Json(JsonValue::Object(sum_map))));
+            shaped_row.push_column("_sum".to_string(), Value::Json(JsonValue::Object(sum_map)));
         }
         if !min_map.is_empty() {
-            columns.push(("_min".to_string(), Value::Json(JsonValue::Object(min_map))));
+            shaped_row.push_column("_min".to_string(), Value::Json(JsonValue::Object(min_map)));
         }
         if !max_map.is_empty() {
-            columns.push(("_max".to_string(), Value::Json(JsonValue::Object(max_map))));
+            shaped_row.push_column("_max".to_string(), Value::Json(JsonValue::Object(max_map)));
         }
 
-        shaped_rows.push(Row::new(columns));
+        shaped_rows.push(shaped_row);
     }
 
     Ok(shaped_rows)

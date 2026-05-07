@@ -152,21 +152,20 @@ pub fn normalize_row_with_hints(
         return Ok(row);
     }
 
-    let columns = row
-        .into_columns()
-        .into_iter()
+    let mut normalized_row = Row::with_capacity(row.len());
+    for (idx, ((name, value), hint)) in row
+        .into_columns_iter()
         .zip(hints.iter().copied())
         .enumerate()
-        .map(|(idx, ((name, value), hint))| {
-            let normalized = match hint {
-                Some(hint) => normalize_value_with_hint(&name, idx, value, hint)?,
-                None => value,
-            };
-            Ok::<(String, Value), ProtocolError>((name, normalized))
-        })
-        .collect::<std::result::Result<Vec<_>, ProtocolError>>()?;
+    {
+        let normalized = match hint {
+            Some(hint) => normalize_value_with_hint(&name, idx, value, hint)?,
+            None => value,
+        };
+        normalized_row.push_column(name, normalized);
+    }
 
-    Ok(Row::new(columns))
+    Ok(normalized_row)
 }
 
 /// Newtype wrapper used by [`rows_to_raw_json`] to serialize a [`Row`] as a

@@ -96,7 +96,7 @@ fn decode_model_row_with_hints(
 {%- endif %}
 {%- endfor %}
 
-    for (column_idx, (column_name, value)) in row.into_columns().into_iter().enumerate() {
+    for (column_idx, (column_name, value)) in row.into_columns_iter().enumerate() {
         if column_idx >= decode_slots.len() {
 {%- if relations | length > 0 %}
             match column_name.as_str() {

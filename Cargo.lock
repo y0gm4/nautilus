@@ -1580,6 +1580,7 @@ dependencies = [
  "rust_decimal",
  "rustc-hash",
  "serde_json",
+ "smallvec",
  "sqlx",
  "tokio",
  "uuid",

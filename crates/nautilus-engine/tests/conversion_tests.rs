@@ -335,11 +335,21 @@ fn normalize_row_with_hints_returns_original_row_when_all_hints_are_none() {
         ("id".to_string(), Value::I64(1)),
         ("payload".to_string(), Value::Bytes(vec![1, 2, 3])),
     ]);
-    let original_columns_ptr = row.columns().as_ptr();
+    let id_name_ptr = row.columns()[0].0.as_ptr();
+    let payload_name_ptr = row.columns()[1].0.as_ptr();
+    let payload_value_ptr = match &row.columns()[1].1 {
+        Value::Bytes(bytes) => bytes.as_ptr(),
+        other => panic!("expected bytes value, got {other:?}"),
+    };
 
     let normalized = normalize_row_with_hints(row, &[None, None]).unwrap();
 
-    assert_eq!(normalized.columns().as_ptr(), original_columns_ptr);
+    assert_eq!(normalized.columns()[0].0.as_ptr(), id_name_ptr);
+    assert_eq!(normalized.columns()[1].0.as_ptr(), payload_name_ptr);
+    match &normalized.columns()[1].1 {
+        Value::Bytes(bytes) => assert_eq!(bytes.as_ptr(), payload_value_ptr),
+        other => panic!("expected bytes value, got {other:?}"),
+    }
     assert_eq!(normalized.get("id"), Some(&Value::I64(1)));
     assert_eq!(
         normalized.get("payload"),

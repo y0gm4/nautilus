@@ -49,21 +49,20 @@ pub fn normalize_row_with_hints(row: Row, hints: &[Option<ValueHint>]) -> Result
         return Ok(row);
     }
 
-    let columns = row
-        .into_columns()
-        .into_iter()
+    let mut normalized_row = Row::with_capacity(row.len());
+    for (idx, ((name, value), hint)) in row
+        .into_columns_iter()
         .zip(hints.iter().copied())
         .enumerate()
-        .map(|(idx, ((name, value), hint))| {
-            let normalized = match hint {
-                Some(hint) => normalize_value_with_hint(&name, idx, value, hint)?,
-                None => value,
-            };
-            Ok::<(String, Value), crate::ConnectorError>((name, normalized))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    {
+        let normalized = match hint {
+            Some(hint) => normalize_value_with_hint(&name, idx, value, hint)?,
+            None => value,
+        };
+        normalized_row.push_column(name, normalized);
+    }
 
-    Ok(Row::new(columns))
+    Ok(normalized_row)
 }
 
 /// Normalize a row with hints and decode it via [`FromRow`].
@@ -325,11 +324,21 @@ mod tests {
             ("id".to_string(), Value::I64(1)),
             ("payload".to_string(), Value::Bytes(vec![1, 2, 3])),
         ]);
-        let original_columns_ptr = row.columns().as_ptr();
+        let id_name_ptr = row.columns()[0].0.as_ptr();
+        let payload_name_ptr = row.columns()[1].0.as_ptr();
+        let payload_value_ptr = match &row.columns()[1].1 {
+            Value::Bytes(bytes) => bytes.as_ptr(),
+            other => panic!("expected bytes value, got {other:?}"),
+        };
 
         let normalized = normalize_row_with_hints(row, &[None, None]).unwrap();
 
-        assert_eq!(normalized.columns().as_ptr(), original_columns_ptr);
+        assert_eq!(normalized.columns()[0].0.as_ptr(), id_name_ptr);
+        assert_eq!(normalized.columns()[1].0.as_ptr(), payload_name_ptr);
+        match &normalized.columns()[1].1 {
+            Value::Bytes(bytes) => assert_eq!(bytes.as_ptr(), payload_value_ptr),
+            other => panic!("expected bytes value, got {other:?}"),
+        }
         assert_eq!(normalized.get("id"), Some(&Value::I64(1)));
         assert_eq!(
             normalized.get("payload"),

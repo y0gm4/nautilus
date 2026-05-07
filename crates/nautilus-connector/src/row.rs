@@ -2,13 +2,16 @@
 
 use nautilus_core::{RowAccess, Value};
 use rustc_hash::FxHasher;
+use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::OnceLock;
 
 const LINEAR_SCAN_LOOKUP_THRESHOLD: usize = 8;
+const INLINE_ROW_COLUMN_CAPACITY: usize = 8;
 
 type NameIndexMap = HashMap<u64, NameIndexEntry, BuildHasherDefault<U64IdentityHasher>>;
+type RowColumns = SmallVec<[(String, Value); INLINE_ROW_COLUMN_CAPACITY]>;
 
 #[derive(Debug)]
 enum NameIndexEntry {
@@ -102,7 +105,7 @@ fn hash_column_name(name: &str) -> u64 {
 /// If multiple columns have the same name, `get(name)` returns the first occurrence.
 #[derive(Debug)]
 pub struct Row {
-    columns: Vec<(String, Value)>,
+    columns: RowColumns,
     index: OnceLock<RowNameIndex>,
 }
 
@@ -110,9 +113,25 @@ impl Row {
     /// Create a new row from column-value pairs.
     pub fn new(columns: Vec<(String, Value)>) -> Self {
         Self {
-            columns,
+            columns: SmallVec::from_vec(columns),
             index: OnceLock::new(),
         }
+    }
+
+    /// Create an empty row with enough capacity for the expected column count.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            columns: SmallVec::with_capacity(capacity),
+            index: OnceLock::new(),
+        }
+    }
+
+    /// Append a column while constructing or reshaping a row.
+    ///
+    /// This invalidates the lazy name index so subsequent lookups stay correct.
+    pub fn push_column(&mut self, name: String, value: Value) {
+        self.columns.push((name, value));
+        self.index = OnceLock::new();
     }
 
     /// Get a value by column position (0-indexed).
@@ -164,9 +183,15 @@ impl Row {
         &self.columns
     }
 
+    /// Consume the row and iterate over owned `(name, value)` pairs without
+    /// forcing the internal storage back into a `Vec`.
+    pub fn into_columns_iter(self) -> impl Iterator<Item = (String, Value)> {
+        self.columns.into_iter()
+    }
+
     /// Consume the row and return the owned columns.
     pub fn into_columns(self) -> Vec<(String, Value)> {
-        self.columns
+        self.columns.into_vec()
     }
 }
 

@@ -304,12 +304,12 @@ pub(super) async fn hydrate_rows_with_includes(
 
     let mut hydrated = Vec::with_capacity(rows.len());
     for (idx, row) in rows.into_iter().enumerate() {
-        let mut columns = row.into_columns();
+        let mut hydrated_row = row;
         for (field_name, values) in &mut per_relation_values {
             let value = std::mem::replace(&mut values[idx], Value::Null);
-            columns.push((include_alias(field_name), value));
+            hydrated_row.push_column(include_alias(field_name), value);
         }
-        hydrated.push(Row::new(columns));
+        hydrated.push(hydrated_row);
     }
 
     Ok(hydrated)

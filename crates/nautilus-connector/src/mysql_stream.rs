@@ -17,16 +17,16 @@ pub type MysqlRowStream<'conn> = RowStream<'conn>;
 /// This function is public within the crate for use by the MySQL executor.
 pub(crate) fn decode_row_internal(row: MySqlRow) -> Result<Row> {
     let columns = row.columns();
-    let mut row_data = Vec::with_capacity(columns.len());
+    let mut row_data = Row::with_capacity(columns.len());
 
     for (i, column) in columns.iter().enumerate() {
         let name = column.name().to_string();
         let type_info = column.type_info();
         let value = decode_value(&row, i, type_info)?;
-        row_data.push((name, value));
+        row_data.push_column(name, value);
     }
 
-    Ok(Row::new(row_data))
+    Ok(row_data)
 }
 
 /// Decode a value from a sqlx MySQL row by index and type.
