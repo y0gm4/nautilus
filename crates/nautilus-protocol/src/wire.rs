@@ -10,7 +10,7 @@ use serde_json::Value;
 ///
 /// Can be a number, string, or null. The spec allows clients to omit the id
 /// for notifications (requests that don't expect a response).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RpcId {
     Number(i64),

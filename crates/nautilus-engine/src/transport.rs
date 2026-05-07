@@ -5,16 +5,20 @@
 //! dedicated writer task. Handler panics are caught via `catch_unwind` and
 //! converted into JSON-RPC internal-error responses so the client never hangs.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{self as tokio_io, AsyncBufReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-use nautilus_protocol::wire::err;
-use nautilus_protocol::{RpcRequest, RpcResponse};
+use nautilus_protocol::wire::{err, ok};
+use nautilus_protocol::{
+    RequestCancelParams, RequestCancelResult, RpcId, RpcRequest, RpcResponse, REQUEST_CANCEL,
+};
 
+use crate::conversion::check_protocol_version;
 use crate::handlers;
 use crate::state::EngineState;
 
@@ -22,6 +26,7 @@ use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
 
 const TRANSACTION_REAPER_INTERVAL: Duration = Duration::from_millis(250);
+type ActiveRequests = Arc<Mutex<HashMap<RpcId, JoinHandle<()>>>>;
 
 fn spawn_transaction_reaper(state: Arc<EngineState>) -> JoinHandle<()> {
     spawn_transaction_reaper_with_interval(state, TRANSACTION_REAPER_INTERVAL)
@@ -42,6 +47,51 @@ fn spawn_transaction_reaper_with_interval(
     })
 }
 
+async fn take_active_request(
+    active_requests: &ActiveRequests,
+    request_id: &RpcId,
+) -> Option<JoinHandle<()>> {
+    active_requests.lock().await.remove(request_id)
+}
+
+async fn handle_cancel_request(
+    request: RpcRequest,
+    active_requests: &ActiveRequests,
+) -> Option<RpcResponse> {
+    let response_id = request.id.clone();
+    let params: RequestCancelParams = match serde_json::from_value(request.params) {
+        Ok(params) => params,
+        Err(e) => {
+            return response_id.map(|id| {
+                err(
+                    Some(id),
+                    -32602,
+                    format!("Invalid cancel params: {}", e),
+                    None,
+                )
+            });
+        }
+    };
+
+    if let Err(e) = check_protocol_version(params.protocol_version) {
+        return response_id.map(|id| err(Some(id), e.code(), e.to_string(), None));
+    }
+
+    let maybe_handle = take_active_request(active_requests, &params.request_id).await;
+    let cancelled = maybe_handle.is_some();
+    if let Some(handle) = maybe_handle {
+        handle.abort();
+    }
+
+    response_id.map(|id| {
+        ok(
+            Some(id),
+            serde_json::value::to_raw_value(&RequestCancelResult { cancelled })
+                .expect("cancel result should serialize"),
+        )
+    })
+}
+
 /// Run the main request loop: read JSON-RPC requests from stdin, dispatch handlers, write responses to stdout
 pub async fn run_request_loop(state: EngineState) -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(state);
@@ -51,6 +101,7 @@ pub async fn run_request_loop(state: EngineState) -> Result<(), Box<dyn std::err
     let stdout = tokio_io::stdout();
 
     let (tx, mut rx) = mpsc::channel::<RpcResponse>(100);
+    let active_requests: ActiveRequests = Arc::new(Mutex::new(HashMap::new()));
 
     let writer_task = tokio::spawn(async move {
         // Buffered writer amortizes syscalls; we flush after each drained batch
@@ -137,10 +188,25 @@ pub async fn run_request_loop(state: EngineState) -> Result<(), Box<dyn std::err
                     continue;
                 }
 
+                if request.method == REQUEST_CANCEL {
+                    if let Some(response) = handle_cancel_request(request, &active_requests).await {
+                        let _ = tx.send(response).await;
+                    }
+                    continue;
+                }
+
                 let state_ref = Arc::clone(&state);
                 let tx_clone = tx.clone();
+                let active_requests_ref = Arc::clone(&active_requests);
+                let tracked_request_id = request.id.clone();
+                let cleanup_request_id = tracked_request_id.clone();
+                let (start_tx, start_rx) = tokio::sync::oneshot::channel();
 
-                tokio::spawn(async move {
+                let request_task = tokio::spawn(async move {
+                    if start_rx.await.is_err() {
+                        return;
+                    }
+
                     let request_id = request.id.clone();
                     let response = AssertUnwindSafe(handlers::handle_request(
                         &state_ref,
@@ -161,7 +227,20 @@ pub async fn run_request_loop(state: EngineState) -> Result<(), Box<dyn std::err
                         err(request_id, -32603, msg, None)
                     });
                     let _ = tx_clone.send(response).await;
+
+                    if let Some(request_id) = cleanup_request_id {
+                        active_requests_ref.lock().await.remove(&request_id);
+                    }
                 });
+
+                if let Some(request_id) = tracked_request_id {
+                    active_requests
+                        .lock()
+                        .await
+                        .insert(request_id, request_task);
+                }
+
+                let _ = start_tx.send(());
             }
             Err(e) => {
                 eprintln!("[engine] Read error: {}", e);
@@ -259,6 +338,32 @@ model User {
             .await
             .expect("count query should succeed")
             .len()
+    }
+
+    #[tokio::test]
+    async fn take_active_request_removes_and_returns_handle() {
+        let active_requests: ActiveRequests = Arc::new(Mutex::new(HashMap::new()));
+        let request_id = RpcId::String("stream-many".to_string());
+        let handle = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+
+        active_requests
+            .lock()
+            .await
+            .insert(request_id.clone(), handle);
+
+        let handle = take_active_request(&active_requests, &request_id)
+            .await
+            .expect("request should be present");
+        handle.abort();
+
+        let join_err = handle.await.expect_err("aborted task should not complete");
+        assert!(join_err.is_cancelled());
+        assert!(
+            active_requests.lock().await.is_empty(),
+            "tracked request should be removed after take"
+        );
     }
 
     #[tokio::test]

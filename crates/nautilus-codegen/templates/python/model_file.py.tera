@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from pydantic import BaseModel, Field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, ClassVar, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, ClassVar, Union
 {%- if needs_typeddict %}
 from typing import TypedDict, NotRequired, Literal
 from datetime import datetime
@@ -536,6 +536,73 @@ class {{ delegate_name }}:
 
         result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.findMany", payload)
         return [_{{ table_name }}_from_row(row) for row in result.get("data", [])]
+
+    {% if is_async %}
+    async def stream_many(
+        self,
+        *,
+        where: Optional[{{ model_name }}WhereInput] = None,
+        order_by: Optional[{{ model_name }}OrderByInput] = None,
+        {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
+        {% endif %}take: Optional[int] = None,
+        skip: Optional[int] = None,
+        select: Optional[{{ model_name }}SelectInput] = None,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+        cursor: Optional[Dict[str, Any]] = None,
+        distinct: Optional[List[str]] = None,
+        chunk_size: int = 128,
+    ) -> AsyncIterator[{{ model_name }}]:
+        """Stream {{ model_name }} records as they arrive from the engine.
+
+        Unlike :meth:`find_many`, this API does not merge every partial frame
+        into one final list before returning. Each matching row is yielded as
+        soon as the engine emits the next chunk.
+
+        Args:
+            chunk_size: Protocol-level chunk size used by the engine for this
+                        streamed request. Must be greater than zero.
+
+        Yields:
+            Matching ``{{ model_name }}`` instances, one by one.
+        """
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be greater than zero")
+
+        args: Dict[str, Any] = {}
+        if where is not None:
+            args["where"] = _process_where_filters(where, _{{ table_name }}_py_to_db)
+        if order_by is not None:
+            if isinstance(order_by, list):
+                args["orderBy"] = order_by
+            else:
+                args["orderBy"] = [{field: direction} for field, direction in order_by.items()]
+{% if has_vector_fields -%}
+        if nearest is not None:
+            args["nearest"] = _serialize_nearest_input(nearest)
+{% endif %}        if take is not None:
+            args["take"] = take
+        if skip is not None:
+            args["skip"] = skip
+        if select is not None:
+            args["select"] = _process_select_fields(select, _{{ table_name }}_py_to_logical)
+        if include is not None:
+            args["include"] = _serialize_include(include)
+        if cursor is not None:
+            args["cursor"] = cursor
+        if distinct is not None:
+            args["distinct"] = distinct
+
+        payload: Dict[str, Any] = {
+            "protocolVersion": PROTOCOL_VERSION,
+            "model": "{{ model_name }}",
+            "args": args,
+            "chunkSize": chunk_size,
+        }
+
+        async for chunk in self._client._stream_rpc("query.findMany", payload):
+            for row in chunk.get("data", []):
+                yield _{{ table_name }}_from_row(row)
+    {% endif %}
 
     {% if is_async %}async {% endif %}def find_first(
         self,

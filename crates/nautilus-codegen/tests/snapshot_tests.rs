@@ -776,7 +776,9 @@ fn test_python_runtime_stays_on_protocol_v1_and_preserves_error_data() {
         protocol_runtime.contains("PROTOCOL_VERSION = 1")
             && client_runtime.contains("\"protocolVersion\": PROTOCOL_VERSION")
             && client_runtime.contains("client expects {PROTOCOL_VERSION}")
-            && client_runtime.contains("async def transaction_batch("),
+            && client_runtime.contains("async def transaction_batch(")
+            && client_runtime.contains("async def _stream_rpc(")
+            && client_runtime.contains("method=\"request.cancel\""),
         "expected Python runtime client to reuse the shared protocol version constant and keep transaction_batch():\n{client_runtime}\n\nProtocol:\n{protocol_runtime}"
     );
     assert!(
@@ -1128,6 +1130,45 @@ model User {
     assert!(
         code.contains("payload[\"chunkSize\"] = chunk_size"),
         "expected generated Python find_many() to forward chunk_size as protocol chunkSize:\n{code}"
+    );
+}
+
+#[test]
+fn test_python_async_delegate_exposes_stream_many() {
+    let ir = validate(
+        r#"
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let async_models = generate_all_python_models(&ir, true, 0);
+    let sync_models = generate_all_python_models(&ir, false, 0);
+    let async_code = generated_python_file(&async_models, "user.py");
+    let sync_code = generated_python_file(&sync_models, "user.py");
+
+    assert!(
+        async_code.contains("async def stream_many("),
+        "expected generated async Python delegate to expose stream_many():\n{async_code}"
+    );
+    assert!(
+        async_code.contains(") -> AsyncIterator[User]:"),
+        "expected generated async Python stream_many() to return an AsyncIterator:\n{async_code}"
+    );
+    assert!(
+        async_code.contains(
+            "async for chunk in self._client._stream_rpc(\"query.findMany\", payload):"
+        ),
+        "expected generated async Python stream_many() to consume chunked RPC frames:\n{async_code}"
+    );
+    assert!(
+        async_code.contains("\"chunkSize\": chunk_size"),
+        "expected generated async Python stream_many() to force protocol chunking:\n{async_code}"
+    );
+    assert!(
+        !sync_code.contains("def stream_many("),
+        "stream_many should not be emitted for sync Python clients:\n{sync_code}"
     );
 }
 

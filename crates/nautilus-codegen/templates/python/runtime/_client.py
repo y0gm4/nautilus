@@ -11,7 +11,7 @@ import threading
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, Generic, Optional, TypeVar
+from typing import Any, AsyncIterator, Dict, Generic, Optional, TypeVar
 from uuid import UUID
 
 C = TypeVar("C")
@@ -20,6 +20,7 @@ _RPC_TIMEOUT_S: float = 30.0
 _STDERR_DRAIN_TIMEOUT_S: float = 1.0
 _SYNC_CONNECT_TIMEOUT_S: int = 35
 _SYNC_LOOP_JOIN_TIMEOUT_S: int = 10
+_STREAM_END = object()
 
 from .engine import EnginePoolOptions, EngineProcess  # type: ignore
 from ..errors.errors import HandshakeError, ProtocolError, TransactionError, TransactionTimeoutError  # type: ignore
@@ -111,6 +112,7 @@ class NautilusClient:
         self._request_id = 0
         self._pending: Dict[int, asyncio.Future] = {}
         self._partial_data: Dict[int, list] = {}
+        self._stream_queues: Dict[int, asyncio.Queue[Any]] = {}
         self._reader_task: Optional[asyncio.Task] = None
         self._writer_lock = asyncio.Lock()
         self._handshake_done = False
@@ -227,6 +229,7 @@ class NautilusClient:
                 future.cancel()
         self._pending.clear()
         self._partial_data.clear()
+        self._fail_streams(ProtocolError("Client disconnected"))
 
         if self._auto_registered:
             self._clear_global_instance()
@@ -255,8 +258,7 @@ class NautilusClient:
 
     async def _rpc(self, method: str, params: Dict[str, Any]) -> Any:
         """Execute a JSON-RPC call."""
-        self._request_id += 1
-        request_id = self._request_id
+        request_id = self._next_request_id()
 
         request = JsonRpcRequest(
             id=request_id,
@@ -276,6 +278,71 @@ class NautilusClient:
             raise ProtocolError(f"Request {request_id} timed out")
         finally:
             self._pending.pop(request_id, None)
+
+    def _next_request_id(self) -> int:
+        """Allocate a fresh JSON-RPC request id."""
+        self._request_id += 1
+        return self._request_id
+
+    def _fail_streams(self, error: Exception) -> None:
+        """Wake all active streaming iterators with the same terminal error."""
+        for queue in self._stream_queues.values():
+            queue.put_nowait(error)
+            queue.put_nowait(_STREAM_END)
+        self._stream_queues.clear()
+
+    async def _cancel_request(self, request_id: int) -> None:
+        """Best-effort cancellation for an in-flight streaming request."""
+        try:
+            await self._write_request(
+                JsonRpcRequest(
+                    method="request.cancel",
+                    params={
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "requestId": request_id,
+                    },
+                )
+            )
+        except Exception:
+            pass
+
+    async def _stream_rpc(
+        self,
+        method: str,
+        params: Dict[str, Any],
+    ) -> AsyncIterator[Any]:
+        """Execute a JSON-RPC call and yield chunked results as they arrive."""
+        request_id = self._next_request_id()
+        request = JsonRpcRequest(
+            id=request_id,
+            method=method,
+            params=params,
+        )
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        self._stream_queues[request_id] = queue
+        completed = False
+
+        try:
+            await self._write_request(request)
+
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=_RPC_TIMEOUT_S)
+                except asyncio.TimeoutError as exc:
+                    raise ProtocolError(f"Request {request_id} timed out") from exc
+
+                if item is _STREAM_END:
+                    completed = True
+                    break
+                if isinstance(item, Exception):
+                    raise item
+
+                yield item
+        finally:
+            self._stream_queues.pop(request_id, None)
+            self._partial_data.pop(request_id, None)
+            if not completed:
+                await self._cancel_request(request_id)
 
     async def _write_request(self, request: JsonRpcRequest) -> None:
         """Write a JSON-RPC request to engine stdin."""
@@ -318,6 +385,7 @@ class NautilusClient:
                     for future in self._pending.values():
                         if not future.done():
                             future.set_exception(ProtocolError(error_msg))
+                    self._fail_streams(ProtocolError(error_msg))
                     break
 
                 line = line_bytes.decode("utf-8").strip()
@@ -330,6 +398,22 @@ class NautilusClient:
 
                     if response.id is not None:
                         req_id = response.id
+                        stream_queue = self._stream_queues.get(req_id)
+                        if stream_queue is not None:
+                            try:
+                                result = response.unwrap()
+                                await stream_queue.put(result)
+                            except Exception as e:
+                                self._stream_queues.pop(req_id, None)
+                                await stream_queue.put(e)
+                                await stream_queue.put(_STREAM_END)
+                                continue
+
+                            if response.partial is not True:
+                                self._stream_queues.pop(req_id, None)
+                                await stream_queue.put(_STREAM_END)
+                            continue
+
                         future = self._pending.get(req_id)
                         if future and not future.done():
                             if response.partial is True:
@@ -359,6 +443,7 @@ class NautilusClient:
             for future in self._pending.values():
                 if not future.done():
                     future.set_exception(ProtocolError(f"Reader task failed: {e}"))
+            self._fail_streams(ProtocolError(f"Reader task failed: {e}"))
 
     def transaction(
         self,

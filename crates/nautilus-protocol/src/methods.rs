@@ -2,6 +2,7 @@
 //!
 //! This module defines stable method names and their request/response payloads.
 
+use crate::wire::RpcId;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::Value;
@@ -25,6 +26,8 @@ pub const QUERY_COUNT: &str = "query.count";
 pub const QUERY_GROUP_BY: &str = "query.groupBy";
 /// Method name for schema validation.
 pub const SCHEMA_VALIDATE: &str = "schema.validate";
+/// Cancel an in-flight request by id.
+pub const REQUEST_CANCEL: &str = "request.cancel";
 
 /// Start a new interactive transaction.
 pub const TRANSACTION_START: &str = "transaction.start";
@@ -63,6 +66,25 @@ pub struct HandshakeResult {
 
     /// Protocol version the engine supports.
     pub protocol_version: u32,
+}
+
+/// Cancel-request parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestCancelParams {
+    /// Protocol version (required in all requests).
+    pub protocol_version: u32,
+
+    /// Identifier of the in-flight request to cancel.
+    pub request_id: RpcId,
+}
+
+/// Cancel-request result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestCancelResult {
+    /// True when a live request was found and aborted.
+    pub cancelled: bool,
 }
 
 /// Find many request parameters.
