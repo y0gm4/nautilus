@@ -220,6 +220,32 @@ model User {
 }
 
 #[test]
+fn test_rust_generated_query_builders_use_static_column_markers() {
+    let ir = validate(
+        r#"
+model User {
+  id    Int    @id @default(autoincrement())
+  email String @unique
+  name  String?
+
+  @@map("users")
+}
+"#,
+    );
+    let models = generate_all_models(&ir, false);
+    let code = models.get("User").expect("User model missing");
+
+    assert!(
+        code.contains("ColumnMarker::from_static(\"users\", \"email\")"),
+        "expected generated Rust code to use borrowed column metadata for known columns:\n{code}"
+    );
+    assert!(
+        code.contains("ColumnMarker::from_static(\"users\", \"id\")"),
+        "expected generated Rust code to reuse borrowed PK metadata in returning/select paths:\n{code}"
+    );
+}
+
+#[test]
 fn test_rust_enum_generation() {
     let ir = validate(
         r#"

@@ -137,10 +137,10 @@ where
         // Add scalar columns (PK columns always included; others filtered by select if active)
 {%- for field in scalar_fields %}
 {%- if field.is_pk %}
-        builder = builder.item(SelectItem::column(ColumnMarker::new("{{ table_name }}", "{{ field.db_name }}")));
+        builder = builder.item(SelectItem::column(ColumnMarker::from_static("{{ table_name }}", "{{ field.db_name }}")));
 {%- else %}
         if select.is_empty() || select.contains("{{ field.name }}") {
-            builder = builder.item(SelectItem::column(ColumnMarker::new("{{ table_name }}", "{{ field.db_name }}")));
+            builder = builder.item(SelectItem::column(ColumnMarker::from_static("{{ table_name }}", "{{ field.db_name }}")));
         }
 {%- endif %}
 {%- endfor %}

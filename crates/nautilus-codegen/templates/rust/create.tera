@@ -39,7 +39,7 @@ where
 
 {%- for field in create_fields %}
         if let Some(value) = self.{{ field.name }} {
-            columns.push(ColumnMarker::new("{{ table_name }}", "{{ field.db_name }}"));
+            columns.push(ColumnMarker::from_static("{{ table_name }}", "{{ field.db_name }}"));
             values.push(Value::from(value));
         }
 {%- endfor %}
@@ -52,7 +52,7 @@ where
         if supports_returning {
             let returning_cols = vec![
 {%- for field in all_scalar_fields %}
-                ColumnMarker::new("{{ table_name }}", "{{ field.db_name }}"),
+                ColumnMarker::from_static("{{ table_name }}", "{{ field.db_name }}"),
 {%- endfor %}
             ];
             builder = builder.returning(returning_cols);

@@ -53,7 +53,7 @@ where
             let val = nautilus_core::Value::from(outer);
 {%- endif %}
             self.assignments.push((
-                nautilus_core::ColumnMarker::new("{{ table_name }}", "{{ field.db_name }}"),
+                nautilus_core::ColumnMarker::from_static("{{ table_name }}", "{{ field.db_name }}"),
                 val,
             ));
         }
@@ -94,7 +94,7 @@ where
         if supports_returning {
             let returning_cols = vec![
 {%- for field in all_scalar_fields %}
-                ColumnMarker::new("{{ table_name }}", "{{ field.db_name }}"),
+                ColumnMarker::from_static("{{ table_name }}", "{{ field.db_name }}"),
 {%- endfor %}
             ];
             builder = builder.returning(returning_cols);
