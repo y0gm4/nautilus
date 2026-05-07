@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::{
     group_mysql_foreign_keys, normalize_mysql_check_expr, normalize_mysql_type, SchemaInspector,
 };
@@ -30,27 +32,87 @@ impl SchemaInspector {
             .collect::<std::result::Result<_, _>>()
             .map_err(|e| MigrationError::Database(e.to_string()))?;
 
-        let mut live = LiveSchema::default();
+        let table_names: Vec<String> = table_names
+            .into_iter()
+            .filter(|table_name| !table_name.starts_with("_nautilus_"))
+            .collect();
 
-        for table_name in table_names {
-            if table_name.starts_with("_nautilus_") {
-                continue;
-            }
-
-            let col_rows = sqlx::query(
-                "SELECT column_name, column_type, is_nullable, column_default, \
+        // Group shared metadata once so `db pull`/`db push` do not re-query
+        // `information_schema` for every single table.
+        let mut columns_by_table = split_mysql_rows_by_table(
+            sqlx::query(
+                "SELECT table_name, column_name, column_type, is_nullable, column_default, \
                         generation_expression, extra \
                  FROM information_schema.columns \
                  WHERE table_schema = DATABASE() \
-                   AND table_name   = ? \
-                 ORDER BY ordinal_position",
+                 ORDER BY table_name, ordinal_position",
             )
-            .bind(&table_name)
             .fetch_all(&pool)
             .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
+            .map_err(|e| MigrationError::Database(e.to_string()))?,
+            "column metadata",
+        )?;
 
-            let mut columns = Vec::new();
+        let mut indexes_by_table = split_mysql_rows_by_table(
+            sqlx::query(
+                "SELECT table_name, index_name, column_name, non_unique, seq_in_index, index_type \
+                 FROM information_schema.statistics \
+                 WHERE table_schema = DATABASE() \
+                 ORDER BY table_name, index_name, seq_in_index",
+            )
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| MigrationError::Database(e.to_string()))?,
+            "index metadata",
+        )?;
+
+        let mut foreign_keys_by_table = split_mysql_rows_by_table(
+            sqlx::query(
+                "SELECT \
+                     kcu.table_name, \
+                     kcu.constraint_name, \
+                     kcu.column_name, \
+                     kcu.referenced_table_name, \
+                     kcu.referenced_column_name, \
+                     rc.delete_rule, \
+                     rc.update_rule \
+                 FROM information_schema.key_column_usage kcu \
+                 JOIN information_schema.referential_constraints rc \
+                   ON kcu.constraint_name   = rc.constraint_name \
+                  AND kcu.constraint_schema = rc.constraint_schema \
+                 WHERE kcu.table_schema = DATABASE() \
+                   AND kcu.referenced_table_name IS NOT NULL \
+                 ORDER BY kcu.table_name, kcu.constraint_name, kcu.ordinal_position",
+            )
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| MigrationError::Database(e.to_string()))?,
+            "foreign key metadata",
+        )?;
+
+        let mut checks_by_table = split_mysql_rows_by_table(
+            sqlx::query(
+                "SELECT tc.table_name, tc.constraint_name, cc.check_clause \
+                 FROM information_schema.table_constraints tc \
+                 JOIN information_schema.check_constraints cc \
+                   ON cc.constraint_schema = tc.constraint_schema \
+                  AND cc.constraint_name   = tc.constraint_name \
+                 WHERE tc.table_schema     = DATABASE() \
+                   AND tc.constraint_type  = 'CHECK' \
+                 ORDER BY tc.table_name, tc.constraint_name",
+            )
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| MigrationError::Database(e.to_string()))?,
+            "CHECK constraints",
+        )?;
+
+        let mut live = LiveSchema::default();
+
+        for table_name in table_names {
+            let col_rows = columns_by_table.remove(&table_name).unwrap_or_default();
+
+            let mut columns = Vec::with_capacity(col_rows.len());
             for row in &col_rows {
                 let col_name: String = row
                     .try_get("column_name")
@@ -91,17 +153,7 @@ impl SchemaInspector {
                 });
             }
 
-            let stat_rows = sqlx::query(
-                "SELECT index_name, column_name, non_unique, seq_in_index, index_type \
-                 FROM information_schema.statistics \
-                 WHERE table_schema = DATABASE() \
-                   AND table_name   = ? \
-                 ORDER BY index_name, seq_in_index",
-            )
-            .bind(&table_name)
-            .fetch_all(&pool)
-            .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
+            let stat_rows = indexes_by_table.remove(&table_name).unwrap_or_default();
 
             let mut primary_key = Vec::new();
             let mut idx_order = Vec::new();
@@ -155,46 +207,16 @@ impl SchemaInspector {
                 })
                 .collect();
 
-            let fk_rows = sqlx::query(
-                "SELECT \
-                     kcu.constraint_name, \
-                     kcu.column_name, \
-                     kcu.referenced_table_name, \
-                     kcu.referenced_column_name, \
-                     rc.delete_rule, \
-                     rc.update_rule \
-                 FROM information_schema.key_column_usage kcu \
-                 JOIN information_schema.referential_constraints rc \
-                   ON kcu.constraint_name   = rc.constraint_name \
-                  AND kcu.constraint_schema = rc.constraint_schema \
-                 WHERE kcu.table_schema = DATABASE() \
-                   AND kcu.table_name   = ? \
-                   AND kcu.referenced_table_name IS NOT NULL \
-                 ORDER BY kcu.constraint_name, kcu.ordinal_position",
-            )
-            .bind(&table_name)
-            .fetch_all(&pool)
-            .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
-
-            let check_rows = sqlx::query(
-                "SELECT tc.constraint_name, cc.check_clause \
-                 FROM information_schema.table_constraints tc \
-                 JOIN information_schema.check_constraints cc \
-                   ON cc.constraint_schema = tc.constraint_schema \
-                  AND cc.constraint_name   = tc.constraint_name \
-                 WHERE tc.table_schema     = DATABASE() \
-                   AND tc.table_name       = ? \
-                   AND tc.constraint_type  = 'CHECK'",
-            )
-            .bind(&table_name)
-            .fetch_all(&pool)
-            .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
+            let fk_rows = foreign_keys_by_table
+                .remove(&table_name)
+                .unwrap_or_default();
+            let check_rows = checks_by_table.remove(&table_name).unwrap_or_default();
 
             let mut table_check_constraints = Vec::new();
             let mut column_check_map = std::collections::HashMap::new();
             let col_prefix = format!("chk_{}_", table_name);
+            let column_names: std::collections::HashSet<&str> =
+                columns.iter().map(|c| c.name.as_str()).collect();
 
             for row in &check_rows {
                 let con_name: String = row
@@ -207,7 +229,7 @@ impl SchemaInspector {
                 let expr = normalize_mysql_check_expr(&check_clause);
                 let col_name = con_name
                     .strip_prefix(&col_prefix)
-                    .filter(|cand| columns.iter().any(|c| c.name == *cand))
+                    .filter(|cand| column_names.contains(cand))
                     .map(|s| s.to_string());
 
                 if let Some(col) = col_name {
@@ -238,4 +260,22 @@ impl SchemaInspector {
 
         Ok(live)
     }
+}
+
+fn split_mysql_rows_by_table(
+    rows: Vec<sqlx::mysql::MySqlRow>,
+    metadata_label: &str,
+) -> Result<HashMap<String, Vec<sqlx::mysql::MySqlRow>>> {
+    use sqlx::Row as _;
+
+    let mut grouped: HashMap<String, Vec<sqlx::mysql::MySqlRow>> = HashMap::new();
+    for row in rows {
+        let table_name: String = row.try_get("table_name").map_err(|e| {
+            MigrationError::Database(format!(
+                "failed to read table_name while grouping MySQL {metadata_label}: {e}"
+            ))
+        })?;
+        grouped.entry(table_name).or_default().push(row);
+    }
+    Ok(grouped)
 }

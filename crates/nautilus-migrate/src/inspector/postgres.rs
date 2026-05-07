@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::{
     group_pg_foreign_keys, group_pg_indexes, normalize_pg_check_expr,
     normalize_pg_composite_field_type, normalize_pg_default, normalize_pg_type, SchemaInspector,
@@ -59,11 +61,12 @@ impl SchemaInspector {
                 ))
             })?;
 
-        let mut live = LiveSchema::default();
-
-        for table_name in table_names {
-            let col_rows = pg_query(
-                "SELECT column_name, \
+        // Pull shared table metadata in batches, then group in memory. This
+        // avoids issuing 5+ catalog queries per table during `db pull`/`db push`.
+        let mut columns_by_table = split_pg_rows_by_table(
+            pg_query(
+                "SELECT c.table_name, \
+                        column_name, \
                         udt_name, \
                         pg_catalog.format_type(a.atttypid, a.atttypmod) AS formatted_type, \
                         is_nullable, \
@@ -77,22 +80,154 @@ impl SchemaInspector {
                  JOIN pg_class cls ON cls.relnamespace = n.oid AND cls.relname = c.table_name \
                  JOIN pg_attribute a ON a.attrelid = cls.oid AND a.attname = c.column_name \
                  WHERE c.table_schema = $1 \
-                   AND c.table_name = $2 \
+                   AND c.table_name !~ '^_nautilus_' \
                    AND a.attnum > 0 \
                    AND NOT a.attisdropped \
-                 ORDER BY ordinal_position",
+                 ORDER BY c.table_name, ordinal_position",
             )
             .bind(&schema_name)
-            .bind(&table_name)
             .fetch_all(&pool)
             .await
             .map_err(|e| {
                 MigrationError::Database(format!(
-                    "failed to fetch columns for table \"{table_name}\" in schema \"{schema_name}\": {e}"
+                    "failed to fetch column metadata in PostgreSQL schema \"{schema_name}\": {e}"
                 ))
-            })?;
+            })?,
+            "column metadata",
+            &schema_name,
+        )?;
 
-            let mut columns = Vec::new();
+        let mut primary_keys_by_table = split_pg_rows_by_table(
+            pg_query(
+                "SELECT tc.table_name, kcu.column_name \
+                 FROM information_schema.table_constraints tc \
+                 JOIN information_schema.key_column_usage kcu \
+                   ON tc.constraint_name = kcu.constraint_name \
+                  AND tc.table_schema    = kcu.table_schema \
+                 WHERE tc.constraint_type = 'PRIMARY KEY' \
+                   AND tc.table_schema    = $1 \
+                   AND tc.table_name !~ '^_nautilus_' \
+                 ORDER BY tc.table_name, kcu.ordinal_position",
+            )
+            .bind(&schema_name)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to fetch primary key metadata in PostgreSQL schema \"{schema_name}\": {e}"
+                ))
+            })?,
+            "primary key metadata",
+            &schema_name,
+        )?;
+
+        let mut indexes_by_table = split_pg_rows_by_table(
+            pg_query(
+                "SELECT \
+                     tbl.relname                                           AS table_name, \
+                     idx.relname                                           AS index_name, \
+                     attr.attname                                          AS column_name, \
+                     ix.indisunique                                        AS is_unique, \
+                     am.amname                                             AS index_method, \
+                     CASE WHEN op.opcname LIKE 'vector_%' THEN op.opcname END AS opclass, \
+                     idx.reloptions                                         AS index_options, \
+                     k.ord                                                  AS column_position \
+                 FROM pg_class       tbl \
+                 JOIN pg_namespace   ns   ON ns.oid            = tbl.relnamespace \
+                 JOIN pg_index       ix   ON tbl.oid           = ix.indrelid \
+                 JOIN pg_class       idx  ON idx.oid           = ix.indexrelid \
+                 JOIN pg_am          am   ON am.oid            = idx.relam \
+                 JOIN unnest(ix.indkey::int[], ix.indclass::oid[]) \
+                      WITH ORDINALITY AS k(attnum, opclass_oid, ord) ON true \
+                 JOIN pg_attribute   attr ON attr.attrelid      = tbl.oid \
+                                         AND attr.attnum        = k.attnum \
+                 LEFT JOIN pg_opclass op  ON op.oid             = k.opclass_oid \
+                 WHERE ns.nspname = $1 \
+                   AND tbl.relname !~ '^_nautilus_' \
+                   AND tbl.relkind = 'r' \
+                   AND ix.indisprimary = false \
+                 ORDER BY tbl.relname, idx.relname, k.ord",
+            )
+            .bind(&schema_name)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to fetch index metadata in PostgreSQL schema \"{schema_name}\": {e}"
+                ))
+            })?,
+            "index metadata",
+            &schema_name,
+        )?;
+
+        let mut checks_by_table = split_pg_rows_by_table(
+            pg_query(
+                "SELECT t.relname AS table_name, \
+                        c.conname AS constraint_name, \
+                        pg_get_constraintdef(c.oid) AS constraint_def \
+                 FROM pg_constraint c \
+                 JOIN pg_class t ON t.oid = c.conrelid \
+                 JOIN pg_namespace n ON n.oid = t.relnamespace \
+                 WHERE c.contype = 'c' \
+                   AND n.nspname = $1 \
+                   AND t.relname !~ '^_nautilus_' \
+                 ORDER BY t.relname, c.conname",
+            )
+            .bind(&schema_name)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to fetch CHECK constraints in PostgreSQL schema \"{schema_name}\": {e}"
+                ))
+            })?,
+            "CHECK constraints",
+            &schema_name,
+        )?;
+
+        let mut foreign_keys_by_table = split_pg_rows_by_table(
+            pg_query(
+                "SELECT \
+                     t.relname                                    AS table_name, \
+                     c.conname                                    AS constraint_name, \
+                     a.attname                                    AS column_name, \
+                     rf.relname                                   AS referenced_table, \
+                     ra.attname                                   AS referenced_column, \
+                     c.confdeltype::text                          AS delete_type, \
+                     c.confupdtype::text                          AS update_type \
+                 FROM pg_constraint c \
+                 JOIN pg_class t   ON t.oid  = c.conrelid \
+                 JOIN pg_class rf  ON rf.oid = c.confrelid \
+                 JOIN pg_namespace n ON n.oid = t.relnamespace \
+                 JOIN LATERAL unnest(c.conkey, c.confkey) \
+                      WITH ORDINALITY AS u(local_att, ref_att, pos) ON true \
+                 JOIN pg_attribute a  \
+                   ON a.attrelid = c.conrelid  AND a.attnum = u.local_att \
+                 JOIN pg_attribute ra \
+                   ON ra.attrelid = c.confrelid AND ra.attnum = u.ref_att \
+                 WHERE c.contype = 'f' \
+                   AND n.nspname = $1 \
+                   AND t.relname !~ '^_nautilus_' \
+                 ORDER BY t.relname, c.conname, u.pos",
+            )
+            .bind(&schema_name)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                MigrationError::Database(format!(
+                    "failed to fetch foreign keys in PostgreSQL schema \"{schema_name}\": {e}"
+                ))
+            })?,
+            "foreign key metadata",
+            &schema_name,
+        )?;
+
+        let mut live = LiveSchema::default();
+
+        for table_name in table_names {
+            let col_rows = columns_by_table.remove(&table_name).unwrap_or_default();
+
+            let mut columns = Vec::with_capacity(col_rows.len());
             for row in &col_rows {
                 let col_name: String = row.try_get("column_name").map_err(|e| {
                     MigrationError::Database(format!(
@@ -179,27 +314,9 @@ impl SchemaInspector {
                 });
             }
 
-            let pk_rows = pg_query(
-                "SELECT kcu.column_name \
-                 FROM information_schema.table_constraints tc \
-                 JOIN information_schema.key_column_usage kcu \
-                   ON tc.constraint_name = kcu.constraint_name \
-                  AND tc.table_schema    = kcu.table_schema \
-                 WHERE tc.constraint_type = 'PRIMARY KEY' \
-                   AND tc.table_schema    = $1 \
-                   AND tc.table_name      = $2 \
-                 ORDER BY kcu.ordinal_position",
-            )
-            .bind(&schema_name)
-            .bind(&table_name)
-            .fetch_all(&pool)
-            .await
-            .map_err(|e| {
-                MigrationError::Database(format!(
-                    "failed to fetch primary key metadata for table \"{table_name}\" in schema \"{schema_name}\": {e}"
-                ))
-            })?;
-
+            let pk_rows = primary_keys_by_table
+                .remove(&table_name)
+                .unwrap_or_default();
             let primary_key: Vec<String> = pk_rows
                 .into_iter()
                 .map(|r| r.try_get::<String, _>("column_name"))
@@ -210,71 +327,16 @@ impl SchemaInspector {
                     ))
                 })?;
 
-            // `ix.indkey` and `ix.indclass` are `int2vector`/`oidvector`; cast \
-            // to plain arrays so we can `unnest` them with ordinality and join \
-            // each indexed column to its operator class. We surface the opclass \
-            // name only for pgvector (`vector_*`) so the diff treats it as part \
-            // of the index identity for HNSW/IVFFlat indexes.
-            let idx_rows = pg_query(
-                "SELECT \
-                     idx.relname                                           AS index_name, \
-                     attr.attname                                          AS column_name, \
-                     ix.indisunique                                        AS is_unique, \
-                     am.amname                                             AS index_method, \
-                     CASE WHEN op.opcname LIKE 'vector_%' THEN op.opcname END AS opclass, \
-                     idx.reloptions                                         AS index_options, \
-                     k.ord                                                  AS column_position \
-                 FROM pg_class       tbl \
-                 JOIN pg_namespace   ns   ON ns.oid            = tbl.relnamespace \
-                 JOIN pg_index       ix   ON tbl.oid           = ix.indrelid \
-                 JOIN pg_class       idx  ON idx.oid           = ix.indexrelid \
-                 JOIN pg_am          am   ON am.oid            = idx.relam \
-                 JOIN unnest(ix.indkey::int[], ix.indclass::oid[]) \
-                      WITH ORDINALITY AS k(attnum, opclass_oid, ord) ON true \
-                 JOIN pg_attribute   attr ON attr.attrelid      = tbl.oid \
-                                         AND attr.attnum        = k.attnum \
-                 LEFT JOIN pg_opclass op  ON op.oid             = k.opclass_oid \
-                 WHERE ns.nspname = $1 \
-                   AND tbl.relname = $2 \
-                   AND tbl.relkind = 'r' \
-                   AND ix.indisprimary = false \
-                 ORDER BY idx.relname, k.ord",
-            )
-            .bind(&schema_name)
-            .bind(&table_name)
-            .fetch_all(&pool)
-            .await
-            .map_err(|e| {
-                MigrationError::Database(format!(
-                    "failed to fetch index metadata for table \"{table_name}\" in schema \"{schema_name}\": {e}"
-                ))
-            })?;
+            let indexes =
+                group_pg_indexes(indexes_by_table.remove(&table_name).unwrap_or_default());
 
-            let indexes = group_pg_indexes(idx_rows);
-
-            let check_rows = pg_query(
-                "SELECT c.conname AS constraint_name, \
-                        pg_get_constraintdef(c.oid) AS constraint_def \
-                 FROM pg_constraint c \
-                 JOIN pg_class t ON t.oid = c.conrelid \
-                 JOIN pg_namespace n ON n.oid = t.relnamespace \
-                 WHERE c.contype = 'c' \
-                   AND n.nspname = $1 \
-                   AND t.relname = $2",
-            )
-            .bind(&schema_name)
-            .bind(&table_name)
-            .fetch_all(&pool)
-            .await
-            .map_err(|e| {
-                MigrationError::Database(format!(
-                    "failed to fetch CHECK constraints for table \"{table_name}\" in schema \"{schema_name}\": {e}"
-                ))
-            })?;
+            let check_rows = checks_by_table.remove(&table_name).unwrap_or_default();
 
             let mut table_check_constraints = Vec::new();
             let mut column_check_map = std::collections::HashMap::new();
             let col_prefix = format!("chk_{}_", table_name);
+            let column_names: std::collections::HashSet<&str> =
+                columns.iter().map(|c| c.name.as_str()).collect();
 
             for row in &check_rows {
                 let con_name: String = row.try_get("constraint_name").map_err(|e| {
@@ -293,7 +355,7 @@ impl SchemaInspector {
                 let expr = normalize_pg_check_expr(&constraint_def);
                 let col_name = con_name
                     .strip_prefix(&col_prefix)
-                    .filter(|cand| columns.iter().any(|c| c.name == *cand))
+                    .filter(|cand| column_names.contains(cand))
                     .map(|s| s.to_string());
 
                 if let Some(col) = col_name {
@@ -309,40 +371,11 @@ impl SchemaInspector {
                 }
             }
 
-            let fk_rows = pg_query(
-                "SELECT \
-                     c.conname                                    AS constraint_name, \
-                     a.attname                                    AS column_name, \
-                     rf.relname                                   AS referenced_table, \
-                     ra.attname                                   AS referenced_column, \
-                     c.confdeltype::text                          AS delete_type, \
-                     c.confupdtype::text                          AS update_type \
-                 FROM pg_constraint c \
-                 JOIN pg_class t   ON t.oid  = c.conrelid \
-                 JOIN pg_class rf  ON rf.oid = c.confrelid \
-                 JOIN pg_namespace n ON n.oid = t.relnamespace \
-                 JOIN LATERAL unnest(c.conkey, c.confkey) \
-                      WITH ORDINALITY AS u(local_att, ref_att, pos) ON true \
-                 JOIN pg_attribute a  \
-                   ON a.attrelid = c.conrelid  AND a.attnum = u.local_att \
-                 JOIN pg_attribute ra \
-                   ON ra.attrelid = c.confrelid AND ra.attnum = u.ref_att \
-                 WHERE c.contype = 'f' \
-                   AND n.nspname = $1 \
-                   AND t.relname = $2 \
-                 ORDER BY c.conname, u.pos",
-            )
-            .bind(&schema_name)
-            .bind(&table_name)
-            .fetch_all(&pool)
-            .await
-            .map_err(|e| {
-                MigrationError::Database(format!(
-                    "failed to fetch foreign keys for table \"{table_name}\" in schema \"{schema_name}\": {e}"
-                ))
-            })?;
-
-            let foreign_keys = group_pg_foreign_keys(fk_rows);
+            let foreign_keys = group_pg_foreign_keys(
+                foreign_keys_by_table
+                    .remove(&table_name)
+                    .unwrap_or_default(),
+            );
 
             live.tables.insert(
                 table_name.clone(),
@@ -484,6 +517,25 @@ impl SchemaInspector {
 
         Ok(live)
     }
+}
+
+fn split_pg_rows_by_table(
+    rows: Vec<sqlx::postgres::PgRow>,
+    metadata_label: &str,
+    schema_name: &str,
+) -> Result<HashMap<String, Vec<sqlx::postgres::PgRow>>> {
+    use sqlx::Row as _;
+
+    let mut grouped: HashMap<String, Vec<sqlx::postgres::PgRow>> = HashMap::new();
+    for row in rows {
+        let table_name: String = row.try_get("table_name").map_err(|e| {
+            MigrationError::Database(format!(
+                "failed to read table_name while grouping PostgreSQL {metadata_label} in schema \"{schema_name}\": {e}"
+            ))
+        })?;
+        grouped.entry(table_name).or_default().push(row);
+    }
+    Ok(grouped)
 }
 
 fn pg_query(sql: &str) -> sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments> {

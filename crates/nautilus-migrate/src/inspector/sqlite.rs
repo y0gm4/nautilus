@@ -20,7 +20,7 @@ impl SchemaInspector {
             .map_err(|e| MigrationError::Database(format!("SQLite connection failed: {e}")))?;
 
         let table_rows = sqlx::query(
-            "SELECT name FROM sqlite_master \
+            "SELECT name, COALESCE(sql, '') AS create_sql FROM sqlite_master \
              WHERE type = 'table' \
                AND name NOT LIKE 'sqlite_%' \
                AND name NOT LIKE '_nautilus_%' \
@@ -30,22 +30,28 @@ impl SchemaInspector {
         .await
         .map_err(|e| MigrationError::Database(e.to_string()))?;
 
-        let table_names: Vec<String> = table_rows
+        let tables: Vec<(String, String)> = table_rows
             .into_iter()
-            .map(|r| r.try_get::<String, _>("name"))
-            .collect::<std::result::Result<_, _>>()
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
+            .map(|r| {
+                let table_name = r
+                    .try_get::<String, _>("name")
+                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                let create_sql = r
+                    .try_get::<String, _>("create_sql")
+                    .map_err(|e| MigrationError::Database(e.to_string()))?;
+                Ok((table_name, create_sql))
+            })
+            .collect::<Result<_>>()?;
 
         let mut live = LiveSchema::default();
 
-        for table_name in table_names {
+        for (table_name, create_sql) in tables {
             let pragma_sql = format!("PRAGMA table_xinfo(\"{}\")", table_name);
             let col_rows = sqlx::query(&pragma_sql)
                 .fetch_all(&pool)
                 .await
                 .map_err(|e| MigrationError::Database(e.to_string()))?;
 
-            let create_sql = self.sqlite_create_sql(&pool, &table_name).await?;
             let gen_exprs = parse_sqlite_generated_exprs(&create_sql);
             let (column_check_map, table_check_constraints) =
                 parse_sqlite_check_constraints(&create_sql);
@@ -178,22 +184,5 @@ impl SchemaInspector {
         }
 
         Ok(live)
-    }
-
-    async fn sqlite_create_sql(&self, pool: &sqlx::SqlitePool, table_name: &str) -> Result<String> {
-        use sqlx::Row as _;
-
-        let sql = format!(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name=\"{}\"",
-            table_name
-        );
-        let row = sqlx::query(&sql)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| MigrationError::Database(e.to_string()))?;
-
-        Ok(row
-            .and_then(|r| r.try_get::<String, _>("sql").ok())
-            .unwrap_or_default())
     }
 }
