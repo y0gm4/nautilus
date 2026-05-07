@@ -313,6 +313,13 @@ fn test_write_rust_code_runtime_exposes_pool_options_for_embedded_and_direct_pat
         "runtime.rs should call typed embedded engine handlers directly for Rust in-process paths:\n{runtime_content}"
     );
     assert!(
+        runtime_content.contains(
+            "static GENERATED_SCHEMA_IR: OnceLock<Arc<nautilus_schema::ir::SchemaIr>>"
+        ) && runtime_content.contains("fn generated_schema_ir()")
+            && runtime_content.contains("generated_schema_ir()?"),
+        "runtime.rs should cache the validated embedded schema so repeated client construction avoids re-running schema validation:\n{runtime_content}"
+    );
+    assert!(
         !runtime_content.contains("row_from_wire_json"),
         "runtime.rs should no longer round-trip engine rows through JSON objects:\n{runtime_content}"
     );

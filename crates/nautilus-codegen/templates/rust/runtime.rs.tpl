@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::ConnectorPoolOptions;
@@ -17,6 +17,8 @@ use nautilus_protocol::{
 use nautilus_schema::validate_schema_source;
 use serde_json::Value as JsonValue;
 use tokio::sync::OnceCell;
+
+static GENERATED_SCHEMA_IR: OnceLock<Arc<nautilus_schema::ir::SchemaIr>> = OnceLock::new();
 
 /// Controls when the generated Rust client routes queries through the embedded engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,9 +179,9 @@ where
         let state = self
             .engine_state
             .get_or_try_init(|| async move {
-                let schema = parse_generated_schema()?;
+                let schema = generated_schema_ir()?;
                 EngineState::new_with_pool_options(
-                    schema,
+                    schema.as_ref().clone(),
                     (*database_url).clone(),
                     None,
                     pool_options,
@@ -706,6 +708,22 @@ fn parse_generated_schema() -> nautilus_core::Result<nautilus_schema::ir::Schema
     validate_schema_source(crate::SCHEMA_SOURCE)
         .map(|validated| validated.ir)
         .map_err(|e| Error::Other(format!("failed to validate embedded schema: {}", e)))
+}
+
+fn generated_schema_ir() -> nautilus_core::Result<Arc<nautilus_schema::ir::SchemaIr>> {
+    if let Some(schema) = GENERATED_SCHEMA_IR.get() {
+        return Ok(Arc::clone(schema));
+    }
+
+    let schema = Arc::new(parse_generated_schema()?);
+
+    match GENERATED_SCHEMA_IR.set(Arc::clone(&schema)) {
+        Ok(()) => Ok(schema),
+        Err(schema) => Ok(GENERATED_SCHEMA_IR
+            .get()
+            .map(Arc::clone)
+            .unwrap_or(schema)),
+    }
 }
 
 pub(crate) fn wire_value_to_core_value(name: &str, value: &JsonValue) -> Value {
