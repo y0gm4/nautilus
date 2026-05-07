@@ -18,7 +18,7 @@ nautilus-dialect = { workspace = true }
 sqlx = { version = "0.8", features = ["postgres", "sqlite", "mysql", "runtime-tokio", "uuid", "chrono", "rust_decimal"] }
 futures = "0.3"
 async-stream = "0.3"
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["sync", "time", "rt"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 uuid = { version = "1.0", features = ["v4"] }
 rust_decimal = "1.35"

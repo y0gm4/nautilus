@@ -90,6 +90,7 @@ mod row_stream;
 mod single_row;
 mod sqlite;
 mod sqlite_stream;
+mod streaming;
 pub mod transaction;
 mod utils;
 mod value_hint;

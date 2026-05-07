@@ -15,7 +15,7 @@ use assertions::{
     assert_sequential_user_rows, assert_standard_user_row, StandardUserExpectation,
 };
 use futures::stream::StreamExt;
-use nautilus_connector::{execute_all, Executor};
+use nautilus_connector::{execute_all, ConnectorPoolOptions, Executor, PgExecutor};
 use nautilus_core::Value;
 use nautilus_dialect::Sql;
 
@@ -352,6 +352,63 @@ async fn test_streaming_execution() {
 
     assert_eq!(count, 5, "Expected 5 rows from stream");
     assert_eq!(collected_ids, vec![20, 21, 22, 23, 24]);
+
+    pg_common::teardown_test_users_table(&executor).await.ok();
+}
+
+/// Drop a streaming `execute()` mid-iteration and verify the pool stays
+/// usable. With a single-connection pool, a connection that was leaked or
+/// returned dirty after the drop would surface here as an acquire timeout on
+/// the follow-up query.
+#[tokio::test]
+#[ignore = "requires a running PostgreSQL instance (run `docker-compose up -d` first)"]
+async fn test_streaming_drop_mid_iteration_keeps_pool_usable() {
+    use std::time::Duration;
+
+    let pool_options = ConnectorPoolOptions::default()
+        .max_connections(1)
+        .min_connections(1)
+        .acquire_timeout(Duration::from_secs(2));
+    let executor = PgExecutor::new_with_options(&pg_common::database_url(), pool_options)
+        .await
+        .expect("Failed to create executor");
+    pg_common::setup_test_users_table(&executor)
+        .await
+        .expect("Failed to setup table");
+
+    for i in 100..120 {
+        let insert = Sql {
+            text: "INSERT INTO test_users (id, name, email, age, score, active) VALUES ($1, $2, $3, $4, $5, $6)".to_string(),
+            params: vec![
+                Value::I64(i),
+                Value::String(format!("DropUser{}", i)),
+                Value::String(format!("drop{}@example.com", i)),
+                Value::I64(20 + i),
+                Value::F64(80.0 + i as f64),
+                Value::Bool(true),
+            ],
+        };
+        execute_all(&executor, &insert)
+            .await
+            .expect("Failed to insert");
+    }
+
+    let select = Sql {
+        text: "SELECT id FROM test_users WHERE id >= $1 ORDER BY id".to_string(),
+        params: vec![Value::I64(100)],
+    };
+
+    for _ in 0..5 {
+        let mut stream = executor.execute(&select);
+        let first = stream.next().await.expect("expected at least one row");
+        first.expect("first row should decode");
+        drop(stream);
+
+        let rows = execute_all(&executor, &select)
+            .await
+            .expect("pool should still acquire after streaming drop");
+        assert_eq!(rows.len(), 20);
+    }
 
     pg_common::teardown_test_users_table(&executor).await.ok();
 }

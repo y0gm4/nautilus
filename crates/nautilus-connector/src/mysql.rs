@@ -162,7 +162,19 @@ impl Executor for MysqlExecutor {
         Self: 'conn;
 
     fn execute<'conn>(&'conn self, sql: &'conn Sql) -> Self::RowStream<'conn> {
-        MysqlRowStream::from_rows_future(self.execute_collect_internal(sql))
+        crate::streaming::spawn_streaming_query(crate::streaming::StreamingQuery::<
+            sqlx::MySql,
+            _,
+            _,
+        > {
+            pool: self.pool.clone(),
+            sql_text: sql.text.clone(),
+            params: sql.params.clone(),
+            bind: bind_value,
+            decode: crate::mysql_stream::decode_row_internal,
+            query_context: "Query execution failed",
+            persistent: true,
+        })
     }
 
     fn execute_and_fetch<'conn>(

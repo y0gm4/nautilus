@@ -10,6 +10,7 @@ use futures::future::BoxFuture;
 use futures::stream::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio::sync::mpsc;
 
 /// A type-erased async stream of [`Row`] values.
 ///
@@ -38,6 +39,22 @@ impl<'conn> RowStream<'conn> {
                     }
                 }
                 Err(error) => yield Err(error),
+            }
+        };
+
+        Self::new_from_stream(Box::pin(stream))
+    }
+
+    /// Adapt an mpsc receiver into the shared stream API.
+    ///
+    /// Used by the streaming connector path: a background worker task owns the
+    /// database connection, drives the underlying sqlx stream, and forwards
+    /// rows through `rx`.
+    pub(crate) fn from_receiver(rx: mpsc::Receiver<Result<Row>>) -> Self {
+        let stream = async_stream::stream! {
+            let mut rx = rx;
+            while let Some(item) = rx.recv().await {
+                yield item;
             }
         };
 

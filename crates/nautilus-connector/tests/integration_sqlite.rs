@@ -427,6 +427,67 @@ async fn test_streaming_execution() {
     assert_eq!(collected_ids, vec![20, 21, 22, 23, 24]);
 }
 
+/// Drop a streaming `execute()` mid-iteration and verify the pool stays
+/// usable. If the streaming worker failed to drain the underlying sqlx stream
+/// after the consumer disappeared, the connection would be returned dirty
+/// (or held forever) and subsequent acquires would fail or time out.
+#[tokio::test]
+async fn test_streaming_drop_mid_iteration_keeps_pool_usable() {
+    use std::time::Duration;
+
+    let url = "sqlite::memory:";
+    let pool_options = ConnectorPoolOptions::default()
+        .max_connections(1)
+        .min_connections(1)
+        .acquire_timeout(Duration::from_secs(2));
+    let executor = SqliteExecutor::new_with_options(url, pool_options)
+        .await
+        .expect("Failed to create executor");
+
+    setup_test_table(&executor)
+        .await
+        .expect("Failed to setup table");
+
+    for i in 100..120i64 {
+        let insert = Sql {
+            text: "INSERT INTO test_users (id, name, email, age, score, active) VALUES (?, ?, ?, ?, ?, ?)".to_string(),
+            params: vec![
+                Value::I64(i),
+                Value::String(format!("DropUser{}", i)),
+                Value::String(format!("drop{}@example.com", i)),
+                Value::I64(20 + i),
+                Value::F64(80.0 + i as f64),
+                Value::Bool(true),
+            ],
+        };
+        execute_all(&executor, &insert)
+            .await
+            .expect("Failed to insert");
+    }
+
+    let select = Sql {
+        text: "SELECT id FROM test_users WHERE id >= ? ORDER BY id".to_string(),
+        params: vec![Value::I64(100)],
+    };
+
+    // Repeat the abort cycle several times so a leaked connection on any
+    // iteration would surface as an acquire timeout below.
+    for _ in 0..5 {
+        let mut stream = executor.execute(&select);
+        // Read a single row, then drop the stream so the worker task hits the
+        // drain branch (consumer gone, more rows pending).
+        let first = stream.next().await.expect("expected at least one row");
+        first.expect("first row should decode");
+        drop(stream);
+
+        // Confirm the pool can still service queries.
+        let rows = execute_all(&executor, &select)
+            .await
+            .expect("pool should still acquire after streaming drop");
+        assert_eq!(rows.len(), 20);
+    }
+}
+
 #[tokio::test]
 async fn test_duplicate_column_names() {
     let executor = setup_executor().await.expect("Failed to create executor");
