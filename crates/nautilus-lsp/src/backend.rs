@@ -18,12 +18,10 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer};
 
-use nautilus_schema::analysis::semantic_tokens;
-
 use crate::convert::{
     hover_info_to_lsp_with_index, nautilus_completion_to_lsp_with_index,
     nautilus_diagnostic_to_lsp_with_index, offset_to_position_with_index,
-    position_to_offset_with_index, semantic_tokens_to_lsp_with_index, span_to_range_with_index,
+    position_to_offset_with_index, span_to_range_with_index,
 };
 use crate::document::DocumentState;
 
@@ -36,6 +34,14 @@ pub struct Backend {
 impl Backend {
     /// Re-run analysis on `source`, store the result, and publish diagnostics.
     async fn reanalyze(&self, uri: Url, source: String) {
+        if self
+            .docs
+            .get(&uri)
+            .is_some_and(|existing| existing.source == source)
+        {
+            return;
+        }
+
         let state = DocumentState::new(source.clone());
         let lsp_diags: Vec<Diagnostic> = state
             .analysis
@@ -52,7 +58,7 @@ impl Backend {
             text_document_sync: Some(TextDocumentSyncCapability::Options(
                 TextDocumentSyncOptions {
                     open_close: Some(true),
-                    change: Some(TextDocumentSyncKind::FULL),
+                    change: Some(TextDocumentSyncKind::INCREMENTAL),
                     save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
                         include_text: Some(true),
                     })),
@@ -114,10 +120,24 @@ impl LanguageServer for Backend {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri;
-        // FULL sync -> always exactly one content change with the full text.
-        if let Some(change) = params.content_changes.into_iter().next() {
-            self.reanalyze(uri, change.text).await;
-        }
+        let changes = params.content_changes;
+
+        let Some(source) = self
+            .docs
+            .get(&uri)
+            .map(|state| state.apply_content_changes(&changes))
+            .or_else(|| {
+                changes
+                    .into_iter()
+                    .next()
+                    .filter(|change| change.range.is_none())
+                    .map(|change| change.text)
+            })
+        else {
+            return;
+        };
+
+        self.reanalyze(uri, source).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -212,16 +232,13 @@ impl LanguageServer for Backend {
         let Some(state) = self.docs.get(uri) else {
             return Ok(None);
         };
-        let Some(ast) = &state.analysis.ast else {
+        let Some(data) = state.semantic_tokens() else {
             return Ok(None);
         };
 
-        let tokens = semantic_tokens(ast, &state.analysis.tokens);
-        let data = semantic_tokens_to_lsp_with_index(&state.source, &state.line_index, &tokens);
-
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
-            data,
+            data: data.to_vec(),
         })))
     }
 
@@ -249,7 +266,7 @@ impl LanguageServer for Backend {
                     state.source.len(),
                 ),
             },
-            new_text: formatted,
+            new_text: formatted.to_string(),
         };
 
         Ok(Some(vec![edit]))
@@ -262,7 +279,7 @@ mod tests {
     use dashmap::DashMap;
     use tower_lsp::lsp_types::{
         CompletionParams, DidChangeTextDocumentParams, DidOpenTextDocumentParams,
-        DidSaveTextDocumentParams, Position, TextDocumentContentChangeEvent,
+        DidSaveTextDocumentParams, Position, Range, TextDocumentContentChangeEvent,
         TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
         VersionedTextDocumentIdentifier,
     };
@@ -274,6 +291,14 @@ mod tests {
         let completion = caps.completion_provider.expect("completion provider");
         let triggers = completion.trigger_characters.expect("trigger characters");
         assert_eq!(triggers, vec!["@", "=", "\""]);
+        let sync = caps.text_document_sync.expect("text sync");
+        let tower_lsp::lsp_types::TextDocumentSyncCapability::Options(sync) = sync else {
+            panic!("expected text sync options");
+        };
+        assert_eq!(
+            sync.change,
+            Some(tower_lsp::lsp_types::TextDocumentSyncKind::INCREMENTAL)
+        );
         assert_eq!(
             caps.document_formatting_provider,
             Some(tower_lsp::lsp_types::OneOf::Left(true))
@@ -295,13 +320,13 @@ mod tests {
                     uri: uri.clone(),
                     language_id: "nautilus".to_string(),
                     version: 1,
-                    text: "model User {\n  name \n}\n".to_string(),
+                    text: "model User {\n  role \n}\n".to_string(),
                 },
             })
             .await;
 
         let state = backend.docs.get(&uri).expect("cached untitled document");
-        assert_eq!(state.source, "model User {\n  name \n}\n");
+        assert_eq!(state.source, "model User {\n  role \n}\n");
         drop(state);
 
         let completion = backend
@@ -332,9 +357,9 @@ mod tests {
                     version: 2,
                 },
                 content_changes: vec![TextDocumentContentChangeEvent {
-                    range: None,
+                    range: Some(Range::new(Position::new(3, 0), Position::new(3, 0))),
                     range_length: None,
-                    text: "model User {\n  role \n}\n\nenum Role {\n  Member\n}\n".to_string(),
+                    text: "enum Role {\n  Member\n}\n".to_string(),
                 }],
             })
             .await;
@@ -343,7 +368,10 @@ mod tests {
             .docs
             .get(&uri)
             .expect("updated untitled document remains cached");
-        assert!(state.source.contains("role"));
+        assert_eq!(
+            state.source,
+            "model User {\n  role \n}\nenum Role {\n  Member\n}\n"
+        );
         drop(state);
 
         backend
