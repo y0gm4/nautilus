@@ -501,7 +501,8 @@ class {{ delegate_name }}:
                         sets. The client still returns one fully merged list.
 
         Returns:
-            A list of matching ``{{ model_name }}`` instances.
+            A list of matching ``{{ model_name }}`` instances. Prefer this API
+            when the caller naturally wants the whole result set in memory.
         """
         args: Dict[str, Any] = {}
         if where is not None:
@@ -557,6 +558,11 @@ class {{ delegate_name }}:
         Unlike :meth:`find_many`, this API does not merge every partial frame
         into one final list before returning. Each matching row is yielded as
         soon as the engine emits the next chunk.
+
+        Prefer :meth:`find_many` for small pages or any path that already wants
+        a final ``list[{{ model_name }}]``. Prefer :meth:`stream_many` for
+        exports, scans, or early-exit consumers that should not accumulate all
+        rows client-side.
 
         Args:
             chunk_size: Protocol-level chunk size used by the engine for this

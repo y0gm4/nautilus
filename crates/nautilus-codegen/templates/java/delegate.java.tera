@@ -289,6 +289,11 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
     /**
      * Stream records incrementally from the engine.
      *
+     * Prefer {@code findMany(...)} when the caller naturally wants a final
+     * {@code List<{{ model_name }}>}, such as small pages or relation-heavy
+     * reads. Prefer {@code streamMany(...)} for exports, scans, and early-exit
+     * consumers that should avoid accumulating every row in memory first.
+     *
      * Close the returned stream early, ideally via try-with-resources, to
      * propagate cancellation promptly to the engine.
      */

@@ -223,6 +223,12 @@ export declare class {{ delegate_name }} {
   client: NautilusClient;
   constructor(client: NautilusClient);
 
+  /**
+   * Fetch every matching row and resolve a final in-memory array.
+   *
+   * Prefer this for small or medium result sets, eager-loaded reads, and any
+   * downstream path that already wants the whole collection before continuing.
+   */
   findMany(args?: {
     where?:    {{ model_name }}WhereInput;
     orderBy?:  {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
@@ -238,6 +244,14 @@ export declare class {{ delegate_name }} {
     chunkSize?: number;
   }): Promise<{{ model_name }}Model[]>;
 
+  /**
+   * Yield matching rows incrementally as an async iterable.
+   *
+   * Prefer this for exports, scans, and `for await ... of` pipelines where
+   * keeping client memory flatter matters more than receiving one final array.
+   * The underlying request keeps a pooled connection busy until iteration
+   * finishes or the iterable is closed.
+   */
   streamMany(args?: {
     where?:    {{ model_name }}WhereInput;
     orderBy?:  {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];

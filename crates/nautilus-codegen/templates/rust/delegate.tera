@@ -856,6 +856,9 @@ where
     /// Find all {{ model_name }} records matching `args`.
     ///
     /// Executes immediately and returns a `Vec<{{ model_name }}>`.
+    /// Prefer this when the caller naturally wants the whole result set in
+    /// memory, such as small pages, eager-loaded relation graphs, or code that
+    /// does further in-memory sorting/grouping.
     pub {% if is_async %}async {% endif %}fn find_many(
         &self,
         args: nautilus_core::FindManyArgs,
@@ -1001,6 +1004,9 @@ where
     /// that yields each decoded record as it arrives from the database. This
     /// keeps client memory bounded for large reads (exports, scans) and
     /// reduces time-to-first-row.
+    ///
+    /// Prefer [`Self::find_many`] for small result sets or when the caller
+    /// needs a complete `Vec<{{ model_name }}>` before proceeding.
     ///
     /// The stream owns the database connection for the duration of the
     /// iteration; dropping the stream early releases the connection cleanly

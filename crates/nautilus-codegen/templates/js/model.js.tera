@@ -300,6 +300,12 @@ export class {{ delegate_name }} {
     this.client = client;
   }
 
+  /**
+   * Fetch every matching row and resolve a final in-memory array.
+   *
+   * Prefer this for small or medium result sets, eager-loaded reads, and any
+   * downstream path that already wants the whole collection before continuing.
+   */
   async findMany(args) {
     const rpcArgs = {};
     if (args?.where    != null) rpcArgs['where']   = _processWhereFilters(args.where, _{{ table_name }}FieldToDb);
@@ -326,6 +332,14 @@ export class {{ delegate_name }} {
     return ((result['data']) ?? []).map(r => _coerce{{ model_name }}(r));
   }
 
+  /**
+   * Yield matching rows incrementally as an async iterable.
+   *
+   * Prefer this for exports, scans, and `for await ... of` pipelines where
+   * keeping client memory flatter matters more than receiving one final array.
+   * The underlying request keeps a pooled connection busy until iteration
+   * finishes or the iterable is closed.
+   */
   async *streamMany(args) {
     const chunkSize = args?.chunkSize ?? 128;
     if (!Number.isInteger(chunkSize) || chunkSize < 1) {

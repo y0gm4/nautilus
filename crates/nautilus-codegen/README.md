@@ -36,6 +36,26 @@ install target above when `install = true`.
 - Java generation writes a Maven module rooted at the configured `output` path and requires Java-specific generator fields: `package`, `group_id`, and `artifact_id`. Java also supports `mode = "jar"`, which compiles the generated sources, writes `output/dist/{artifact_id}.jar` plus `output/dist/lib/*.jar` for plain `javac` / `java` workflows, and removes its temporary `.nautilus-build` directory before returning.
 - The checked-in examples show the intended consumption pattern today: JS imports from `./generated/...`, Python imports from the generated output package on `sys.path`, Java imports from the generated Maven module or from the generated jar bundle, and `install = true` is optional.
 
+## Choosing `findMany` vs streaming APIs
+
+Generated clients expose both buffered and streaming read paths where the
+runtime can benefit from it:
+
+| Runtime | Buffered API | Streaming API | Recommended use |
+| --- | --- | --- | --- |
+| Rust async | `find_many` | `stream_many` | Use `find_many` for small/medium result sets you want as a final `Vec`; use `stream_many` for exports and long forward scans |
+| Python async | `find_many` | `stream_many` | Same tradeoff as Rust; sync Python clients only expose `find_many` |
+| JS / TS | `findMany` | `streamMany` | Prefer `streamMany` for `for await` pipelines and large result sets |
+| Java sync + async | `findMany` | `streamMany` | Prefer `streamMany` when you want pull-based iteration; close early with `try`-with-resources |
+
+As a rule of thumb, prefer the buffered APIs when you need the full collection
+in memory anyway, especially for small pages, relation-heavy includes, or code
+that naturally works on `Vec` / `List`. Prefer the streaming APIs when you want
+to process rows incrementally, reduce client-side memory growth, or stop
+consuming early once you have enough rows. Streaming keeps one pooled
+connection occupied until iteration finishes, so it should be chosen
+intentionally rather than used as the default for every `findMany`.
+
 ## Java bundle mode
 
 Use `mode = "jar"` when you want `nautilus generate` to leave behind a bundle

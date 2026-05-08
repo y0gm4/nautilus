@@ -698,6 +698,78 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+### Streaming Reads
+
+Use `findMany` / `find_many` when you want the final collection in memory and
+the result set is small or medium. Use `streamMany` / `stream_many` for large
+forward scans, exports, or row-by-row processing where lower time-to-first-row
+and bounded client memory matter more.
+
+| Runtime | Buffered API | Streaming API | Notes |
+| --- | --- | --- | --- |
+| Python | `find_many(...) -> list[Model]` | `stream_many(...) -> AsyncIterator[Model]` | Available on async clients only |
+| JavaScript / TypeScript | `findMany(...) -> Promise<Model[]>` | `streamMany(...) -> AsyncIterable<Model>` | Best fit for `for await ... of` pipelines |
+| Java | `findMany(...) -> List<Model>` or `CompletableFuture<List<Model>>` | `streamMany(...) -> Stream<Model>` | Close early with `try`-with-resources |
+| Rust | `find_many(...) -> Result<Vec<Model>>` | `stream_many(...) -> Result<impl Stream<...>>` | Available on async clients only |
+
+Keep `findMany` for small pages, eager-loaded relation graphs, or any path
+where downstream code genuinely wants a final `Vec` / `List`. Reach for the
+streaming APIs when you are exporting many rows, scanning in batches, or
+stopping as soon as a predicate matches. Because streaming keeps a database
+connection busy until consumption finishes, it should be used deliberately
+rather than as the default for every read.
+
+**Python (`interface = "async"`)**
+
+```python
+async for user in client.user.stream_many(
+    order_by={"id": "asc"},
+    chunk_size=256,
+):
+    print(user.id)
+```
+
+**JavaScript / TypeScript**
+
+```typescript
+for await (const user of client.user.streamMany({
+    orderBy: { id: 'asc' },
+    chunkSize: 256,
+})) {
+    console.log(user.id);
+}
+```
+
+**Java**
+
+```java
+import com.example.db.enums.SortOrder;
+import com.example.db.model.User;
+import java.util.stream.Stream;
+
+try (Stream<User> users = client.user().streamMany(find -> find
+        .orderBy(order -> order.id(SortOrder.ASC))
+        .chunkSize(256))) {
+    users.limit(10).forEach(user -> System.out.println(user.id()));
+}
+```
+
+**Rust (`interface = "async"`)**
+
+```rust
+use futures::TryStreamExt;
+use nautilus_core::{FindManyArgs, OrderBy, OrderDir};
+
+let mut users = User::nautilus(&client).stream_many(FindManyArgs {
+    order_by: vec![OrderBy::new("id", OrderDir::Asc)],
+    ..Default::default()
+})?;
+
+while let Some(user) = users.try_next().await? {
+    println!("{}", user.id);
+}
+```
+
 ### Transactions
 
 #### Python
