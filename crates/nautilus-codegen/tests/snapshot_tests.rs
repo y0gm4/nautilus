@@ -1512,6 +1512,7 @@ model User {
 
     let async_delegate = generated_java_file(&async_files, "client/UserDelegate.java");
     let sync_delegate = generated_java_file(&sync_files, "client/UserDelegate.java");
+    let dsl = generated_java_file(&async_files, "dsl/UserDsl.java");
     let rpc_caller = generated_java_file(&async_files, "internal/RpcCaller.java");
     let base_client = generated_java_file(&async_files, "internal/BaseNautilusClient.java");
     let base_tx_client = generated_java_file(&async_files, "internal/BaseTransactionClient.java");
@@ -1532,6 +1533,11 @@ model User {
     assert!(
         rpc_caller.contains("Stream<JsonNode> streamRpc(String method, ObjectNode params);"),
         "expected Java RpcCaller to expose streamRpc():\n{rpc_caller}"
+    );
+    assert!(
+        dsl.contains("public ObjectNode whereNode()")
+            && dsl.contains("values.add(orderBy.node());"),
+        "expected Java FindManyArgs to expose whereNode() and serialize orderBy as an array:\n{dsl}"
     );
     assert!(
         base_client

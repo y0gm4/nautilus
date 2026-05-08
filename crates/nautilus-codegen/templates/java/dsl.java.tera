@@ -266,7 +266,11 @@ public final class {{ name }} {
             if (spec != null) {
                 spec.accept(orderBy);
             }
-            this.node.set("orderBy", orderBy.node());
+            ArrayNode values = this.node.has("orderBy") && this.node.get("orderBy").isArray()
+                ? (ArrayNode) this.node.get("orderBy")
+                : JsonSupport.array();
+            values.add(orderBy.node());
+            this.node.set("orderBy", values);
             return this;
         }
 
@@ -329,6 +333,11 @@ public final class {{ name }} {
         public FindManyArgs chunkSize(int chunkSize) {
             this.chunkSize = chunkSize;
             return this;
+        }
+
+        public ObjectNode whereNode() {
+            JsonNode where = this.node.get("where");
+            return where instanceof ObjectNode objectNode ? objectNode.deepCopy() : JsonSupport.object();
         }
 
         public Integer chunkSize() {
@@ -661,7 +670,11 @@ public final class {{ name }} {
             if (spec != null) {
                 spec.accept(builder);
             }
-            this.node.set("orderBy", builder.node());
+            ArrayNode values = this.node.has("orderBy") && this.node.get("orderBy").isArray()
+                ? (ArrayNode) this.node.get("orderBy")
+                : JsonSupport.array();
+            values.add(builder.node());
+            this.node.set("orderBy", values);
             return this;
         }
 
