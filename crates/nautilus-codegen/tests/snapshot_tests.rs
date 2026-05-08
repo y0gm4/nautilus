@@ -2,13 +2,14 @@
 //! optionally assert the full rendered output against local-only snapshots.
 //!
 //! Snapshot baselines live in `tests/snapshots/`, which is gitignored on
-//! purpose. If `.snap` files already exist locally, these tests compare against
-//! them automatically. To force snapshot assertions or generate fresh local
-//! baselines, run with `NAUTILUS_LOCAL_SNAPSHOTS=1` (typically alongside
-//! `INSTA_UPDATE=always`). To skip snapshot assertions even when local
-//! baselines exist, run with `NAUTILUS_SKIP_LOCAL_SNAPSHOTS=1`.
+//! purpose. Regular test runs ignore those local `.snap` files so stale
+//! baselines do not break unrelated codegen work. To force snapshot assertions
+//! or generate fresh local baselines, run with `NAUTILUS_LOCAL_SNAPSHOTS=1`
+//! (typically alongside `INSTA_UPDATE=always`). To skip snapshot assertions
+//! explicitly even when that env var is set, run with
+//! `NAUTILUS_SKIP_LOCAL_SNAPSHOTS=1`.
 
-use std::{path::PathBuf, sync::OnceLock};
+use std::sync::OnceLock;
 
 use nautilus_codegen::{
     enum_gen::generate_all_enums,
@@ -26,12 +27,6 @@ use nautilus_codegen::{
 };
 use nautilus_schema::validate_schema_source;
 
-fn local_snapshot_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("snapshots")
-}
-
 fn local_snapshots_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
 
@@ -44,13 +39,7 @@ fn local_snapshots_enabled() -> bool {
             return true;
         }
 
-        std::fs::read_dir(local_snapshot_dir())
-            .map(|entries| {
-                entries.flatten().any(|entry| {
-                    entry.path().extension().and_then(|ext| ext.to_str()) == Some("snap")
-                })
-            })
-            .unwrap_or(false)
+        false
     })
 }
 
