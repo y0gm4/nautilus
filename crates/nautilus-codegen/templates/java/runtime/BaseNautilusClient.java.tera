@@ -14,18 +14,26 @@ import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.Spliterator;
+import java.util.Spliterators;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
     private static final long RPC_TIMEOUT_SECONDS = 30L;
+    private static final Object STREAM_END = new Object();
 
     private final String schemaPath;
     private final NautilusOptions options;
@@ -33,6 +41,7 @@ public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
     private final AtomicLong nextRequestId = new AtomicLong();
     private final Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
     private final Map<Long, ArrayNode> partialData = new ConcurrentHashMap<>();
+    private final Map<Long, StreamState> streams = new ConcurrentHashMap<>();
     private final Object writeLock = new Object();
     private final ExecutorService executor = Executors.newCachedThreadPool(runnable -> {
         Thread thread = new Thread(runnable, "nautilus-java-client");
@@ -87,12 +96,7 @@ public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
         this.pending.put(requestId, future);
 
         try {
-            String payload = JsonSupport.mapper().writeValueAsString(request);
-            synchronized (this.writeLock) {
-                this.writer.write(payload);
-                this.writer.newLine();
-                this.writer.flush();
-            }
+            writeRequest(request);
             return future.get(RPC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
             future.cancel(true);
@@ -111,6 +115,46 @@ public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
         } finally {
             this.pending.remove(requestId);
         }
+    }
+
+    @Override
+    public final Stream<JsonNode> streamRpc(String method, ObjectNode params) {
+        connect();
+
+        long requestId = this.nextRequestId.incrementAndGet();
+        ObjectNode request = JsonSupport.object();
+        request.put("jsonrpc", "2.0");
+        request.put("id", requestId);
+        request.put("method", method);
+        request.set("params", params == null ? JsonSupport.object() : params);
+
+        StreamState state = new StreamState();
+        this.streams.put(requestId, state);
+
+        try {
+            writeRequest(request);
+        } catch (IOException e) {
+            this.streams.remove(requestId);
+            throw new ProtocolException("Request failed", e);
+        }
+
+        StreamCursor cursor = new StreamCursor(requestId);
+        Spliterator<JsonNode> spliterator = new Spliterators.AbstractSpliterator<>(
+            Long.MAX_VALUE,
+            Spliterator.ORDERED | Spliterator.NONNULL
+        ) {
+            @Override
+            public boolean tryAdvance(java.util.function.Consumer<? super JsonNode> action) {
+                JsonNode next = cursor.nextChunk();
+                if (next == null) {
+                    return false;
+                }
+                action.accept(next);
+                return true;
+            }
+        };
+
+        return StreamSupport.stream(spliterator, false).onClose(cursor::close);
     }
 
     @Override
@@ -183,6 +227,7 @@ public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
         }
         this.pending.clear();
         this.partialData.clear();
+        failStreams(error);
         this.executor.shutdownNow();
     }
 
@@ -224,12 +269,27 @@ public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
                     continue;
                 }
                 long requestId = idNode.asLong();
+                boolean partial = JsonSupport.asBoolean(JsonSupport.firstPresent(response, "partial")) == Boolean.TRUE;
+                StreamState stream = this.streams.get(requestId);
+                if (stream != null) {
+                    JsonNode error = JsonSupport.firstPresent(response, "error");
+                    if (error != null && !error.isNull()) {
+                        failStream(requestId, mapError(error));
+                    } else {
+                        JsonNode result = JsonSupport.firstPresent(response, "result");
+                        stream.push(result == null ? JsonSupport.object() : result);
+                        if (!partial) {
+                            stream.finish();
+                        }
+                    }
+                    continue;
+                }
+
                 CompletableFuture<JsonNode> future = this.pending.get(requestId);
                 if (future == null) {
                     continue;
                 }
 
-                boolean partial = JsonSupport.asBoolean(JsonSupport.firstPresent(response, "partial")) == Boolean.TRUE;
                 if (partial) {
                     ArrayNode chunk = (ArrayNode) JsonSupport.firstPresent(
                         JsonSupport.firstPresent(response, "result"),
@@ -271,6 +331,132 @@ public abstract class BaseNautilusClient implements RpcCaller, AutoCloseable {
             );
             for (CompletableFuture<JsonNode> future : this.pending.values()) {
                 future.completeExceptionally(error);
+            }
+            failStreams(error);
+        }
+    }
+
+    private void writeRequest(ObjectNode request) throws IOException {
+        String payload = JsonSupport.mapper().writeValueAsString(request);
+        synchronized (this.writeLock) {
+            this.writer.write(payload);
+            this.writer.newLine();
+            this.writer.flush();
+        }
+    }
+
+    private void cancelRequest(long requestId) {
+        if (!this.connected || this.writer == null) {
+            return;
+        }
+        try {
+            ObjectNode request = JsonSupport.object();
+            request.put("jsonrpc", "2.0");
+            request.put("method", "request.cancel");
+            ObjectNode params = JsonSupport.object();
+            params.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
+            params.put("requestId", requestId);
+            request.set("params", params);
+            writeRequest(request);
+        } catch (IOException ignored) {
+        }
+    }
+
+    private Object readStreamItem(long requestId) {
+        StreamState stream = this.streams.get(requestId);
+        if (stream == null) {
+            return STREAM_END;
+        }
+        try {
+            Object item = stream.items.poll(RPC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            if (item == null) {
+                throw new ProtocolException("Request " + requestId + " timed out");
+            }
+            return item;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ProtocolException("Interrupted while waiting for engine response", e);
+        }
+    }
+
+    private void failStream(long requestId, RuntimeException error) {
+        StreamState stream = this.streams.get(requestId);
+        if (stream == null) {
+            return;
+        }
+        stream.push(error);
+        stream.finish();
+    }
+
+    private void failStreams(RuntimeException error) {
+        for (StreamState stream : this.streams.values()) {
+            stream.push(error);
+            stream.finish();
+        }
+    }
+
+    private static final class StreamState {
+        private final BlockingQueue<Object> items = new LinkedBlockingQueue<>();
+        private final AtomicBoolean closed = new AtomicBoolean(false);
+
+        private void push(Object item) {
+            if (this.closed.get()) {
+                return;
+            }
+            this.items.offer(item);
+        }
+
+        private void finish() {
+            if (this.closed.compareAndSet(false, true)) {
+                this.items.offer(STREAM_END);
+            }
+        }
+    }
+
+    private final class StreamCursor implements AutoCloseable {
+        private final long requestId;
+        private final AtomicBoolean completed = new AtomicBoolean(false);
+        private final AtomicBoolean cleanedUp = new AtomicBoolean(false);
+
+        private StreamCursor(long requestId) {
+            this.requestId = requestId;
+        }
+
+        private JsonNode nextChunk() {
+            Object item;
+            try {
+                item = readStreamItem(this.requestId);
+            } catch (RuntimeException error) {
+                cleanup(true);
+                throw error;
+            }
+
+            if (item == STREAM_END) {
+                this.completed.set(true);
+                cleanup(false);
+                return null;
+            }
+            if (item instanceof RuntimeException error) {
+                this.completed.set(true);
+                cleanup(false);
+                throw error;
+            }
+            return (JsonNode) item;
+        }
+
+        @Override
+        public void close() {
+            cleanup(!this.completed.get());
+        }
+
+        private void cleanup(boolean cancel) {
+            if (!this.cleanedUp.compareAndSet(false, true)) {
+                return;
+            }
+            BaseNautilusClient.this.streams.remove(this.requestId);
+            BaseNautilusClient.this.partialData.remove(this.requestId);
+            if (cancel) {
+                BaseNautilusClient.this.cancelRequest(this.requestId);
             }
         }
     }

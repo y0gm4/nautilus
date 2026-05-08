@@ -3,6 +3,7 @@ package {{ package_name }}.internal;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.concurrent.Executor;
+import java.util.stream.Stream;
 
 public abstract class BaseTransactionClient implements RpcCaller {
     private final BaseNautilusClient parent;
@@ -18,6 +19,13 @@ public abstract class BaseTransactionClient implements RpcCaller {
         ObjectNode actual = params == null ? JsonSupport.object() : params.deepCopy();
         actual.put("transactionId", this.transactionId);
         return this.parent.rpc(method, actual);
+    }
+
+    @Override
+    public final Stream<JsonNode> streamRpc(String method, ObjectNode params) {
+        ObjectNode actual = params == null ? JsonSupport.object() : params.deepCopy();
+        actual.put("transactionId", this.transactionId);
+        return this.parent.streamRpc(method, actual);
     }
 
     @Override

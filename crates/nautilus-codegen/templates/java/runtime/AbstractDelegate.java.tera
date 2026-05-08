@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 public abstract class AbstractDelegate<T> {
     private final RpcCaller client;
@@ -19,6 +20,10 @@ public abstract class AbstractDelegate<T> {
 
     protected final JsonNode rpc(String method, ObjectNode params) {
         return this.client.rpc(method, params);
+    }
+
+    protected final Stream<JsonNode> streamRpc(String method, ObjectNode params) {
+        return this.client.streamRpc(method, params);
     }
 
     protected final <R> CompletableFuture<R> async(Supplier<R> supplier) {
@@ -35,5 +40,9 @@ public abstract class AbstractDelegate<T> {
             array.add(item.toJsonNode());
         }
         return array;
+    }
+
+    protected final <R> Stream<R> rows(Stream<JsonNode> results, Function<JsonNode, R> mapper) {
+        return results.flatMap(result -> JsonSupport.dataList(result, mapper).stream());
     }
 }

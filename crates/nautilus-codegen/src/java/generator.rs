@@ -723,6 +723,7 @@ fn generate_delegate_file(config: &JavaConfig, model: &ModelIr) -> String {
     imports.insert("com.fasterxml.jackson.databind.node.ArrayNode".to_string());
     imports.insert("com.fasterxml.jackson.databind.node.ObjectNode".to_string());
     imports.insert("java.util.List".to_string());
+    imports.insert("java.util.stream.Stream".to_string());
     if config.is_async {
         imports.insert("java.util.concurrent.CompletableFuture".to_string());
     }

@@ -3,8 +3,10 @@ package {{ package_name }}.internal;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.concurrent.Executor;
+import java.util.stream.Stream;
 
 public interface RpcCaller {
     JsonNode rpc(String method, ObjectNode params);
+    Stream<JsonNode> streamRpc(String method, ObjectNode params);
     Executor executor();
 }

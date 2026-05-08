@@ -5,6 +5,8 @@ import {{ import }};
 {%- endfor %}
 
 public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
+    private static final int DEFAULT_STREAM_CHUNK_SIZE = 128;
+
     public {{ name }}(RpcCaller client) {
         super(client, "{{ model_name }}");
     }
@@ -284,16 +286,58 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
     }
 
 {% endif %}
-    private List<{{ model_name }}> findManyInternal({{ dsl_name }}.FindManyArgs args) {
+    /**
+     * Stream records incrementally from the engine.
+     *
+     * Close the returned stream early, ideally via try-with-resources, to
+     * propagate cancellation promptly to the engine.
+     */
+    public Stream<{{ model_name }}> streamMany() {
+        return streamMany(new {{ dsl_name }}.FindManyArgs());
+    }
+
+    public Stream<{{ model_name }}> streamMany(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return streamMany(args);
+    }
+
+    public Stream<{{ model_name }}> streamMany({{ dsl_name }}.FindManyArgs args) {
+        return streamManyInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args);
+    }
+
+    private ObjectNode buildFindManyRequest({{ dsl_name }}.FindManyArgs args) {
+        {{ dsl_name }}.FindManyArgs actual = args == null ? new {{ dsl_name }}.FindManyArgs() : args;
         ObjectNode request = JsonSupport.object();
         request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
         request.put("model", "{{ model_name }}");
-        request.set("args", args == null ? JsonSupport.object() : args.node());
-        if (args != null && args.chunkSize() != null) {
-            request.put("chunkSize", args.chunkSize().intValue());
+        request.set("args", actual.node());
+        if (actual.chunkSize() != null) {
+            request.put("chunkSize", actual.chunkSize().intValue());
         }
+        return request;
+    }
+
+    private List<{{ model_name }}> findManyInternal({{ dsl_name }}.FindManyArgs args) {
+        ObjectNode request = buildFindManyRequest(args);
         JsonNode result = rpc("query.findMany", request);
         return rows(result, {{ model_name }}::fromJsonNode);
+    }
+
+    private Stream<{{ model_name }}> streamManyInternal({{ dsl_name }}.FindManyArgs args) {
+        Integer configuredChunkSize = args == null ? null : args.chunkSize();
+        int chunkSize = configuredChunkSize == null
+            ? DEFAULT_STREAM_CHUNK_SIZE
+            : configuredChunkSize.intValue();
+        if (chunkSize < 1) {
+            throw new IllegalArgumentException("streamMany chunkSize must be a positive integer");
+        }
+
+        ObjectNode request = buildFindManyRequest(args);
+        request.put("chunkSize", chunkSize);
+        return rows(streamRpc("query.findMany", request), {{ model_name }}::fromJsonNode);
     }
 
     private {{ model_name }} findFirstInternal({{ dsl_name }}.FindManyArgs args) {

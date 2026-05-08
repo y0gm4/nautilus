@@ -1498,6 +1498,68 @@ model User {
 }
 
 #[test]
+fn test_java_generation_exposes_stream_many_over_chunked_rpc() {
+    let ir = validate(
+        r#"
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+  interface   = "async"
+}
+
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let async_files =
+        generate_java_client(&ir, "schema.nautilus", true).expect("generate_java_client failed");
+    let sync_files =
+        generate_java_client(&ir, "schema.nautilus", false).expect("generate_java_client failed");
+
+    let async_delegate = generated_java_file(&async_files, "client/UserDelegate.java");
+    let sync_delegate = generated_java_file(&sync_files, "client/UserDelegate.java");
+    let rpc_caller = generated_java_file(&async_files, "internal/RpcCaller.java");
+    let base_client = generated_java_file(&async_files, "internal/BaseNautilusClient.java");
+    let base_tx_client = generated_java_file(&async_files, "internal/BaseTransactionClient.java");
+
+    assert!(
+        async_delegate.contains("public Stream<User> streamMany()")
+            && sync_delegate.contains("public Stream<User> streamMany()"),
+        "expected generated Java delegates to expose streamMany():\nasync:\n{async_delegate}\n\nsync:\n{sync_delegate}"
+    );
+    assert!(
+        async_delegate.contains("DEFAULT_STREAM_CHUNK_SIZE = 128")
+            && async_delegate.contains("streamMany chunkSize must be a positive integer")
+            && async_delegate.contains(
+                "return rows(streamRpc(\"query.findMany\", request), User::fromJsonNode);"
+            ),
+        "expected generated Java async delegate to stream chunked findMany rows:\n{async_delegate}"
+    );
+    assert!(
+        rpc_caller.contains("Stream<JsonNode> streamRpc(String method, ObjectNode params);"),
+        "expected Java RpcCaller to expose streamRpc():\n{rpc_caller}"
+    );
+    assert!(
+        base_client
+            .contains("private final Map<Long, StreamState> streams = new ConcurrentHashMap<>();")
+            && base_client.contains("request.put(\"method\", \"request.cancel\");")
+            && base_client.contains(
+                "return StreamSupport.stream(spliterator, false).onClose(cursor::close);"
+            ),
+        "expected Java runtime to stream chunked responses and cancel early closes:\n{base_client}"
+    );
+    assert!(
+        base_tx_client.contains("return this.parent.streamRpc(method, actual);"),
+        "expected transaction clients to forward streamRpc() through the parent client:\n{base_tx_client}"
+    );
+}
+
+#[test]
 fn test_java_runtime_loads_dotenv_before_spawning_engine() {
     let ir = validate(
         r#"
