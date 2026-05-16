@@ -6,6 +6,9 @@ import {{ import }};
 
 public record {{ name }}(
 {%- for component in components %}
+{%- if component.doc_comment %}
+    /** {{ component.doc_comment }} */
+{%- endif %}
     {{ component.ty }} {{ component.name }}{% if not loop.last %},{% endif %}
 {%- endfor %}
 ) implements {{ implements_type }} {

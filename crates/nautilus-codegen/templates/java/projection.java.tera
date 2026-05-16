@@ -1,0 +1,38 @@
+package {{ package_name }}.model;
+
+{%- for import in imports %}
+import {{ import }};
+{%- endfor %}
+
+public final class {{ name }} implements WireSerializable {
+    private final JsonNode row;
+
+    private {{ name }}(JsonNode row) {
+        this.row = row == null || row.isNull() ? JsonSupport.object() : row.deepCopy();
+    }
+
+    public static {{ name }} fromJsonNode(JsonNode row) {
+        if (row == null || row.isNull()) {
+            return null;
+        }
+        return new {{ name }}(row);
+    }
+
+{%- for field in fields %}
+    public boolean {{ field.has_method }}() {
+        return {{ field.source_expr }} != null;
+    }
+
+{%- if field.doc_comment %}
+    /** {{ field.doc_comment }} */
+{%- endif %}
+    public {{ field.ty }} {{ field.name }}() {
+        return {{ field.read_expr }};
+    }
+
+{%- endfor %}
+    @Override
+    public JsonNode toJsonNode() {
+        return this.row.deepCopy();
+    }
+}

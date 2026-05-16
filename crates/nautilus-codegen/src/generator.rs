@@ -93,6 +93,7 @@ struct FieldContext {
     is_updated_at: bool,
     /// `true` when the field is a `@computed` generated column (read-only from client side).
     is_computed: bool,
+    doc_comment: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -330,6 +331,7 @@ fn generate_model_with_registry(
             is_optional: !field.is_required && !field.is_array,
             is_updated_at: field.is_updated_at,
             is_computed: field.computed.is_some(),
+            doc_comment: crate::schema_docs::field_modifier_doc(model, field),
         };
 
         create_fields.push(field_ctx.clone());
@@ -421,6 +423,7 @@ fn generate_model_with_registry(
             is_optional: true,
             is_updated_at: false,
             is_computed: false,
+            doc_comment: crate::schema_docs::field_modifier_doc(model, field),
         })
         .collect();
 
@@ -460,6 +463,7 @@ fn generate_model_with_registry(
                         is_optional: !f.is_required && !f.is_array,
                         is_updated_at: f.is_updated_at,
                         is_computed: f.computed.is_some(),
+                        doc_comment: crate::schema_docs::field_modifier_doc(target_model, f),
                     }
                 })
                 .collect();

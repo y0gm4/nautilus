@@ -64,6 +64,7 @@ fn projected_scalar_decode_slots(fields: &std::collections::HashSet<String>) -> 
     slots
 }
 
+#[allow(dead_code)]
 fn decode_relation_json_ref<T>(value: &nautilus_core::Value) -> Option<T>
 where
     T: serde::de::DeserializeOwned,
@@ -74,6 +75,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 fn decode_relation_json_owned<T>(value: nautilus_core::Value) -> Option<T>
 where
     T: serde::de::DeserializeOwned,
@@ -106,7 +108,12 @@ fn decode_model_row_with_hints(
     }
 
 {%- for field in scalar_fields %}
+{%- if field.is_optional %}
+    let mut {{ field.name }}: {{ field.rust_type }} = None;
+    let mut {{ field.name }}_seen = false;
+{%- else %}
     let mut {{ field.name }}: Option<{{ field.rust_type }}> = None;
+{%- endif %}
 {%- endfor %}
 {%- for rel in relations %}
 {%- if rel.is_array %}
@@ -152,13 +159,14 @@ fn decode_model_row_with_hints(
         match decode_slots[column_idx] {
 {%- for field in scalar_fields %}
             {{ loop.index0 }} => {
-{%- if field.is_pk %}
-                {{ field.name }} = Some(nautilus_core::FromValue::from_value_owned(value)?);
-{%- else %}
+{%- if field.is_optional %}
+                {{ field.name }}_seen = true;
                 {{ field.name }} = match value {
                     nautilus_core::Value::Null => None,
-                    other => nautilus_core::FromValue::from_value_owned(other).ok(),
+                    other => Some(nautilus_core::FromValue::from_value_owned(other)?),
                 };
+{%- else %}
+                {{ field.name }} = Some(nautilus_core::FromValue::from_value_owned(value)?);
 {%- endif %}
             }
 {%- endfor %}
@@ -173,18 +181,61 @@ fn decode_model_row_with_hints(
 
     Ok({{ model_name }} {
 {%- for field in scalar_fields %}
-{%- if field.is_pk %}
-        {{ field.name }}: {{ field.name }}.ok_or_else(|| nautilus_core::Error::TypeError(
-            "missing required PK column '{{ field.db_name }}' ({{ field.name }})".to_string()
-        ))?,
+{%- if field.is_optional %}
+        {{ field.name }}: {
+            if !{{ field.name }}_seen {
+                return Err(nautilus_core::Error::TypeError(
+                    "missing required column '{{ field.db_name }}' ({{ field.name }}) while decoding full {{ model_name }}".to_string()
+                ));
+            }
+            {{ field.name }}
+        },
 {%- else %}
-        {{ field.name }},
+        {{ field.name }}: {{ field.name }}.ok_or_else(|| nautilus_core::Error::TypeError(
+            "missing required column '{{ field.db_name }}' ({{ field.name }}) while decoding full {{ model_name }}".to_string()
+        ))?,
 {%- endif %}
 {%- endfor %}
 {%- for field in relation_fields %}
         {{ field.name }},
 {%- endfor %}
     })
+}
+
+fn projection_value_hint_for_column(
+    column: &nautilus_core::ColumnMarker,
+) -> Option<crate::ValueHint> {
+    if column.table.as_ref() != "{{ table_name }}" {
+        return None;
+    }
+
+    match column.name.as_ref() {
+{%- for field in scalar_fields %}
+        "{{ field.db_name }}" => {{ field.read_hint_expr }},
+{%- endfor %}
+        _ => None,
+    }
+}
+
+fn normalize_projection_row(
+    row: crate::Row,
+    hints: &[Option<crate::ValueHint>],
+) -> nautilus_core::Result<crate::Row> {
+    let mut normalized = crate::Row::with_capacity(row.len());
+    for (idx, (column_name, value)) in row.into_columns_iter().enumerate() {
+        let value = match hints.get(idx).and_then(|hint| *hint) {
+            Some(hint) => crate::normalize_value_with_hint(&column_name, idx, value, hint)
+                .map_err(|e| {
+                    nautilus_core::Error::Other(format!(
+                        "Failed to normalize {{ model_name }} projection row: {}",
+                        e
+                    ))
+                })?,
+            None => value,
+        };
+        normalized.push_column(column_name, value);
+    }
+    Ok(normalized)
 }
 
 {% include "model_struct.tera" %}

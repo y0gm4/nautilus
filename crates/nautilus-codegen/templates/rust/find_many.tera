@@ -93,15 +93,6 @@ where
         self
     }
 
-    /// Specify a field projection (only return the listed columns).
-    ///
-    /// PK fields are always included regardless.
-    #[must_use]
-    pub(crate) fn select_fields(mut self, fields: std::collections::HashSet<String>) -> Self {
-        self.select = fields;
-        self
-    }
-
     fn into_execution_parts(
         self,
     ) -> nautilus_core::Result<(
@@ -226,6 +217,118 @@ where
 
         Ok((client, sql, row_hints, decode_slots, backward))
     }
+
+    fn into_selection_execution_parts<C>(
+        self,
+        selection: &C,
+    ) -> nautilus_core::Result<(
+        crate::Client<E>,
+        nautilus_dialect::Sql,
+        Vec<Option<crate::ValueHint>>,
+        bool,
+    )>
+    where
+        C: nautilus_core::SelectColumns,
+    {
+        use nautilus_core::*;
+
+        let {{ find_many_name }} {
+            client,
+            filter,
+            order_by,
+            take,
+            skip,
+            select: _,
+            cursor,
+            backward,
+            distinct,
+            _selection,
+        } = self;
+        let selected_columns = selection.columns();
+        let row_hints = selected_columns
+            .iter()
+            .map(projection_value_hint_for_column)
+            .collect::<Vec<_>>();
+        let mut builder = Select::from_table("{{ table_name }}").with_capacity(SelectCapacity {
+            items: selected_columns.len(),
+            order_by_columns: order_by.len() + distinct.len() + {{ pk_fields_with_db | length }},
+            distinct: distinct.len(),
+            ..SelectCapacity::default()
+        });
+
+        for column in selected_columns {
+            builder = builder.item(SelectItem::column(column));
+        }
+
+        if !distinct.is_empty() {
+            let existing_cols: std::collections::HashSet<&str> =
+                order_by.iter().map(|o| o.column.as_str()).collect();
+            for col in &distinct {
+                if !existing_cols.contains(col.as_str()) {
+                    let dir = if backward { OrderDir::Desc } else { OrderDir::Asc };
+                    builder = builder.order_by(col.clone(), dir);
+                }
+            }
+        }
+
+        let effective_filter = if let Some(ref cursor_map) = cursor {
+            let pk_pairs: &[(&str, &str)] = &[
+{%- for pk in pk_fields_with_db %}
+                ("{{ pk.name }}", "{{ table_name }}__{{ pk.db_name }}"),
+{%- endfor %}
+            ];
+            let cursor_pred =
+                nautilus_core::build_cursor_predicate(pk_pairs, cursor_map, backward)?;
+
+            let existing_cols: std::collections::HashSet<&str> =
+                order_by.iter().map(|o| o.column.as_str()).collect();
+{%- for pk in pk_fields_with_db %}
+            if !existing_cols.contains("{{ pk.db_name }}") {
+                let dir = if backward { OrderDir::Desc } else { OrderDir::Asc };
+                builder = builder.order_by("{{ pk.db_name }}".to_string(), dir);
+            }
+{%- endfor %}
+
+            Some(match filter {
+                Some(f) => f.and(cursor_pred),
+                None => cursor_pred,
+            })
+        } else {
+            filter
+        };
+
+        if let Some(f) = effective_filter {
+            builder = builder.filter(f);
+        }
+
+        for order in order_by {
+            let dir = if backward {
+                match order.direction {
+                    OrderDir::Asc => OrderDir::Desc,
+                    OrderDir::Desc => OrderDir::Asc,
+                }
+            } else {
+                order.direction
+            };
+            builder = builder.order_by(order.column, dir);
+        }
+
+        if let Some(n) = take {
+            builder = builder.take(n.saturating_abs());
+        }
+        if let Some(offset) = skip {
+            builder = builder.skip(offset);
+        }
+
+        if !distinct.is_empty() {
+            builder = builder.distinct(distinct);
+        }
+
+        let select = builder.build()?;
+        let sql = client.dialect().render_select_owned(select)?;
+
+        Ok((client, sql, row_hints, backward))
+    }
 }
 
 impl<E> {{ find_many_name }}<E, ()>
@@ -275,5 +378,61 @@ where
 
         let row: crate::Row = row.into();
         Ok(Some(decode_model_row_with_hints(row, &decode_slots, &row_hints)?))
+    }
+
+    pub(crate) async fn exec_select<C>(
+        self,
+        selection: C,
+    ) -> nautilus_core::Result<Vec<C::Output>>
+    where
+        C: nautilus_core::SelectColumns,
+    {
+        use nautilus_core::*;
+        use std::convert::Into;
+
+        let (client, sql, row_hints, backward) =
+            self.into_selection_execution_parts(&selection)?;
+
+        let rows = crate::execute_all(client.executor(), &sql)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?;
+
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let row: crate::Row = row.into();
+            let row = normalize_projection_row(row, &row_hints)?;
+            results.push(selection.decode(&row)?);
+        }
+
+        if backward {
+            results.reverse();
+        }
+
+        Ok(results)
+    }
+
+    pub(crate) async fn exec_select_optional<C>(
+        self,
+        selection: C,
+    ) -> nautilus_core::Result<Option<C::Output>>
+    where
+        C: nautilus_core::SelectColumns,
+    {
+        use nautilus_core::*;
+        use std::convert::Into;
+
+        let (client, sql, row_hints, _backward) =
+            self.into_selection_execution_parts(&selection)?;
+        let row = crate::execute_optional(client.executor(), &sql)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let row: crate::Row = row.into();
+        let row = normalize_projection_row(row, &row_hints)?;
+        Ok(Some(selection.decode(&row)?))
     }
 }

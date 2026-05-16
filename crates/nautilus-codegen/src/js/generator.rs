@@ -8,9 +8,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use tera::{Context, Tera};
 
-use crate::backend::LanguageBackend;
 use crate::extension_types::{ts_input_type_for_extension, ExtensionRegistry};
-use crate::js::backend::JsBackend;
 use crate::js::type_mapper::{
     get_base_ts_type, get_filter_operators_for_field, get_ts_default_value, is_auto_generated,
     scalar_to_ts_type,
@@ -87,6 +85,7 @@ struct JsFieldContext {
     has_default: bool,
     default: String,
     is_pk: bool,
+    doc_comment: String,
     index: usize,
 }
 
@@ -187,6 +186,16 @@ fn input_base_ts_type(
     }
 }
 
+fn exact_output_ts_type(field: &nautilus_schema::ir::FieldIr, base_type: String) -> String {
+    if field.is_array {
+        format!("{}[]", base_type)
+    } else if !field.is_required {
+        format!("{} | null", base_type)
+    } else {
+        base_type
+    }
+}
+
 /// Generate JavaScript + declaration code for a single model.
 ///
 /// Returns `((js_filename, js_code), (dts_filename, dts_code))`.
@@ -250,7 +259,7 @@ fn generate_js_model_with_registry(
 
         let base_type = output_base_ts_type(field, &ir.enums, extensions);
         let input_base_type = input_base_ts_type(field, extensions);
-        let ts_type = JsBackend.wrap_field_type(field, base_type.clone());
+        let ts_type = exact_output_ts_type(field, base_type.clone());
         let input_ts_type = if field.is_array {
             format!("{}[]", input_base_type)
         } else {
@@ -302,6 +311,7 @@ fn generate_js_model_with_registry(
             has_default: default_val.is_some(),
             default: default_val.unwrap_or_default(),
             is_pk,
+            doc_comment: crate::schema_docs::field_modifier_doc(model, field),
             index: idx,
         });
 
@@ -448,6 +458,7 @@ fn generate_js_model_with_registry(
                     "null".to_string()
                 },
                 is_pk: false,
+                doc_comment: crate::schema_docs::field_modifier_doc(model, field),
                 index: idx,
             }
         })

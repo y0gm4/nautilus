@@ -83,9 +83,15 @@ export type SortOrder = 'asc' | 'desc';
 
 export interface {{ model_name }}Model {
 {%- for f in scalar_fields %}
-  {{ f.name }}{% if not f.is_pk %}?{% endif %}: {{ f.ts_type }};
+{%- if f.doc_comment %}
+  /** {{ f.doc_comment }} */
+{%- endif %}
+  {{ f.name }}: {{ f.ts_type }};
 {%- endfor %}
 {%- for f in relation_fields %}
+{%- if f.doc_comment %}
+  /** {{ f.doc_comment }} */
+{%- endif %}
   {{ f.name }}?: {{ f.ts_type }};
 {%- endfor %}
 }
@@ -144,6 +150,15 @@ export interface {{ model_name }}SelectInput {
   {{ field.name }}?: boolean;
 {%- endfor %}
 }
+
+export type {{ model_name }}PrimaryKeyKeys = {% if primary_key_fields | length > 0 %}{% for f in primary_key_fields %}'{{ f }}'{% if not loop.last %} | {% endif %}{% endfor %}{% else %}never{% endif %};
+export type {{ model_name }}TruthySelectKeys<S extends {{ model_name }}SelectInput> = {
+  [K in keyof S]-?: S[K] extends true ? K : never;
+}[keyof S] & keyof {{ model_name }}Model;
+export type {{ model_name }}Selected<S extends {{ model_name }}SelectInput> = Pick<
+  {{ model_name }}Model,
+  {{ model_name }}PrimaryKeyKeys | {{ model_name }}TruthySelectKeys<S>
+>;
 
 {%- if has_includes %}
 
@@ -219,6 +234,37 @@ export interface {{ model_name }}GroupByOutput {
   _max?:   Record<string, unknown>;
 }
 
+export interface {{ model_name }}FindManyArgs {
+  where?:    {{ model_name }}WhereInput;
+  orderBy?:  {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
+{%- if has_vector_fields %}
+  nearest?:  {{ model_name }}NearestInput;
+{%- endif %}
+  take?:     number;
+  skip?:     number;
+  select?:   {{ model_name }}SelectInput;
+  include?:  {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
+  cursor?:   Record<string, unknown>;
+  distinct?: string[];
+  chunkSize?: number;
+}
+
+export interface {{ model_name }}FindFirstArgs {
+  where?:   {{ model_name }}WhereInput;
+  orderBy?: {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
+{%- if has_vector_fields %}
+  nearest?: {{ model_name }}NearestInput;
+{%- endif %}
+  select?:  {{ model_name }}SelectInput;
+  include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
+}
+
+export interface {{ model_name }}FindUniqueArgs {
+  where:    {{ model_name }}WhereInput;
+  select?:  {{ model_name }}SelectInput;
+  include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
+}
+
 export declare class {{ delegate_name }} {
   client: NautilusClient;
   constructor(client: NautilusClient);
@@ -229,20 +275,8 @@ export declare class {{ delegate_name }} {
    * Prefer this for small or medium result sets, eager-loaded reads, and any
    * downstream path that already wants the whole collection before continuing.
    */
-  findMany(args?: {
-    where?:    {{ model_name }}WhereInput;
-    orderBy?:  {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
-{%- if has_vector_fields %}
-    nearest?:  {{ model_name }}NearestInput;
-{%- endif %}
-    take?:     number;
-    skip?:     number;
-    select?:   {{ model_name }}SelectInput;
-    include?:  {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
-    cursor?:   Record<string, unknown>;
-    distinct?: string[];
-    chunkSize?: number;
-  }): Promise<{{ model_name }}Model[]>;
+  findMany(args?: Omit<{{ model_name }}FindManyArgs, 'select'> & { select?: undefined }): Promise<{{ model_name }}Model[]>;
+  findMany<const S extends {{ model_name }}SelectInput>(args: Omit<{{ model_name }}FindManyArgs, 'select'> & { select: S }): Promise<Array<{{ model_name }}Selected<S>>>;
 
   /**
    * Yield matching rows incrementally as an async iterable.
@@ -252,52 +286,20 @@ export declare class {{ delegate_name }} {
    * The underlying request keeps a pooled connection busy until iteration
    * finishes or the iterable is closed.
    */
-  streamMany(args?: {
-    where?:    {{ model_name }}WhereInput;
-    orderBy?:  {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
-{%- if has_vector_fields %}
-    nearest?:  {{ model_name }}NearestInput;
-{%- endif %}
-    take?:     number;
-    skip?:     number;
-    select?:   {{ model_name }}SelectInput;
-    include?:  {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
-    cursor?:   Record<string, unknown>;
-    distinct?: string[];
-    chunkSize?: number;
-  }): AsyncIterable<{{ model_name }}Model>;
+  streamMany(args?: Omit<{{ model_name }}FindManyArgs, 'select'> & { select?: undefined }): AsyncIterable<{{ model_name }}Model>;
+  streamMany<const S extends {{ model_name }}SelectInput>(args: Omit<{{ model_name }}FindManyArgs, 'select'> & { select: S }): AsyncIterable<{{ model_name }}Selected<S>>;
 
-  findFirst(args?: {
-    where?:   {{ model_name }}WhereInput;
-    orderBy?: {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
-{%- if has_vector_fields %}
-    nearest?: {{ model_name }}NearestInput;
-{%- endif %}
-    select?:  {{ model_name }}SelectInput;
-    include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
-  }): Promise<{{ model_name }}Model | null>;
+  findFirst(args?: Omit<{{ model_name }}FindFirstArgs, 'select'> & { select?: undefined }): Promise<{{ model_name }}Model | null>;
+  findFirst<const S extends {{ model_name }}SelectInput>(args: Omit<{{ model_name }}FindFirstArgs, 'select'> & { select: S }): Promise<{{ model_name }}Selected<S> | null>;
 
-  findUnique(args: {
-    where:    {{ model_name }}WhereInput;
-    select?:  {{ model_name }}SelectInput;
-    include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
-  }): Promise<{{ model_name }}Model | null>;
+  findUnique(args: Omit<{{ model_name }}FindUniqueArgs, 'select'> & { select?: undefined }): Promise<{{ model_name }}Model | null>;
+  findUnique<const S extends {{ model_name }}SelectInput>(args: Omit<{{ model_name }}FindUniqueArgs, 'select'> & { select: S }): Promise<{{ model_name }}Selected<S> | null>;
 
-  findUniqueOrThrow(args: {
-    where:    {{ model_name }}WhereInput;
-    select?:  {{ model_name }}SelectInput;
-    include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
-  }): Promise<{{ model_name }}Model>;
+  findUniqueOrThrow(args: Omit<{{ model_name }}FindUniqueArgs, 'select'> & { select?: undefined }): Promise<{{ model_name }}Model>;
+  findUniqueOrThrow<const S extends {{ model_name }}SelectInput>(args: Omit<{{ model_name }}FindUniqueArgs, 'select'> & { select: S }): Promise<{{ model_name }}Selected<S>>;
 
-  findFirstOrThrow(args?: {
-    where?:   {{ model_name }}WhereInput;
-    orderBy?: {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
-{%- if has_vector_fields %}
-    nearest?: {{ model_name }}NearestInput;
-{%- endif %}
-    select?:  {{ model_name }}SelectInput;
-    include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
-  }): Promise<{{ model_name }}Model>;
+  findFirstOrThrow(args?: Omit<{{ model_name }}FindFirstArgs, 'select'> & { select?: undefined }): Promise<{{ model_name }}Model>;
+  findFirstOrThrow<const S extends {{ model_name }}SelectInput>(args: Omit<{{ model_name }}FindFirstArgs, 'select'> & { select: S }): Promise<{{ model_name }}Selected<S>>;
 
   create(args: {
     data:        {{ model_name }}CreateInput;

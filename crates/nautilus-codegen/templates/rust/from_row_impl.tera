@@ -1,29 +1,17 @@
 impl crate::FromRow for {{ model_name }} {
     fn from_row(row: &crate::Row) -> nautilus_core::Result<Self> {
 {%- for field in scalar_fields %}
-{%- if field.is_pk %}
-        // PK field — always required
         let {{ field.name }} = row
             .get("{{ field.db_name }}")
             .or_else(|| row.get("{{ table_name }}__{{ field.db_name }}"))
             .ok_or_else(|| nautilus_core::Error::TypeError(
-                "missing required PK column '{{ field.db_name }}' ({{ field.name }})".to_string()
+                "missing required column '{{ field.db_name }}' ({{ field.name }}) while decoding full {{ model_name }}".to_string()
             ))
             .and_then(nautilus_core::FromValue::from_value)?;
-{%- else %}
-        // Scalar field — None when not selected (projection)
-        let {{ field.name }}: Option<{{ field.rust_type }}> = row
-            .get("{{ field.db_name }}")
-            .or_else(|| row.get("{{ table_name }}__{{ field.db_name }}"))
-            .and_then(|v| match v {
-                nautilus_core::Value::Null => None,
-                other => nautilus_core::FromValue::from_value(other).ok(),
-            });
-{%- endif %}
 
 {%- endfor %}
 
-        // Decode relation fields from JSON (if included via .include())
+        // Decode relation fields from JSON (if included via .include()).
 {%- for rel in relations %}
 {%- if rel.is_array %}
         let {{ rel.field_name }} = row.get("{{ rel.field_name }}_json")

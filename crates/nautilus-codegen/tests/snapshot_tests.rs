@@ -123,6 +123,27 @@ model Post {
     );
     let models = generate_all_models(&ir, false);
     let code = models.get("Post").expect("Post model missing");
+    let model_decl = code
+        .split("impl Post")
+        .next()
+        .expect("generated Post struct should precede impl block");
+    assert!(
+        code.contains("pub content: Option<String>,"),
+        "expected nullable schema field to be nullable on the full Rust model:\n{code}"
+    );
+    assert!(
+        !model_decl.contains("pub content: Option<Option<String>>"),
+        "full Rust model should not wrap nullable fields again for projection:\n{code}"
+    );
+    assert!(
+        code.contains("pub fn content(&self) -> nautilus_core::Column<Option<String>>"),
+        "typed Rust projection columns should preserve nullable output type:\n{code}"
+    );
+    assert!(
+        code.contains("pub fn find_many_select<C, F>(")
+            && code.contains("select returns partial rows and cannot be decoded as a full Post"),
+        "expected Rust delegates to expose typed projection APIs and reject model-returning select:\n{code}"
+    );
     assert_local_snapshot!(code);
 }
 
@@ -1077,8 +1098,13 @@ model User {
         .expect("user model missing");
 
     assert!(
-        code.contains("display_name: Optional[str] = None"),
-        "expected projected Python models to allow missing non-PK fields:\n{code}"
+        code.contains("display_name: str"),
+        "expected generated Python models to keep required schema fields required:\n{code}"
+    );
+    assert!(
+        code.contains("class UserProjection(TypedDict, total=False):")
+            && code.contains("display_name: NotRequired[str]"),
+        "expected generated Python projection type to allow missing selected fields:\n{code}"
     );
     assert!(
         code.contains("class UserSelectInput(TypedDict, total=False):"),
@@ -1227,8 +1253,12 @@ model User {
         .expect("user runtime missing");
 
     assert!(
-        dts_code.contains("displayName?: string;"),
-        "expected projected JS models to make non-PK fields optional:\n{dts_code}"
+        dts_code.contains("displayName: string;"),
+        "expected generated JS models to keep required schema fields required:\n{dts_code}"
+    );
+    assert!(
+        dts_code.contains("export type UserSelected<S extends UserSelectInput>"),
+        "expected generated JS declarations to expose select result mapped types:\n{dts_code}"
     );
     assert!(
         dts_code.contains("export interface UserSelectInput {"),
@@ -1293,11 +1323,11 @@ model User {
     let dts_code = generated_named_file(&dts_models, "user.d.ts");
 
     assert!(
-        dts_code.contains("streamMany(args?: {"),
+        dts_code.contains("streamMany(args?: Omit<UserFindManyArgs, 'select'>"),
         "expected generated JS typings to expose streamMany():\n{dts_code}"
     );
     assert!(
-        dts_code.contains("}): AsyncIterable<UserModel>;"),
+        dts_code.contains("): AsyncIterable<UserModel>;"),
         "expected generated JS streamMany() typings to return an AsyncIterable:\n{dts_code}"
     );
     assert!(
@@ -2046,6 +2076,70 @@ model User {
     assert!(
         !delegate.contains("return findFirst(spec);"),
         "generated Java findUnique() should no longer alias directly to findFirst():\n{delegate}"
+    );
+}
+
+#[test]
+fn test_java_select_uses_projection_api_instead_of_model_records() {
+    let ir = validate(
+        r#"
+generator client {
+  provider    = "nautilus-client-java"
+  output      = "./generated-java"
+  package     = "com.acme.db"
+  group_id    = "com.acme"
+  artifact_id = "db-client"
+}
+
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
+"#,
+    );
+    let sync_files =
+        generate_java_client(&ir, "schema.nautilus", false).expect("generate_java_client failed");
+    let async_files =
+        generate_java_client(&ir, "schema.nautilus", true).expect("generate_java_client failed");
+    let sync_delegate = generated_java_file(&sync_files, "client/UserDelegate.java");
+    let async_delegate = generated_java_file(&async_files, "client/UserDelegate.java");
+    let projection = generated_java_file(&sync_files, "model/UserProjection.java");
+
+    assert!(
+        sync_delegate.contains("public List<UserProjection> findManySelect(")
+            && sync_delegate.contains("public <R> List<R> findManySelect(")
+            && sync_delegate.contains("public UserProjection findFirstSelect(")
+            && sync_delegate.contains("public UserProjection findUniqueSelect(")
+            && sync_delegate.contains("public Stream<UserProjection> streamManySelect(")
+            && sync_delegate.contains("public List<JsonNode> findManySelectRaw("),
+        "expected generated Java sync delegate to expose typed projection APIs and raw escape hatches:\n{sync_delegate}"
+    );
+    assert!(
+        async_delegate.contains("public CompletableFuture<List<UserProjection>> findManySelect(")
+            && async_delegate.contains("public <R> CompletableFuture<List<R>> findManySelect(")
+            && async_delegate.contains("public CompletableFuture<UserProjection> findFirstSelect(")
+            && async_delegate.contains("public CompletableFuture<UserProjection> findUniqueSelect(")
+            && async_delegate.contains("public CompletableFuture<List<JsonNode>> findManySelectRaw("),
+        "expected generated Java async delegate to expose CompletableFuture projection APIs:\n{async_delegate}"
+    );
+    assert!(
+        sync_delegate.contains("select returns partial rows and cannot be decoded as a full User record; use findManySelect, findFirstSelect, or findUniqueSelect instead")
+            && sync_delegate.contains("select projection APIs require select(...); use findMany/findFirst/findUnique for full User records"),
+        "expected generated Java delegate to reject select on model APIs and require select on projection APIs:\n{sync_delegate}"
+    );
+    assert!(
+        sync_delegate.contains("return rows(result, row -> actualMapper.apply(UserProjection.fromJsonNode(row)));")
+            && sync_delegate.contains("return mapProjectionRow(JsonSupport.firstDataRow(result), mapper);"),
+        "expected generated Java projection APIs to return typed projection rows or mapped values:\n{sync_delegate}"
+    );
+    assert!(
+        projection.contains("public final class UserProjection implements WireSerializable")
+            && projection.contains("public boolean hasId()")
+            && projection.contains("public Integer id()")
+            && projection.contains("public boolean hasName()")
+            && projection.contains("public String name()")
+            && projection.contains("return this.row.deepCopy();"),
+        "expected generated Java projection class to expose typed getters plus presence checks:\n{projection}"
     );
 }
 

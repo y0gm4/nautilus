@@ -4,7 +4,7 @@ pub struct {{ columns_name }};
 
 impl {{ columns_name }} {
 {%- for field in scalar_fields %}
-    pub fn {{ field.name }}(&self) -> nautilus_core::Column<{{ field.column_type }}> {
+    pub fn {{ field.name }}(&self) -> nautilus_core::Column<{{ field.rust_type }}> {
         nautilus_core::Column::new("{{ table_name }}", "{{ field.db_name }}")
     }
 

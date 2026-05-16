@@ -1,17 +1,14 @@
 /// {{ model_name }} model.
 ///
-/// PK fields are always present. All other scalar fields are `Option<T>`:
-/// they are `Some(value)` when the column was included in the query result
-/// (default, or explicitly selected via `select`), and `None` when the
-/// column was omitted through projection.
+/// Scalar fields mirror the schema exactly. Partial `select` results use the
+/// delegate projection APIs instead of this full model type.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct {{ model_name }} {
 {%- for field in scalar_fields %}
-{%- if field.is_pk %}
-    pub {{ field.name }}: {{ field.rust_type }},
-{%- else %}
-    pub {{ field.name }}: Option<{{ field.rust_type }}>,
+{%- if field.doc_comment %}
+    /// {{ field.doc_comment }}
 {%- endif %}
+    pub {{ field.name }}: {{ field.rust_type }},
 {%- endfor %}
 {%- for field in relation_fields %}
     #[serde(default, alias = "{{ field.name }}_json")]

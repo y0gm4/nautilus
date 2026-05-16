@@ -134,9 +134,15 @@ export type SortOrder = 'asc' | 'desc';
 
 export interface {{ model_name }}Model {
 {%- for f in scalar_fields %}
-  {{ f.name }}{% if not f.is_pk %}?{% endif %}: {{ f.ts_type }};
+{%- if f.doc_comment %}
+  /** {{ f.doc_comment }} */
+{%- endif %}
+  {{ f.name }}: {{ f.ts_type }};
 {%- endfor %}
 {%- for f in relation_fields %}
+{%- if f.doc_comment %}
+  /** {{ f.doc_comment }} */
+{%- endif %}
   {{ f.name }}?: {{ f.ts_type }};
 {%- endfor %}
 }
@@ -189,6 +195,15 @@ export interface {{ model_name }}SelectInput {
   {{ field.name }}?: boolean;
 {%- endfor %}
 }
+
+export type {{ model_name }}PrimaryKeyKeys = {% if primary_key_fields | length > 0 %}{% for f in primary_key_fields %}'{{ f }}'{% if not loop.last %} | {% endif %}{% endfor %}{% else %}never{% endif %};
+export type {{ model_name }}TruthySelectKeys<S extends {{ model_name }}SelectInput> = {
+  [K in keyof S]-?: S[K] extends true ? K : never;
+}[keyof S] & keyof {{ model_name }}Model;
+export type {{ model_name }}Selected<S extends {{ model_name }}SelectInput> = Pick<
+  {{ model_name }}Model,
+  {{ model_name }}PrimaryKeyKeys | {{ model_name }}TruthySelectKeys<S>
+>;
 
 {%- if has_includes %}
 
@@ -262,6 +277,37 @@ export interface {{ model_name }}GroupByOutput {
   _sum?:   Record<string, unknown>;
   _min?:   Record<string, unknown>;
   _max?:   Record<string, unknown>;
+}
+
+export interface {{ model_name }}FindManyArgs {
+  where?:    {{ model_name }}WhereInput;
+  orderBy?:  {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
+{%- if has_vector_fields %}
+  nearest?:  {{ model_name }}NearestInput;
+{%- endif %}
+  take?:     number;
+  skip?:     number;
+  select?:   {{ model_name }}SelectInput;
+  include?:  {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
+  cursor?:   Record<string, unknown>;
+  distinct?: string[];
+  chunkSize?: number;
+}
+
+export interface {{ model_name }}FindFirstArgs {
+  where?:   {{ model_name }}WhereInput;
+  orderBy?: {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
+{%- if has_vector_fields %}
+  nearest?: {{ model_name }}NearestInput;
+{%- endif %}
+  select?:  {{ model_name }}SelectInput;
+  include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
+}
+
+export interface {{ model_name }}FindUniqueArgs {
+  where:    {{ model_name }}WhereInput;
+  select?:  {{ model_name }}SelectInput;
+  include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
 }
 
 function _processWhereFilters(
@@ -345,20 +391,9 @@ export class {{ delegate_name }} {
    * Prefer this for small or medium result sets, eager-loaded reads, and any
    * downstream path that already wants the whole collection before continuing.
    */
-  async findMany(args?: {
-    where?:    {{ model_name }}WhereInput;
-    orderBy?:  {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
-{%- if has_vector_fields %}
-    nearest?:  {{ model_name }}NearestInput;
-{%- endif %}
-    take?:     number;
-    skip?:     number;
-    select?:   {{ model_name }}SelectInput;
-    include?:  {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
-    cursor?:   Record<string, unknown>;
-    distinct?: string[];
-    chunkSize?: number;
-  }): Promise<{{ model_name }}Model[]> {
+  async findMany(args?: Omit<{{ model_name }}FindManyArgs, 'select'> & { select?: undefined }): Promise<{{ model_name }}Model[]>;
+  async findMany<const S extends {{ model_name }}SelectInput>(args: Omit<{{ model_name }}FindManyArgs, 'select'> & { select: S }): Promise<Array<{{ model_name }}Selected<S>>>;
+  async findMany(args?: {{ model_name }}FindManyArgs): Promise<Array<{{ model_name }}Model | Partial<{{ model_name }}Model>>> {
     const rpcArgs: Record<string, unknown> = {};
     if (args?.where    != null) rpcArgs['where']   = _processWhereFilters(args.where as Record<string, unknown>, _{{ table_name }}FieldToDb);
     if (args?.orderBy  != null) {
@@ -392,20 +427,9 @@ export class {{ delegate_name }} {
    * The underlying request keeps a pooled connection busy until iteration
    * finishes or the iterable is closed.
    */
-  async *streamMany(args?: {
-    where?:    {{ model_name }}WhereInput;
-    orderBy?:  {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
-{%- if has_vector_fields %}
-    nearest?:  {{ model_name }}NearestInput;
-{%- endif %}
-    take?:     number;
-    skip?:     number;
-    select?:   {{ model_name }}SelectInput;
-    include?:  {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
-    cursor?:   Record<string, unknown>;
-    distinct?: string[];
-    chunkSize?: number;
-  }): AsyncIterable<{{ model_name }}Model> {
+  streamMany(args?: Omit<{{ model_name }}FindManyArgs, 'select'> & { select?: undefined }): AsyncIterable<{{ model_name }}Model>;
+  streamMany<const S extends {{ model_name }}SelectInput>(args: Omit<{{ model_name }}FindManyArgs, 'select'> & { select: S }): AsyncIterable<{{ model_name }}Selected<S>>;
+  async *streamMany(args?: {{ model_name }}FindManyArgs): AsyncIterable<{{ model_name }}Model | Partial<{{ model_name }}Model>> {
     const chunkSize = args?.chunkSize ?? 128;
     if (!Number.isInteger(chunkSize) || chunkSize < 1) {
       throw new RangeError('streamMany chunkSize must be a positive integer');
@@ -443,15 +467,9 @@ export class {{ delegate_name }} {
     }
   }
 
-  async findFirst(args?: {
-    where?:   {{ model_name }}WhereInput;
-    orderBy?: {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
-{%- if has_vector_fields %}
-    nearest?: {{ model_name }}NearestInput;
-{%- endif %}
-    select?:  {{ model_name }}SelectInput;
-    include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
-  }): Promise<{{ model_name }}Model | null> {
+  async findFirst(args?: Omit<{{ model_name }}FindFirstArgs, 'select'> & { select?: undefined }): Promise<{{ model_name }}Model | null>;
+  async findFirst<const S extends {{ model_name }}SelectInput>(args: Omit<{{ model_name }}FindFirstArgs, 'select'> & { select: S }): Promise<{{ model_name }}Selected<S> | null>;
+  async findFirst(args?: {{ model_name }}FindFirstArgs): Promise<{{ model_name }}Model | Partial<{{ model_name }}Model> | null> {
     const rpcArgs: Record<string, unknown> = {};
     if (args?.where    != null) rpcArgs['where']   = _processWhereFilters(args.where as Record<string, unknown>, _{{ table_name }}FieldToDb);
     if (args?.orderBy  != null) {
@@ -474,11 +492,9 @@ export class {{ delegate_name }} {
     return row == null ? null : _coerce{{ model_name }}(row);
   }
 
-  async findUnique(args: {
-    where:    {{ model_name }}WhereInput;
-    select?:  {{ model_name }}SelectInput;
-    include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
-  }): Promise<{{ model_name }}Model | null> {
+  async findUnique(args: Omit<{{ model_name }}FindUniqueArgs, 'select'> & { select?: undefined }): Promise<{{ model_name }}Model | null>;
+  async findUnique<const S extends {{ model_name }}SelectInput>(args: Omit<{{ model_name }}FindUniqueArgs, 'select'> & { select: S }): Promise<{{ model_name }}Selected<S> | null>;
+  async findUnique(args: {{ model_name }}FindUniqueArgs): Promise<{{ model_name }}Model | Partial<{{ model_name }}Model> | null> {
     if (args.select != null || args.include != null) {
       return this.findFirst({ where: args.where, select: args.select, include: args.include });
     }
@@ -492,25 +508,17 @@ export class {{ delegate_name }} {
     return row == null ? null : _coerce{{ model_name }}(row);
   }
 
-  async findUniqueOrThrow(args: {
-    where:    {{ model_name }}WhereInput;
-    select?:  {{ model_name }}SelectInput;
-    include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
-  }): Promise<{{ model_name }}Model> {
+  async findUniqueOrThrow(args: Omit<{{ model_name }}FindUniqueArgs, 'select'> & { select?: undefined }): Promise<{{ model_name }}Model>;
+  async findUniqueOrThrow<const S extends {{ model_name }}SelectInput>(args: Omit<{{ model_name }}FindUniqueArgs, 'select'> & { select: S }): Promise<{{ model_name }}Selected<S>>;
+  async findUniqueOrThrow(args: {{ model_name }}FindUniqueArgs): Promise<{{ model_name }}Model | Partial<{{ model_name }}Model>> {
     const record = await this.findUnique(args);
     if (record == null) throw new NotFoundError('findUniqueOrThrow: no {{ model_name }} record found matching the given filter');
     return record;
   }
 
-  async findFirstOrThrow(args?: {
-    where?:   {{ model_name }}WhereInput;
-    orderBy?: {{ model_name }}OrderByInput | {{ model_name }}OrderByInput[];
-{%- if has_vector_fields %}
-    nearest?: {{ model_name }}NearestInput;
-{%- endif %}
-    select?:  {{ model_name }}SelectInput;
-    include?: {% if has_includes %}{{ model_name }}IncludeInput{% else %}Record<string, unknown>{% endif %};
-  }): Promise<{{ model_name }}Model> {
+  async findFirstOrThrow(args?: Omit<{{ model_name }}FindFirstArgs, 'select'> & { select?: undefined }): Promise<{{ model_name }}Model>;
+  async findFirstOrThrow<const S extends {{ model_name }}SelectInput>(args: Omit<{{ model_name }}FindFirstArgs, 'select'> & { select: S }): Promise<{{ model_name }}Selected<S>>;
+  async findFirstOrThrow(args?: {{ model_name }}FindFirstArgs): Promise<{{ model_name }}Model | Partial<{{ model_name }}Model>> {
     const record = await this.findFirst(args);
     if (record == null) throw new NotFoundError('findFirstOrThrow: no {{ model_name }} record found matching the given filter');
     return record;

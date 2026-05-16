@@ -14,6 +14,7 @@ pub mod generator;
 pub mod java;
 pub mod js;
 pub mod python;
+pub(crate) mod schema_docs;
 pub(crate) mod template;
 pub mod type_helpers;
 pub mod vector_meta;

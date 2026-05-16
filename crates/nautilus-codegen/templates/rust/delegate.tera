@@ -787,6 +787,7 @@ where
         client: crate::Client<E>,
         args: nautilus_core::FindManyArgs,
     ) -> nautilus_core::Result<{{ find_many_name }}<E>> {
+        Self::reject_select_for_model_result(&args.select)?;
         if !args.include.is_empty() {
             return Err(nautilus_core::Error::InvalidQuery(
                 "include queries require the embedded engine path in the generated Rust client"
@@ -807,16 +808,6 @@ where
         if let Some(skip) = args.skip {
             builder = builder.skip(skip);
         }
-        if !args.select.is_empty() {
-            let set: std::collections::HashSet<String> = args
-                .select
-                .into_iter()
-                .filter_map(|(k, v)| if v { Some(k) } else { None })
-                .collect();
-            if !set.is_empty() {
-                builder = builder.select_fields(set);
-            }
-        }
         if let Some(cursor) = args.cursor {
             builder = builder.cursor(cursor);
         }
@@ -825,6 +816,18 @@ where
         }
 
         Ok(builder)
+    }
+
+    fn reject_select_for_model_result(
+        select: &std::collections::HashMap<String, bool>,
+    ) -> nautilus_core::Result<()> {
+        if !select.is_empty() {
+            return Err(nautilus_core::Error::InvalidQuery(
+                "select returns partial rows and cannot be decoded as a full {{ model_name }}; use find_many_select, find_first_select, or find_unique_select instead"
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 
     fn engine_decode_plan_for_find_many_args(
@@ -867,6 +870,7 @@ where
         let _c = self.client.clone();
         tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
 {%- endif %}
+        Self::reject_select_for_model_result(&args.select)?;
         let (engine_decode_slots, engine_row_hints) =
             Self::engine_decode_plan_for_find_many_args(&args);
         if let Some(rows) =
@@ -902,6 +906,7 @@ where
         let _c = self.client.clone();
         tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
 {%- endif %}
+        Self::reject_select_for_model_result(&args.select)?;
         let args = nautilus_core::FindManyArgs { take: Some(1), ..args };
         let (engine_decode_slots, engine_row_hints) =
             Self::engine_decode_plan_for_find_many_args(&args);
@@ -940,6 +945,7 @@ where
         let _c = self.client.clone();
         tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
 {%- endif %}
+        Self::reject_select_for_model_result(&args.select)?;
         let (engine_decode_slots, engine_row_hints) =
             Self::engine_decode_plan_for_find_unique_args(&args);
         if let Some(record) =
@@ -995,6 +1001,119 @@ where
                 format!("No {} record found matching the given filter", "{{ model_name }}")
             )
         })
+    }
+
+    /// Find all {{ model_name }} records with a typed scalar projection.
+    pub {% if is_async %}async {% endif %}fn find_many_select<C, F>(
+        &self,
+        args: nautilus_core::FindManyArgs,
+        columns: F,
+    ) -> nautilus_core::Result<Vec<C::Output>>
+    where
+        C: nautilus_core::SelectColumns,
+        F: FnOnce({{ columns_name }}) -> C,
+    {
+{%- if not is_async %}
+        let _c = self.client.clone();
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
+{%- endif %}
+        if !args.include.is_empty() {
+            return Err(nautilus_core::Error::InvalidQuery(
+                "include is not supported by typed select projections".to_string(),
+            ));
+        }
+        if !args.select.is_empty() {
+            return Err(nautilus_core::Error::InvalidQuery(
+                "FindManyArgs.select is ignored by typed select projections; pass projected columns to find_many_select instead"
+                    .to_string(),
+            ));
+        }
+        let selection = columns({{ columns_name }});
+        let builder = Self::build_find_many_builder(
+            {% if is_async %}self.client.clone(){% else %}_c{% endif %},
+            nautilus_core::FindManyArgs {
+                select: Default::default(),
+                include: Default::default(),
+                ..args
+            },
+        )?;
+        builder.exec_select(selection).await
+{%- if not is_async %}
+        }))
+{%- endif %}
+    }
+
+    /// Find the first {{ model_name }} record with a typed scalar projection.
+    pub {% if is_async %}async {% endif %}fn find_first_select<C, F>(
+        &self,
+        args: nautilus_core::FindManyArgs,
+        columns: F,
+    ) -> nautilus_core::Result<Option<C::Output>>
+    where
+        C: nautilus_core::SelectColumns,
+        F: FnOnce({{ columns_name }}) -> C,
+    {
+{%- if not is_async %}
+        let _c = self.client.clone();
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
+{%- endif %}
+        if !args.include.is_empty() {
+            return Err(nautilus_core::Error::InvalidQuery(
+                "include is not supported by typed select projections".to_string(),
+            ));
+        }
+        if !args.select.is_empty() {
+            return Err(nautilus_core::Error::InvalidQuery(
+                "FindManyArgs.select is ignored by typed select projections; pass projected columns to find_first_select instead"
+                    .to_string(),
+            ));
+        }
+        let selection = columns({{ columns_name }});
+        let args = nautilus_core::FindManyArgs {
+            take: Some(1),
+            select: Default::default(),
+            include: Default::default(),
+            ..args
+        };
+        let builder = Self::build_find_many_builder(
+            {% if is_async %}self.client.clone(){% else %}_c{% endif %},
+            args,
+        )?;
+        builder.exec_select_optional(selection).await
+{%- if not is_async %}
+        }))
+{%- endif %}
+    }
+
+    /// Find a unique {{ model_name }} record with a typed scalar projection.
+    pub {% if is_async %}async {% endif %}fn find_unique_select<C, F>(
+        &self,
+        args: nautilus_core::FindUniqueArgs,
+        columns: F,
+    ) -> nautilus_core::Result<Option<C::Output>>
+    where
+        C: nautilus_core::SelectColumns,
+        F: FnOnce({{ columns_name }}) -> C,
+    {
+        if !args.select.is_empty() {
+            return Err(nautilus_core::Error::InvalidQuery(
+                "FindUniqueArgs.select is ignored by typed select projections; pass projected columns to find_unique_select instead"
+                    .to_string(),
+            ));
+        }
+        if !args.include.is_empty() {
+            return Err(nautilus_core::Error::InvalidQuery(
+                "include is not supported by typed select projections".to_string(),
+            ));
+        }
+        let find_args = nautilus_core::FindManyArgs {
+            where_: Some(args.where_),
+            take: Some(1),
+            select: Default::default(),
+            include: Default::default(),
+            ..Default::default()
+        };
+        self.find_first_select(find_args, columns){% if is_async %}.await{% endif %}
     }
 {% if is_async %}
     /// Stream {{ model_name }} records matching `args` row-by-row.

@@ -30,6 +30,48 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
         return async(() -> findManyInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args));
     }
 
+    public CompletableFuture<List<{{ projection_name }}>> findManySelect(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return findManySelect(spec, Function.identity());
+    }
+
+    public <R> CompletableFuture<List<R>> findManySelect(
+        Consumer<{{ dsl_name }}.FindManyArgs> spec,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return async(() -> {
+            {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return findManySelectInternal(args, mapper);
+        });
+    }
+
+    public CompletableFuture<List<{{ projection_name }}>> findManySelect({{ dsl_name }}.FindManyArgs args) {
+        return findManySelect(args, Function.identity());
+    }
+
+    public <R> CompletableFuture<List<R>> findManySelect(
+        {{ dsl_name }}.FindManyArgs args,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return async(() -> findManySelectInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args, mapper));
+    }
+
+    public CompletableFuture<List<JsonNode>> findManySelectRaw(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return async(() -> {
+            {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return findManySelectRawInternal(args);
+        });
+    }
+
+    public CompletableFuture<List<JsonNode>> findManySelectRaw({{ dsl_name }}.FindManyArgs args) {
+        return async(() -> findManySelectRawInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args));
+    }
+
     public CompletableFuture<{{ model_name }}> findFirst(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
         return async(() -> {
             {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
@@ -38,6 +80,48 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
             }
             return findFirstInternal(args);
         });
+    }
+
+    public CompletableFuture<{{ projection_name }}> findFirstSelect(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return findFirstSelect(spec, Function.identity());
+    }
+
+    public <R> CompletableFuture<R> findFirstSelect(
+        Consumer<{{ dsl_name }}.FindManyArgs> spec,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return async(() -> {
+            {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return findFirstSelectInternal(args, mapper);
+        });
+    }
+
+    public CompletableFuture<{{ projection_name }}> findFirstSelect({{ dsl_name }}.FindManyArgs args) {
+        return findFirstSelect(args, Function.identity());
+    }
+
+    public <R> CompletableFuture<R> findFirstSelect(
+        {{ dsl_name }}.FindManyArgs args,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return async(() -> findFirstSelectInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args, mapper));
+    }
+
+    public CompletableFuture<JsonNode> findFirstSelectRaw(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return async(() -> {
+            {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return findFirstSelectRawInternal(args);
+        });
+    }
+
+    public CompletableFuture<JsonNode> findFirstSelectRaw({{ dsl_name }}.FindManyArgs args) {
+        return async(() -> findFirstSelectRawInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args));
     }
 
     public CompletableFuture<{{ model_name }}> findUnique(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
@@ -50,6 +134,48 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
         });
     }
 
+    public CompletableFuture<{{ projection_name }}> findUniqueSelect(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return findUniqueSelect(spec, Function.identity());
+    }
+
+    public <R> CompletableFuture<R> findUniqueSelect(
+        Consumer<{{ dsl_name }}.FindManyArgs> spec,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return async(() -> {
+            {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return findUniqueSelectInternal(args, mapper);
+        });
+    }
+
+    public CompletableFuture<{{ projection_name }}> findUniqueSelect({{ dsl_name }}.FindManyArgs args) {
+        return findUniqueSelect(args, Function.identity());
+    }
+
+    public <R> CompletableFuture<R> findUniqueSelect(
+        {{ dsl_name }}.FindManyArgs args,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return async(() -> findUniqueSelectInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args, mapper));
+    }
+
+    public CompletableFuture<JsonNode> findUniqueSelectRaw(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return async(() -> {
+            {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            return findUniqueSelectRawInternal(args);
+        });
+    }
+
+    public CompletableFuture<JsonNode> findUniqueSelectRaw({{ dsl_name }}.FindManyArgs args) {
+        return async(() -> findUniqueSelectRawInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args));
+    }
+
     public CompletableFuture<{{ model_name }}> findFirstOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
         return async(() -> {
             {{ model_name }} record = findFirst(spec).join();
@@ -60,11 +186,53 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
         });
     }
 
+    public CompletableFuture<{{ projection_name }}> findFirstSelectOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return findFirstSelectOrThrow(spec, Function.identity());
+    }
+
+    public <R> CompletableFuture<R> findFirstSelectOrThrow(
+        Consumer<{{ dsl_name }}.FindManyArgs> spec,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return async(() -> {
+            {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            R record = findFirstSelectInternal(args, mapper);
+            if (record == null) {
+                throw new NotFoundException("findFirstSelectOrThrow: no {{ model_name }} record found matching the given filter");
+            }
+            return record;
+        });
+    }
+
     public CompletableFuture<{{ model_name }}> findUniqueOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
         return async(() -> {
             {{ model_name }} record = findUnique(spec).join();
             if (record == null) {
                 throw new NotFoundException("findUniqueOrThrow: no {{ model_name }} record found matching the given filter");
+            }
+            return record;
+        });
+    }
+
+    public CompletableFuture<{{ projection_name }}> findUniqueSelectOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return findUniqueSelectOrThrow(spec, Function.identity());
+    }
+
+    public <R> CompletableFuture<R> findUniqueSelectOrThrow(
+        Consumer<{{ dsl_name }}.FindManyArgs> spec,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return async(() -> {
+            {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+            if (spec != null) {
+                spec.accept(args);
+            }
+            R record = findUniqueSelectInternal(args, mapper);
+            if (record == null) {
+                throw new NotFoundException("findUniqueSelectOrThrow: no {{ model_name }} record found matching the given filter");
             }
             return record;
         });
@@ -177,12 +345,88 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
         return findManyInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args);
     }
 
+    public List<{{ projection_name }}> findManySelect(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return findManySelect(spec, Function.identity());
+    }
+
+    public <R> List<R> findManySelect(
+        Consumer<{{ dsl_name }}.FindManyArgs> spec,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return findManySelectInternal(args, mapper);
+    }
+
+    public List<{{ projection_name }}> findManySelect({{ dsl_name }}.FindManyArgs args) {
+        return findManySelect(args, Function.identity());
+    }
+
+    public <R> List<R> findManySelect(
+        {{ dsl_name }}.FindManyArgs args,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return findManySelectInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args, mapper);
+    }
+
+    public List<JsonNode> findManySelectRaw(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return findManySelectRawInternal(args);
+    }
+
+    public List<JsonNode> findManySelectRaw({{ dsl_name }}.FindManyArgs args) {
+        return findManySelectRawInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args);
+    }
+
     public {{ model_name }} findFirst(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
         {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
         if (spec != null) {
             spec.accept(args);
         }
         return findFirstInternal(args);
+    }
+
+    public {{ projection_name }} findFirstSelect(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return findFirstSelect(spec, Function.identity());
+    }
+
+    public <R> R findFirstSelect(
+        Consumer<{{ dsl_name }}.FindManyArgs> spec,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return findFirstSelectInternal(args, mapper);
+    }
+
+    public {{ projection_name }} findFirstSelect({{ dsl_name }}.FindManyArgs args) {
+        return findFirstSelect(args, Function.identity());
+    }
+
+    public <R> R findFirstSelect(
+        {{ dsl_name }}.FindManyArgs args,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return findFirstSelectInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args, mapper);
+    }
+
+    public JsonNode findFirstSelectRaw(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return findFirstSelectRawInternal(args);
+    }
+
+    public JsonNode findFirstSelectRaw({{ dsl_name }}.FindManyArgs args) {
+        return findFirstSelectRawInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args);
     }
 
     public {{ model_name }} findUnique(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
@@ -193,6 +437,44 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
         return findUniqueInternal(args);
     }
 
+    public {{ projection_name }} findUniqueSelect(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return findUniqueSelect(spec, Function.identity());
+    }
+
+    public <R> R findUniqueSelect(
+        Consumer<{{ dsl_name }}.FindManyArgs> spec,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return findUniqueSelectInternal(args, mapper);
+    }
+
+    public {{ projection_name }} findUniqueSelect({{ dsl_name }}.FindManyArgs args) {
+        return findUniqueSelect(args, Function.identity());
+    }
+
+    public <R> R findUniqueSelect(
+        {{ dsl_name }}.FindManyArgs args,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return findUniqueSelectInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args, mapper);
+    }
+
+    public JsonNode findUniqueSelectRaw(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return findUniqueSelectRawInternal(args);
+    }
+
+    public JsonNode findUniqueSelectRaw({{ dsl_name }}.FindManyArgs args) {
+        return findUniqueSelectRawInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args);
+    }
+
     public {{ model_name }} findFirstOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
         {{ model_name }} record = findFirst(spec);
         if (record == null) {
@@ -201,10 +483,40 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
         return record;
     }
 
+    public {{ projection_name }} findFirstSelectOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return findFirstSelectOrThrow(spec, Function.identity());
+    }
+
+    public <R> R findFirstSelectOrThrow(
+        Consumer<{{ dsl_name }}.FindManyArgs> spec,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        R record = findFirstSelect(spec, mapper);
+        if (record == null) {
+            throw new NotFoundException("findFirstSelectOrThrow: no {{ model_name }} record found matching the given filter");
+        }
+        return record;
+    }
+
     public {{ model_name }} findUniqueOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
         {{ model_name }} record = findUnique(spec);
         if (record == null) {
             throw new NotFoundException("findUniqueOrThrow: no {{ model_name }} record found matching the given filter");
+        }
+        return record;
+    }
+
+    public {{ projection_name }} findUniqueSelectOrThrow(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return findUniqueSelectOrThrow(spec, Function.identity());
+    }
+
+    public <R> R findUniqueSelectOrThrow(
+        Consumer<{{ dsl_name }}.FindManyArgs> spec,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        R record = findUniqueSelect(spec, mapper);
+        if (record == null) {
+            throw new NotFoundException("findUniqueSelectOrThrow: no {{ model_name }} record found matching the given filter");
         }
         return record;
     }
@@ -313,6 +625,44 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
         return streamManyInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args);
     }
 
+    public Stream<{{ projection_name }}> streamManySelect(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        return streamManySelect(spec, Function.identity());
+    }
+
+    public <R> Stream<R> streamManySelect(
+        Consumer<{{ dsl_name }}.FindManyArgs> spec,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return streamManySelect(args, mapper);
+    }
+
+    public Stream<{{ projection_name }}> streamManySelect({{ dsl_name }}.FindManyArgs args) {
+        return streamManySelect(args, Function.identity());
+    }
+
+    public <R> Stream<R> streamManySelect(
+        {{ dsl_name }}.FindManyArgs args,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return streamManySelectInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args, mapper);
+    }
+
+    public Stream<JsonNode> streamManySelectRaw(Consumer<{{ dsl_name }}.FindManyArgs> spec) {
+        {{ dsl_name }}.FindManyArgs args = new {{ dsl_name }}.FindManyArgs();
+        if (spec != null) {
+            spec.accept(args);
+        }
+        return streamManySelectRaw(args);
+    }
+
+    public Stream<JsonNode> streamManySelectRaw({{ dsl_name }}.FindManyArgs args) {
+        return streamManySelectRawInternal(args == null ? new {{ dsl_name }}.FindManyArgs() : args);
+    }
+
     private ObjectNode buildFindManyRequest({{ dsl_name }}.FindManyArgs args) {
         {{ dsl_name }}.FindManyArgs actual = args == null ? new {{ dsl_name }}.FindManyArgs() : args;
         ObjectNode request = JsonSupport.object();
@@ -325,13 +675,67 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
         return request;
     }
 
+    private void rejectSelectForModelResult({{ dsl_name }}.FindManyArgs args) {
+        {{ dsl_name }}.FindManyArgs actual = args == null ? new {{ dsl_name }}.FindManyArgs() : args;
+        if (actual.node().has("select")) {
+            throw new IllegalArgumentException(
+                "select returns partial rows and cannot be decoded as a full {{ model_name }} record; use findManySelect, findFirstSelect, or findUniqueSelect instead"
+            );
+        }
+    }
+
+    private void requireSelectForProjection({{ dsl_name }}.FindManyArgs args) {
+        {{ dsl_name }}.FindManyArgs actual = args == null ? new {{ dsl_name }}.FindManyArgs() : args;
+        if (!actual.node().has("select")) {
+            throw new IllegalArgumentException(
+                "select projection APIs require select(...); use findMany/findFirst/findUnique for full {{ model_name }} records"
+            );
+        }
+    }
+
+    private JsonNode rawProjectionRow(JsonNode row) {
+        if (row == null || row.isNull()) {
+            return null;
+        }
+        return row.deepCopy();
+    }
+
+    private <R> R mapProjectionRow(JsonNode row, Function<{{ projection_name }}, R> mapper) {
+        {{ projection_name }} projection = {{ projection_name }}.fromJsonNode(row);
+        if (projection == null) {
+            return null;
+        }
+        Function<{{ projection_name }}, R> actualMapper = Objects.requireNonNull(mapper, "mapper");
+        return actualMapper.apply(projection);
+    }
+
     private List<{{ model_name }}> findManyInternal({{ dsl_name }}.FindManyArgs args) {
+        rejectSelectForModelResult(args);
         ObjectNode request = buildFindManyRequest(args);
         JsonNode result = rpc("query.findMany", request);
         return rows(result, {{ model_name }}::fromJsonNode);
     }
 
+    private <R> List<R> findManySelectInternal(
+        {{ dsl_name }}.FindManyArgs args,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        requireSelectForProjection(args);
+        Function<{{ projection_name }}, R> actualMapper = Objects.requireNonNull(mapper, "mapper");
+        ObjectNode request = buildFindManyRequest(args);
+        JsonNode result = rpc("query.findMany", request);
+        return rows(result, row -> actualMapper.apply({{ projection_name }}.fromJsonNode(row)));
+    }
+
+    private List<JsonNode> findManySelectRawInternal({{ dsl_name }}.FindManyArgs args) {
+        requireSelectForProjection(args);
+        ObjectNode request = buildFindManyRequest(args);
+        JsonNode result = rpc("query.findMany", request);
+        return rows(result, JsonNode::deepCopy);
+    }
+
     private Stream<{{ model_name }}> streamManyInternal({{ dsl_name }}.FindManyArgs args) {
+        rejectSelectForModelResult(args);
         Integer configuredChunkSize = args == null ? null : args.chunkSize();
         int chunkSize = configuredChunkSize == null
             ? DEFAULT_STREAM_CHUNK_SIZE
@@ -345,7 +749,42 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
         return rows(streamRpc("query.findMany", request), {{ model_name }}::fromJsonNode);
     }
 
+    private <R> Stream<R> streamManySelectInternal(
+        {{ dsl_name }}.FindManyArgs args,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        requireSelectForProjection(args);
+        Function<{{ projection_name }}, R> actualMapper = Objects.requireNonNull(mapper, "mapper");
+        Integer configuredChunkSize = args == null ? null : args.chunkSize();
+        int chunkSize = configuredChunkSize == null
+            ? DEFAULT_STREAM_CHUNK_SIZE
+            : configuredChunkSize.intValue();
+        if (chunkSize < 1) {
+            throw new IllegalArgumentException("streamManySelect chunkSize must be a positive integer");
+        }
+
+        ObjectNode request = buildFindManyRequest(args);
+        request.put("chunkSize", chunkSize);
+        return rows(streamRpc("query.findMany", request), row -> actualMapper.apply({{ projection_name }}.fromJsonNode(row)));
+    }
+
+    private Stream<JsonNode> streamManySelectRawInternal({{ dsl_name }}.FindManyArgs args) {
+        requireSelectForProjection(args);
+        Integer configuredChunkSize = args == null ? null : args.chunkSize();
+        int chunkSize = configuredChunkSize == null
+            ? DEFAULT_STREAM_CHUNK_SIZE
+            : configuredChunkSize.intValue();
+        if (chunkSize < 1) {
+            throw new IllegalArgumentException("streamManySelectRaw chunkSize must be a positive integer");
+        }
+
+        ObjectNode request = buildFindManyRequest(args);
+        request.put("chunkSize", chunkSize);
+        return rows(streamRpc("query.findMany", request), JsonNode::deepCopy);
+    }
+
     private {{ model_name }} findFirstInternal({{ dsl_name }}.FindManyArgs args) {
+        rejectSelectForModelResult(args);
         {{ dsl_name }}.FindManyArgs actual = args == null ? new {{ dsl_name }}.FindManyArgs() : args;
         ObjectNode request = JsonSupport.object();
         request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
@@ -358,7 +797,37 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
         return row == null || row.isNull() ? null : {{ model_name }}.fromJsonNode(row);
     }
 
+    private <R> R findFirstSelectInternal(
+        {{ dsl_name }}.FindManyArgs args,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        requireSelectForProjection(args);
+        {{ dsl_name }}.FindManyArgs actual = args == null ? new {{ dsl_name }}.FindManyArgs() : args;
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
+        request.put("model", "{{ model_name }}");
+        ObjectNode requestArgs = actual.node();
+        requestArgs.put("take", 1);
+        request.set("args", requestArgs);
+        JsonNode result = rpc("query.findFirst", request);
+        return mapProjectionRow(JsonSupport.firstDataRow(result), mapper);
+    }
+
+    private JsonNode findFirstSelectRawInternal({{ dsl_name }}.FindManyArgs args) {
+        requireSelectForProjection(args);
+        {{ dsl_name }}.FindManyArgs actual = args == null ? new {{ dsl_name }}.FindManyArgs() : args;
+        ObjectNode request = JsonSupport.object();
+        request.put("protocolVersion", JsonSupport.PROTOCOL_VERSION);
+        request.put("model", "{{ model_name }}");
+        ObjectNode requestArgs = actual.node();
+        requestArgs.put("take", 1);
+        request.set("args", requestArgs);
+        JsonNode result = rpc("query.findFirst", request);
+        return rawProjectionRow(JsonSupport.firstDataRow(result));
+    }
+
     private {{ model_name }} findUniqueInternal({{ dsl_name }}.FindManyArgs args) {
+        rejectSelectForModelResult(args);
         {{ dsl_name }}.FindManyArgs actual = args == null ? new {{ dsl_name }}.FindManyArgs() : args;
         ObjectNode node = actual.node();
         if (node.size() == 1 && node.has("where")) {
@@ -371,6 +840,17 @@ public final class {{ name }} extends AbstractDelegate<{{ model_name }}> {
             return row == null || row.isNull() ? null : {{ model_name }}.fromJsonNode(row);
         }
         return findFirstInternal(actual);
+    }
+
+    private <R> R findUniqueSelectInternal(
+        {{ dsl_name }}.FindManyArgs args,
+        Function<{{ projection_name }}, R> mapper
+    ) {
+        return findFirstSelectInternal(args, mapper);
+    }
+
+    private JsonNode findUniqueSelectRawInternal({{ dsl_name }}.FindManyArgs args) {
+        return findFirstSelectRawInternal(args);
     }
 
     private {{ model_name }} createInternal({{ dsl_name }}.CreateInput data) {

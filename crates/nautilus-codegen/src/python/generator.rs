@@ -99,6 +99,7 @@ struct PythonFieldContext {
     model_has_default: bool,
     model_default: String,
     is_pk: bool,
+    doc_comment: String,
     index: usize,
 }
 
@@ -204,14 +205,6 @@ struct ExtensionImportContext {
     input_types: Vec<String>,
 }
 
-fn optional_output_python_type(python_type: &str) -> String {
-    if python_type.starts_with("Optional[") {
-        python_type.to_string()
-    } else {
-        format!("Optional[{}]", python_type)
-    }
-}
-
 fn output_base_python_type(
     field: &nautilus_schema::ir::FieldIr,
     enums: &HashMap<String, EnumIr>,
@@ -234,6 +227,16 @@ fn output_base_python_type(
         }
         ResolvedFieldType::CompositeType { type_name } => type_name.clone(),
         ResolvedFieldType::Relation(rel) => rel.target_model.clone(),
+    }
+}
+
+fn exact_output_python_type(field: &nautilus_schema::ir::FieldIr, base_type: String) -> String {
+    if field.is_array {
+        format!("List[{}]", base_type)
+    } else if !field.is_required {
+        format!("Optional[{}]", base_type)
+    } else {
+        base_type
     }
 }
 
@@ -359,7 +362,7 @@ fn generate_python_model_with_registry(
 
         let output_base_type = output_base_python_type(field, &ir.enums, extensions);
         let input_base_type = input_base_python_type(field, &ir.enums, extensions);
-        let python_type = PythonBackend.wrap_field_type(field, output_base_type.clone());
+        let python_type = exact_output_python_type(field, output_base_type.clone());
         let input_python_type = if field.is_array {
             format!("List[{}]", input_base_type)
         } else {
@@ -412,16 +415,13 @@ fn generate_python_model_with_registry(
             }
         }
 
-        let model_python_type = if is_pk {
-            python_type.clone()
+        let model_python_type = python_type.clone();
+        let (model_has_default, model_default) = if field.is_array {
+            (true, "Field(default_factory=list)".to_string())
+        } else if !field.is_required {
+            (true, "None".to_string())
         } else {
-            optional_output_python_type(&python_type)
-        };
-        let model_has_default = if is_pk { default_val.is_some() } else { true };
-        let model_default = if is_pk {
-            default_val.clone().unwrap_or_default()
-        } else {
-            "None".to_string()
+            (false, String::new())
         };
 
         let field_ctx = PythonFieldContext {
@@ -443,6 +443,7 @@ fn generate_python_model_with_registry(
             model_has_default,
             model_default,
             is_pk,
+            doc_comment: crate::schema_docs::field_modifier_doc(model, field),
             index: idx,
         };
 
@@ -622,6 +623,7 @@ fn generate_python_model_with_registry(
                 model_has_default: true,
                 model_default: "None".to_string(),
                 is_pk: false,
+                doc_comment: crate::schema_docs::field_modifier_doc(model, field),
                 index: idx,
             }
         })
@@ -703,9 +705,7 @@ fn generate_python_model_with_registry(
     let has_numeric_fields = !numeric_fields.is_empty();
     let has_orderable_fields = !orderable_fields.is_empty();
 
-    let needs_typeddict = !where_input_fields.is_empty()
-        || !create_input_fields.is_empty()
-        || !update_input_fields.is_empty();
+    let needs_typeddict = true;
 
     context.insert("needs_typeddict", &needs_typeddict);
     context.insert("where_input_fields", &where_input_fields);

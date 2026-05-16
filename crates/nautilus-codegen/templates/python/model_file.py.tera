@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from pydantic import BaseModel, Field
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, ClassVar, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, ClassVar, Union, overload
 {%- if needs_typeddict %}
-from typing import TypedDict, NotRequired, Literal
+from typing import TypedDict, NotRequired, Required, Literal
 from datetime import datetime
 from uuid import UUID
 from decimal import Decimal
@@ -65,9 +65,15 @@ HstoreValue = Dict[str, Optional[str]]
 class {{ model_name }}(BaseModel):
     """{{ model_name }} model mapped to '{{ table_name }}' table."""
 {%- for f in scalar_fields %}
+{%- if f.doc_comment %}
+    # {{ f.doc_comment }}
+{%- endif %}
     {{ f.name }}: {{ f.model_python_type }}{% if f.model_has_default %} = {{ f.model_default }}{% endif %}
 {%- endfor %}
 {%- for f in relation_fields %}
+{%- if f.doc_comment %}
+    # {{ f.doc_comment }}
+{%- endif %}
     {{ f.name }}: {{ f.python_type }} = {{ f.default }}
 {%- endfor %}
 
@@ -103,6 +109,20 @@ class {{ model_name }}(BaseModel):
                     f"Create one with: Nautilus(auto_register=True)"
                 )
             return client.get_delegate("{{ snake_name }}")
+
+
+class {{ model_name }}Projection(TypedDict, total=False):
+    """Partial {{ model_name }} payload returned when ``select`` is used."""
+{%- for f in scalar_fields %}
+{%- if f.doc_comment %}
+    # {{ f.doc_comment }}
+{%- endif %}
+{%- if f.is_pk %}
+    {{ f.name }}: Required[{{ f.python_type }}]
+{%- else %}
+    {{ f.name }}: NotRequired[{{ f.python_type }}]
+{%- endif %}
+{%- endfor %}
 
 
 # Engine response key mapping: "table__db_column" -> Python field name
@@ -432,6 +452,21 @@ def _{{ snake_name }}_from_wire(row: Dict[str, Any]) -> "{{ model_name }}":
     return {{ model_name }}(**kwargs)
 
 
+def _{{ snake_name }}_projection_from_wire(row: Dict[str, Any]) -> "{{ model_name }}Projection":
+    """Convert engine rows to a partial {{ model_name }} projection."""
+    payload: Any = {}
+{%- for f in scalar_fields %}
+    value = _get_wire_value(row, "{{ table_name }}__{{ f.db_name }}", "{{ f.logical_name }}")
+    if value is not _MISSING:
+        payload["{{ f.name }}"] = (
+            _coerce_{{ snake_name }}_scalar("{{ f.name }}", value)
+            if value is not None
+            else None
+        )
+{%- endfor %}
+    return payload
+
+
 def _{{ table_name }}_from_row(row: Dict[str, Any]) -> "{{ model_name }}":
     """Convert engine row (table__column keys) to {{ model_name }} dataclass."""
     return _{{ snake_name }}_from_wire(row)
@@ -462,6 +497,38 @@ class {{ delegate_name }}:
     def __init__(self, client: NautilusClient) -> None:
         self._client = client
 
+    @overload
+    {% if is_async %}async {% endif %}def find_many(
+        self,
+        *,
+        where: Optional[{{ model_name }}WhereInput] = None,
+        order_by: Optional[{{ model_name }}OrderByInput] = None,
+        {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
+        {% endif %}take: Optional[int] = None,
+        skip: Optional[int] = None,
+        select: None = None,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+        cursor: Optional[Dict[str, Any]] = None,
+        distinct: Optional[List[str]] = None,
+        chunk_size: Optional[int] = None,
+    ) -> List[{{ model_name }}]: ...
+
+    @overload
+    {% if is_async %}async {% endif %}def find_many(
+        self,
+        *,
+        where: Optional[{{ model_name }}WhereInput] = None,
+        order_by: Optional[{{ model_name }}OrderByInput] = None,
+        {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
+        {% endif %}take: Optional[int] = None,
+        skip: Optional[int] = None,
+        select: {{ model_name }}SelectInput,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+        cursor: Optional[Dict[str, Any]] = None,
+        distinct: Optional[List[str]] = None,
+        chunk_size: Optional[int] = None,
+    ) -> List[{{ model_name }}Projection]: ...
+
     {% if is_async %}async {% endif %}def find_many(
         self,
         *,
@@ -475,7 +542,7 @@ class {{ delegate_name }}:
         cursor: Optional[Dict[str, Any]] = None,
         distinct: Optional[List[str]] = None,
         chunk_size: Optional[int] = None,
-    ) -> List[{{ model_name }}]:
+    ) -> Union[List[{{ model_name }}], List[{{ model_name }}Projection]]:
         """Find all {{ model_name }} records matching the given filters.
 
         Args:
@@ -536,9 +603,42 @@ class {{ delegate_name }}:
             payload["chunkSize"] = chunk_size
 
         result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.findMany", payload)
-        return [_{{ table_name }}_from_row(row) for row in result.get("data", [])]
+        decoder = _{{ snake_name }}_projection_from_wire if select is not None else _{{ table_name }}_from_row
+        return [decoder(row) for row in result.get("data", [])]
 
     {% if is_async %}
+    @overload
+    def stream_many(
+        self,
+        *,
+        where: Optional[{{ model_name }}WhereInput] = None,
+        order_by: Optional[{{ model_name }}OrderByInput] = None,
+        {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
+        {% endif %}take: Optional[int] = None,
+        skip: Optional[int] = None,
+        select: None = None,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+        cursor: Optional[Dict[str, Any]] = None,
+        distinct: Optional[List[str]] = None,
+        chunk_size: int = 128,
+    ) -> AsyncIterator[{{ model_name }}]: ...
+
+    @overload
+    def stream_many(
+        self,
+        *,
+        where: Optional[{{ model_name }}WhereInput] = None,
+        order_by: Optional[{{ model_name }}OrderByInput] = None,
+        {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
+        {% endif %}take: Optional[int] = None,
+        skip: Optional[int] = None,
+        select: {{ model_name }}SelectInput,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+        cursor: Optional[Dict[str, Any]] = None,
+        distinct: Optional[List[str]] = None,
+        chunk_size: int = 128,
+    ) -> AsyncIterator[{{ model_name }}Projection]: ...
+
     async def stream_many(
         self,
         *,
@@ -552,7 +652,7 @@ class {{ delegate_name }}:
         cursor: Optional[Dict[str, Any]] = None,
         distinct: Optional[List[str]] = None,
         chunk_size: int = 128,
-    ) -> AsyncIterator[{{ model_name }}]:
+    ) -> AsyncIterator[Union[{{ model_name }}, {{ model_name }}Projection]]:
         """Stream {{ model_name }} records as they arrive from the engine.
 
         Unlike :meth:`find_many`, this API does not merge every partial frame
@@ -606,9 +706,32 @@ class {{ delegate_name }}:
         }
 
         async for chunk in self._client._stream_rpc("query.findMany", payload):
+            decoder = _{{ snake_name }}_projection_from_wire if select is not None else _{{ table_name }}_from_row
             for row in chunk.get("data", []):
-                yield _{{ table_name }}_from_row(row)
+                yield decoder(row)
     {% endif %}
+
+    @overload
+    {% if is_async %}async {% endif %}def find_first(
+        self,
+        *,
+        where: Optional[{{ model_name }}WhereInput] = None,
+        order_by: Optional[{{ model_name }}OrderByInput] = None,
+        {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
+        {% endif %}select: None = None,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+    ) -> Optional[{{ model_name }}]: ...
+
+    @overload
+    {% if is_async %}async {% endif %}def find_first(
+        self,
+        *,
+        where: Optional[{{ model_name }}WhereInput] = None,
+        order_by: Optional[{{ model_name }}OrderByInput] = None,
+        {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
+        {% endif %}select: {{ model_name }}SelectInput,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+    ) -> Optional[{{ model_name }}Projection]: ...
 
     {% if is_async %}async {% endif %}def find_first(
         self,
@@ -618,7 +741,7 @@ class {{ delegate_name }}:
         {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
         {% endif %}select: Optional[{{ model_name }}SelectInput] = None,
         include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
-    ) -> Optional[{{ model_name }}]:
+    ) -> Union[{{ model_name }}, {{ model_name }}Projection, None]:
         """Find the first {{ model_name }} record matching the given filters.
 
         Returns:
@@ -648,7 +771,28 @@ class {{ delegate_name }}:
         }
         result = {% if is_async %}await self._client._rpc({% else %}self._client._sync_rpc({% endif %}"query.findFirst", payload)
         row = _first_data_row(result)
-        return _{{ table_name }}_from_row(row) if row is not None else None
+        if row is None:
+            return None
+        decoder = _{{ snake_name }}_projection_from_wire if select is not None else _{{ table_name }}_from_row
+        return decoder(row)
+
+    @overload
+    {% if is_async %}async {% endif %}def find_unique(
+        self,
+        *,
+        where: {{ model_name }}WhereInput,
+        select: None = None,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+    ) -> Optional[{{ model_name }}]: ...
+
+    @overload
+    {% if is_async %}async {% endif %}def find_unique(
+        self,
+        *,
+        where: {{ model_name }}WhereInput,
+        select: {{ model_name }}SelectInput,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+    ) -> Optional[{{ model_name }}Projection]: ...
 
     {% if is_async %}async {% endif %}def find_unique(
         self,
@@ -656,7 +800,7 @@ class {{ delegate_name }}:
         where: {{ model_name }}WhereInput,
         select: Optional[{{ model_name }}SelectInput] = None,
         include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
-    ) -> Optional[{{ model_name }}]:
+    ) -> Union[{{ model_name }}, {{ model_name }}Projection, None]:
         """Find a single {{ model_name }} record by a unique filter.
 
         Returns:
@@ -674,13 +818,31 @@ class {{ delegate_name }}:
         row = _first_data_row(result)
         return _{{ table_name }}_from_row(row) if row is not None else None
 
+    @overload
+    {% if is_async %}async {% endif %}def find_unique_or_throw(
+        self,
+        *,
+        where: {{ model_name }}WhereInput,
+        select: None = None,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+    ) -> {{ model_name }}: ...
+
+    @overload
+    {% if is_async %}async {% endif %}def find_unique_or_throw(
+        self,
+        *,
+        where: {{ model_name }}WhereInput,
+        select: {{ model_name }}SelectInput,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+    ) -> {{ model_name }}Projection: ...
+
     {% if is_async %}async {% endif %}def find_unique_or_throw(
         self,
         *,
         where: {{ model_name }}WhereInput,
         select: Optional[{{ model_name }}SelectInput] = None,
         include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
-    ) -> {{ model_name }}:
+    ) -> Union[{{ model_name }}, {{ model_name }}Projection]:
         """Find a single {{ model_name }} record by a unique filter, or raise if not found.
 
         Returns:
@@ -697,6 +859,28 @@ class {{ delegate_name }}:
             )
         return record
 
+    @overload
+    {% if is_async %}async {% endif %}def find_first_or_throw(
+        self,
+        *,
+        where: Optional[{{ model_name }}WhereInput] = None,
+        order_by: Optional[{{ model_name }}OrderByInput] = None,
+        {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
+        {% endif %}select: None = None,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+    ) -> {{ model_name }}: ...
+
+    @overload
+    {% if is_async %}async {% endif %}def find_first_or_throw(
+        self,
+        *,
+        where: Optional[{{ model_name }}WhereInput] = None,
+        order_by: Optional[{{ model_name }}OrderByInput] = None,
+        {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
+        {% endif %}select: {{ model_name }}SelectInput,
+        include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
+    ) -> {{ model_name }}Projection: ...
+
     {% if is_async %}async {% endif %}def find_first_or_throw(
         self,
         *,
@@ -705,7 +889,7 @@ class {{ delegate_name }}:
         {% if has_vector_fields %}nearest: Optional[{{ model_name }}NearestInput] = None,
         {% endif %}select: Optional[{{ model_name }}SelectInput] = None,
         include: Optional[{% if has_includes %}{{ model_name }}IncludeInput{% else %}Dict[str, Any]{% endif %}] = None,
-    ) -> {{ model_name }}:
+    ) -> Union[{{ model_name }}, {{ model_name }}Projection]:
         """Find the first {{ model_name }} record matching ``where``, or raise if not found.
 
         Returns:
@@ -1099,6 +1283,7 @@ class {{ delegate_name }}:
 
 __all__ = [
     "{{ model_name }}",
+    "{{ model_name }}Projection",
     "{{ delegate_name }}",
     "JsonPrimitive",
     "JsonValue",
